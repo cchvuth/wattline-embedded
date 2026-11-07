@@ -1,0 +1,104 @@
+diff -ruN a/arch/arm/mach-sunxi/board.c b/arch/arm/mach-sunxi/board.c
+--- a/arch/arm/mach-sunxi/board.c	2026-11-13 00:41:42.030001116 +0000
++++ b/arch/arm/mach-sunxi/board.c	2026-11-13 00:41:42.030001116 +0000
+@@ -181,6 +181,23 @@
+ 	sunxi_gpio_set_cfgpin(SUNXI_GPB(6), 7);
+ 	sunxi_gpio_set_cfgpin(SUNXI_GPB(7), 7);
+ 	sunxi_gpio_set_pull(SUNXI_GPB(7), SUNXI_GPIO_PULL_UP);
++#elif CONFIG_CONS_INDEX == 5 && defined(CONFIG_MACH_SUN8I_R528)
++	/* UART4 as the console (S3XY Dash). Pin pair from KCFLAGS -DDASH_U4=n */
++#if DASH_U4 == 1	/* PB2 TX, PB3 RX */
++	sunxi_gpio_set_cfgpin(SUNXI_GPB(2), 7);
++	sunxi_gpio_set_cfgpin(SUNXI_GPB(3), 7);
++	sunxi_gpio_set_pull(SUNXI_GPB(3), SUNXI_GPIO_PULL_UP);
++#elif DASH_U4 == 2	/* PD7 TX, PD8 RX */
++	sunxi_gpio_set_cfgpin(SUNXI_GPD(7), 5);
++	sunxi_gpio_set_cfgpin(SUNXI_GPD(8), 5);
++	sunxi_gpio_set_pull(SUNXI_GPD(8), SUNXI_GPIO_PULL_UP);
++#elif DASH_U4 == 3	/* PE4 TX, PE5 RX */
++	sunxi_gpio_set_cfgpin(SUNXI_GPE(4), 3);
++	sunxi_gpio_set_cfgpin(SUNXI_GPE(5), 3);
++	sunxi_gpio_set_pull(SUNXI_GPE(5), SUNXI_GPIO_PULL_UP);
++#else
++#error "set DASH_U4 to 1 (PB2/3), 2 (PD7/8) or 3 (PE4/5)"
++#endif
+ #elif CONFIG_CONS_INDEX == 5 && defined(CONFIG_MACH_SUN8I)
+ 	sunxi_gpio_set_cfgpin(SUNXI_GPL(2), SUN8I_GPL_R_UART);
+ 	sunxi_gpio_set_cfgpin(SUNXI_GPL(3), SUN8I_GPL_R_UART);
+diff -ruN a/dts/upstream/src/arm/allwinner/sun8i-t113s-dash-r0.dts b/dts/upstream/src/arm/allwinner/sun8i-t113s-dash-r0.dts
+--- a/dts/upstream/src/arm/allwinner/sun8i-t113s-dash-r0.dts	1970-01-01 00:00:00.000000000 +0000
++++ b/dts/upstream/src/arm/allwinner/sun8i-t113s-dash-r0.dts	2026-11-13 00:41:42.020001116 +0000
+@@ -0,0 +1,59 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++// R0: the rescue image's device tree for the S3XY Dash (T113-S4). Console, SD card, eMMC; nothing else.
++// The console UART4 node carries no pinctrl on purpose: the SPL muxes the pins (KCFLAGS -DDASH_U4=n,
++// board/dash/patches/uboot), and U-Boot proper and Linux keep them as set. Typed from the survey, not copied.
++
++/dts-v1/;
++
++#include <dt-bindings/gpio/gpio.h>
++#include "sun8i-t113s.dtsi"
++
++/ {
++	model = "S3XY Dash R0";
++	compatible = "dash,s3xy-dash-r0", "allwinner,sun8i-t113s";
++
++	aliases {
++		serial0 = &uart4;
++		mmc0 = &mmc0;	/* microSD (SMHC0, PF0-PF5) */
++		mmc1 = &mmc2;	/* eMMC (SMHC2, PC2-PC7, 4-bit) */
++	};
++
++	chosen {
++		stdout-path = "serial0:115200n8";
++	};
++
++	reg_3v3: regulator-3v3 {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc-3v3";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		regulator-always-on;
++	};
++};
++
++&dcxo {
++	clock-frequency = <24000000>;
++};
++
++&uart4 {
++	status = "okay";
++};
++
++&mmc0 {
++	pinctrl-0 = <&mmc0_pins>;
++	pinctrl-names = "default";
++	vmmc-supply = <&reg_3v3>;
++	broken-cd;		/* card-detect pin not known yet: poll */
++	disable-wp;
++	bus-width = <4>;
++	status = "okay";
++};
++
++&mmc2 {
++	pinctrl-0 = <&mmc2_pins>;
++	pinctrl-names = "default";
++	vmmc-supply = <&reg_3v3>;
++	non-removable;
++	bus-width = <4>;
++	status = "okay";
++};
+diff -ruN a/include/configs/sunxi-common.h b/include/configs/sunxi-common.h
+--- a/include/configs/sunxi-common.h	2026-11-13 00:41:42.030001116 +0000
++++ b/include/configs/sunxi-common.h	2026-11-13 00:41:42.030001116 +0000
+@@ -30,6 +30,10 @@
+ # define CFG_SYS_NS16550_COM3		SUNXI_UART2_BASE
+ # define CFG_SYS_NS16550_COM4		SUNXI_UART3_BASE
+ # define CFG_SYS_NS16550_COM5		SUNXI_R_UART_BASE
++# if defined(CONFIG_MACH_SUN8I_R528) && CONFIG_CONS_INDEX == 5
++#  undef CFG_SYS_NS16550_COM5
++#  define CFG_SYS_NS16550_COM5		(SUNXI_UART0_BASE + 0x1000)	/* UART4 */
++# endif
+ #endif
+ 
+ /****************************************************************************

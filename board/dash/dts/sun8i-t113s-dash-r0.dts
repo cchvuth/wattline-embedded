@@ -1,0 +1,59 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+// R0: the rescue image's device tree for the S3XY Dash (T113-S4). Console, SD card, eMMC; nothing else.
+// The console UART4 node carries no pinctrl on purpose: the SPL muxes the pins (KCFLAGS -DDASH_U4=n,
+// board/dash/patches/uboot), and U-Boot proper and Linux keep them as set. Typed from the survey, not copied.
+
+/dts-v1/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include "sun8i-t113s.dtsi"
+
+/ {
+	model = "S3XY Dash R0";
+	compatible = "dash,s3xy-dash-r0", "allwinner,sun8i-t113s";
+
+	aliases {
+		serial0 = &uart4;
+		mmc0 = &mmc0;	/* microSD (SMHC0, PF0-PF5) */
+		mmc1 = &mmc2;	/* eMMC (SMHC2, PC2-PC7, 4-bit) */
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+
+	reg_3v3: regulator-3v3 {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc-3v3";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+	};
+};
+
+&dcxo {
+	clock-frequency = <24000000>;
+};
+
+&uart4 {
+	status = "okay";
+};
+
+&mmc0 {
+	pinctrl-0 = <&mmc0_pins>;
+	pinctrl-names = "default";
+	vmmc-supply = <&reg_3v3>;
+	broken-cd;		/* card-detect pin not known yet: poll */
+	disable-wp;
+	bus-width = <4>;
+	status = "okay";
+};
+
+&mmc2 {
+	pinctrl-0 = <&mmc2_pins>;
+	pinctrl-names = "default";
+	vmmc-supply = <&reg_3v3>;
+	non-removable;
+	bus-width = <4>;
+	status = "okay";
+};
