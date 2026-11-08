@@ -8,3 +8,16 @@ test:
 	cd test && $(CC) $(HOSTFLAGS) -DAES256=1 -I../third_party -o ../build/test_sec1 sec1_crypto_check.c ../third_party/aes.c ../third_party/monocypher.c && ../build/test_sec1
 
 .PHONY: test
+
+# --- ARM (the Dash): Buildroot toolchain from the dashbr volume (run inside the build container, see tools/arm.sh)
+ARM_CC ?= /work/out-r0/host/bin/arm-buildroot-linux-gnueabihf-gcc
+LVGL := third_party/lvgl-9.6.0
+ARM_CFLAGS = -O2 -mcpu=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -DLV_CONF_INCLUDE_SIMPLE -Iport/linux -I$(LVGL) -I$(LVGL)/src
+LVGL_SRC := $(shell find $(LVGL)/src -name '*.c' 2>/dev/null)
+LVGL_OBJ := $(patsubst %.c,build/arm/%.o,$(LVGL_SRC))
+build/arm/%.o: %.c port/linux/lv_conf.h
+	@mkdir -p $(dir $@); $(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
+build/arm/dash-bringup: build/arm/ui/bringup.o $(LVGL_OBJ)
+	$(ARM_CC) -o $@ $^ -lm -lpthread
+arm: build/arm/dash-bringup
+.PHONY: arm
