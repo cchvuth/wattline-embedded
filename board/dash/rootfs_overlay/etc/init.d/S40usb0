@@ -1,0 +1,3 @@
+#!/bin/sh
+# USB gadget ethernet (R1): the Dash is 192.168.7.2 on usb0, the Mac takes 192.168.7.1. Absent on R0 (no usb0).
+case "$1" in start|"") ip link show usb0 >/dev/null 2>&1 && ip addr add 192.168.7.2/24 dev usb0 2>/dev/null; ip link set usb0 up 2>/dev/null; true;; esac
