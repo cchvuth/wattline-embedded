@@ -1,0 +1,1 @@
+source "$BR2_EXTERNAL_DASH_PATH/package/rtl8733bs/Config.in"

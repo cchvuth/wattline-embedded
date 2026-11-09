@@ -8,6 +8,7 @@
 
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/pwm/pwm.h>
 #include "sun8i-t113s.dtsi"
 
 / {
@@ -42,10 +43,28 @@
 		startup-delay-us = <20000>;
 	};
 
-	backlight: backlight {			/* stock lcd_bl_en: PG10. The PWM7 pin (PD22) is left to userspace (gpioset) */
-		compatible = "gpio-backlight";
-		gpios = <&pio 6 10 GPIO_ACTIVE_HIGH>;
-		default-on;
+	backlight: backlight {			/* stock: lcd_bl_en PG10, PWM7 on PD22 at 50 kHz, active low */
+		compatible = "pwm-backlight";
+		pwms = <&pwm 7 20000 PWM_POLARITY_INVERTED>;
+		enable-gpios = <&pio 6 10 GPIO_ACTIVE_HIGH>;
+		brightness-levels = <0 100>;	/* 0..100 = percent duty */
+		num-interpolated-steps = <100>;
+		default-brightness-level = <100>;
+	};
+
+	soc {
+		/* T113/D1 PWM (8 channels); the 7.3.4 dtsi has no node yet. As in the mainline submission (v13 3/3). */
+		pwm: pwm@2000c00 {
+			compatible = "allwinner,sun20i-d1-pwm";
+			reg = <0x02000c00 0x400>;
+			clocks = <&ccu CLK_BUS_PWM>, <&dcxo>, <&ccu CLK_APB0>;
+			clock-names = "bus", "hosc", "apb";
+			resets = <&ccu RST_BUS_PWM>;
+			pinctrl-0 = <&pwm7_pd22_pin>;
+			pinctrl-names = "default";
+			#pwm-cells = <3>;
+			allwinner,npwms = <8>;
+		};
 	};
 };
 
@@ -94,7 +113,11 @@
 };
 
 &pio {
-	/* PD22 (stock PWM7, brightness input, active low): left floating = lit. A gpio-hog here broke the pinctrl probe (-22). */
+	/* PD22: brightness input, active low (floating or low = lit). Never a gpio-hog: that broke the pinctrl probe (-22). */
+	pwm7_pd22_pin: pwm7-pd22-pin {
+		pins = "PD22";
+		function = "pwm7";
+	};
 
 	i2c0_pg_pins: i2c0-pg-pins {	/* stock: PG12/PG13 function 3 while the screen is on */
 		pins = "PG12", "PG13";

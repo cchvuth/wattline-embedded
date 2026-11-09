@@ -1,0 +1,60 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+// R2: R1 (display, touch, USB gadget: unchanged, included as is) plus the RTL8733BS radio.
+// WiFi: SDIO on SMHC1 (PG0-PG5), power PG9 (active low). BT: H5 on UART3 (PB6/PB7, no RTS/CTS wired), enable PE13.
+// Pins and polarities from the stock device tree (netRF node) and the stock PIO registers read while stock WiFi ran
+// (PG9 = 0, PE13 = 1). UART5 (PB4/PB5, the other BLE module) is not touched.
+
+#include "sun8i-t113s-dash-r1.dts"
+
+/ {
+	model = "S3XY Dash R2";
+	compatible = "dash,s3xy-dash-r2", "allwinner,sun8i-t113s";
+
+	aliases {
+		mmc2 = &mmc1;		/* SDIO WiFi (mmc0 = microSD, mmc1 = eMMC already) */
+	};
+
+	wifi_pwrseq: wifi-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		/* PG9 = WiFi LDO enable. Tested on the unit 2026-11-13: PG9 HIGH powers the chip (the stock snapshot of PG9 low misled us). */
+		reset-gpios = <&pio 6 9 GPIO_ACTIVE_LOW>;	/* "reset asserted" = PG9 low = off */
+		post-power-on-delay-ms = <1000>;	/* the chip did not answer CMD5 after 100 ms */
+		power-off-delay-us = <200000>;
+	};
+};
+
+&pio {
+	mmc1_pg_pins: mmc1-pg-pins {	/* stock sdc1: PG0-PG5, function 2, 30 mA, pull-up */
+		pins = "PG0", "PG1", "PG2", "PG3", "PG4", "PG5";
+		function = "mmc1";
+		drive-strength = <30>;
+		bias-pull-up;
+	};
+};
+
+&mmc1 {
+	pinctrl-0 = <&mmc1_pg_pins>;
+	pinctrl-names = "default";
+	vmmc-supply = <&reg_3v3>;
+	mmc-pwrseq = <&wifi_pwrseq>;
+	bus-width = <4>;
+	max-frequency = <50000000>;	/* stock: 50 MHz; drop to 25-40 MHz on CRC errors */
+	non-removable;
+	keep-power-in-suspend;
+	cap-sdio-irq;			/* stock sdc1: SDIO only */
+	no-sd;
+	no-mmc;
+	status = "okay";
+};
+
+&uart3 {
+	pinctrl-0 = <&uart3_pb_pins>;
+	pinctrl-names = "default";
+	status = "okay";
+
+	bluetooth {
+		/* RTL8733BS BT half; hci_h5 + btrtl (patch 0004) pick the chip by its HCI ids */
+		compatible = "realtek,rtl8723ds-bt";
+		enable-gpios = <&pio 4 13 GPIO_ACTIVE_HIGH>;	/* stock ldo_bten: PE13, high = on */
+	};
+};

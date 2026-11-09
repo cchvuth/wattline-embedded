@@ -1,0 +1,34 @@
+--- a/drivers/bluetooth/btrtl.c	2026-11-13 10:47:58.730018462 +0000
++++ b/drivers/bluetooth/btrtl.c	2026-11-13 10:47:58.740018462 +0000
+@@ -180,6 +180,14 @@
+ 	  .cfg_name = "rtl_bt/rtl8723ds_config",
+ 	  .hw_info  = "rtl8723ds" },
+ 
++	/* 8733BS (8723F family, UART H5 half of the RTL8733BS combo) */
++	{ IC_INFO(RTL_ROM_LMP_8723B, 0xf, 0x8, HCI_UART),
++	  .config_needed = true,
++	  .has_rom_version = true,
++	  .fw_name  = "rtl_bt/rtl8733bs_fw",
++	  .cfg_name = "rtl_bt/rtl8733bs_config",
++	  .hw_info  = "rtl8733bs" },
++
+ 	/* 8821A */
+ 	{ IC_INFO(RTL_ROM_LMP_8821A, 0xa, 0x6, HCI_USB),
+ 	  .config_needed = false,
+@@ -664,6 +672,7 @@
+ 		{ RTL_ROM_LMP_8723B, 9 },	/* 8723D */
+ 		{ RTL_ROM_LMP_8821A, 10 },	/* 8821C */
+ 		{ RTL_ROM_LMP_8822B, 13 },	/* 8822C */
++		{ RTL_ROM_LMP_8723B, 19 },	/* 8723F / 8733B */
+ 		{ RTL_ROM_LMP_8761A, 14 },	/* 8761B */
+ 		{ RTL_ROM_LMP_8852A, 18 },	/* 8852A */
+ 		{ RTL_ROM_LMP_8852A, 20 },	/* 8852B */
+@@ -1530,6 +1539,8 @@
+ MODULE_FIRMWARE("rtl_bt/rtl8723d_config.bin");
+ MODULE_FIRMWARE("rtl_bt/rtl8723ds_fw.bin");
+ MODULE_FIRMWARE("rtl_bt/rtl8723ds_config.bin");
++MODULE_FIRMWARE("rtl_bt/rtl8733bs_fw.bin");
++MODULE_FIRMWARE("rtl_bt/rtl8733bs_config.bin");
+ MODULE_FIRMWARE("rtl_bt/rtl8761a_fw.bin");
+ MODULE_FIRMWARE("rtl_bt/rtl8761a_config.bin");
+ MODULE_FIRMWARE("rtl_bt/rtl8761b_fw.bin");

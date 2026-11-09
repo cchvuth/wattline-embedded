@@ -1,0 +1,19 @@
+#!/bin/sh
+# Join the owner's WiFi at boot if the card's data partition (p2, DASHDATA) holds wifi.txt: line 1 SSID, line 2 passphrase.
+# The file is the owner's, on the card only; nothing is printed. Station mode only (wifi-connect).
+case "$1" in start|"") ;; *) exit 0;; esac
+(
+	for i in $(seq 1 20); do [ -e /sys/class/net/wlan0 ] && break; sleep 1; done
+	[ -e /sys/class/net/wlan0 ] || exit 0
+	for d in /sys/block/mmcblk[0-9]; do [ "$(cat $d/device/type 2>/dev/null)" = SD ] && P=/dev/${d##*/}p2; done
+	[ -b "$P" ] || exit 0
+	M=/run/dashdata; mkdir -p $M; mount -t vfat -o ro "$P" $M 2>/dev/null || exit 0
+	if [ -f $M/wifi.txt ]; then
+		S=$(sed -n 1p $M/wifi.txt | tr -d '\r'); K=$(sed -n 2p $M/wifi.txt | tr -d '\r')
+		umount $M
+		[ -n "$S" ] && wifi-connect "$S" "$K" > /run/wifi-auto.log 2>&1
+	else
+		umount $M
+	fi
+) &
+exit 0
