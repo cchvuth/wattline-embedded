@@ -14,5 +14,6 @@ size_t panda_ids(uint8_t op, const uint16_t *ids, size_t n, uint8_t *out);
 int panda_out_ok(const uint8_t *d, size_t n);
 
 typedef void (*panda_frame_fn)(void *ctx, uint16_t id, uint8_t bus, const uint8_t *data, uint8_t len);
-// Returns the number of Commander ACKs (bus 15, id 6) seen; -1 if the datagram is dropped (len % 16).
+// Calls fn per frame in record order; the Commander's ACK (bus 15, id 6) comes through it with len 0.
+// Returns the number of ACKs seen; -1 if the datagram is dropped (len % 16).
 int panda_parse(const uint8_t *d, size_t n, panda_frame_fn fn, void *ctx);

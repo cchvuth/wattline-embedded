@@ -36,7 +36,7 @@ int panda_parse(const uint8_t *d, size_t n, panda_frame_fn fn, void *ctx) {
     uint16_t id = w0 >> 21;
     uint8_t len = w1 & 15, bus = (w1 >> 4) & 0xff;
     if (id == 0) continue;
-    if (bus == 15 && id == 6) { acks++; continue; }
+    if (bus == 15 && id == 6) { acks++; fn(ctx, id, bus, d + o + 8, 0); continue; }  // in order: the ACK rule reads the frames before it
     if (len < 1 || len > 8) continue;
     fn(ctx, id, bus, d + o + 8, len);
   }

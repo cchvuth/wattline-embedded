@@ -22,9 +22,10 @@ int main(void) {
   rec(pk + 16, 0x118, (const uint8_t[]){9, 9}, 2, 0);
   rec(pk + 32, 6, (const uint8_t[]){0}, 0, 15);               // the Commander's ACK
   assert(panda_parse(pk, 48, on, 0) == 1);
-  assert(got.n == 2 && got.id[0] == 0x257 && got.bus[0] == 1 && got.len[0] == 8 && got.d0[0] == 1);
+  assert(got.n == 3 && got.id[2] == 6 && got.bus[2] == 15 && got.len[2] == 0);  // the ACK, in its place, len 0
+  assert(got.id[0] == 0x257 && got.bus[0] == 1 && got.len[0] == 8 && got.d0[0] == 1);
   assert(got.id[1] == 0x118 && got.len[1] == 2 && got.d0[1] == 9);
-  assert(panda_parse(pk, 47, on, 0) == -1 && got.n == 2);     // not a multiple of 16: dropped whole
+  assert(panda_parse(pk, 47, on, 0) == -1 && got.n == 3);     // not a multiple of 16: dropped whole
 
   uint8_t out[PANDA_DGRAM_MAX];
   assert(panda_hello(out) == 5 && panda_out_ok(out, 5));

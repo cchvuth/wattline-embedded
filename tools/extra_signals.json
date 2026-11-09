@@ -1,0 +1,20 @@
+{
+  "_doc": "Dash-only rows, appended after kSignals by gen_signals.py. 0x318 SystemTimeUTC for the clock (docs/signals-and-actions.md, 'Date and time (UTC)'; PLAN 5.6). Streamed (3.8 Hz). The vector is a synthetic frame laid out as the doc says (2026-11-13 10:42:07 UTC), not a capture: the doc gives no raw bytes.",
+  "signals": {
+    "utcYear":    {"id": "0x318", "start": 0,  "len": 8, "offset": 2000},
+    "utcMonth":   {"id": "0x318", "start": 8,  "len": 8},
+    "utcSeconds": {"id": "0x318", "start": 16, "len": 8},
+    "utcHour":    {"id": "0x318", "start": 24, "len": 8},
+    "utcDay":     {"id": "0x318", "start": 32, "len": 8},
+    "utcMinutes": {"id": "0x318", "start": 40, "len": 8}
+  },
+  "alwaysOn": ["0x318"],
+  "vectors": [
+    {"sig": "utcYear",    "data": [26, 11, 7, 10, 13, 42, 0, 0], "expect": 2026},
+    {"sig": "utcMonth",   "data": [26, 11, 7, 10, 13, 42, 0, 0], "expect": 11},
+    {"sig": "utcDay",     "data": [26, 11, 7, 10, 13, 42, 0, 0], "expect": 13},
+    {"sig": "utcHour",    "data": [26, 11, 7, 10, 13, 42, 0, 0], "expect": 10},
+    {"sig": "utcMinutes", "data": [26, 11, 7, 10, 13, 42, 0, 0], "expect": 42},
+    {"sig": "utcSeconds", "data": [26, 11, 7, 10, 13, 42, 0, 0], "expect": 7}
+  ]
+}
