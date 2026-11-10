@@ -61,5 +61,29 @@ int main(int argc, char **argv)
 		       diff ? "  STALE PIXELS after the partial redraw" : "");
 		if (diff) printf("  %zu pixels differ\n", diff);
 	}
+	/* Every link state in its corner, on one sheet (links.png): WiFi state i beside Bluetooth state i (and i + 9). */
+	enum { CW = 300, CH = 170 };
+	uint8_t *sheet = calloc((size_t)CW * 8 * CH * 2 * 4, 1);
+	for (int i = 0; i < 16; i++) {
+		dash_state_t s;
+		scenes[0].fill(&s);
+		s.wifi = (dash_wifi_t)(i % 9), s.wifi_live = s.wifi == WIFI_LIVE, s.bt = (dash_bt_t)i;
+		dash_ui_set(&s);
+		lv_obj_invalidate(lv_screen_active());
+		lv_refr_now(d);
+		int ox = (i % 8) * CW, oy = (i / 8) * CH;
+		for (int y = 0; y < CH; y++)
+			for (int x = 0; x < CW; x++) {
+				uint8_t *p = buf + ((size_t)(H - CH + y) * W + x) * 4, *o = sheet + ((size_t)(oy + y) * CW * 8 + ox + x) * 4;
+				o[0] = p[2], o[1] = p[1], o[2] = p[0], o[3] = 255;
+			}
+	}
+	char path[512];
+	snprintf(path, sizeof path, "%s/links.png", out);
+	unsigned char *png;
+	size_t len;
+	FILE *f = lodepng_encode32(&png, &len, sheet, CW * 8, CH * 2) ? NULL : fopen(path, "wb");
+	if (f) fwrite(png, 1, len, f), fclose(f), lv_free(png);
+	printf("%-20s %s\n", "link states", f ? path : "can't write");
 	return bad;
 }

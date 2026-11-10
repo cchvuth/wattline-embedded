@@ -1,7 +1,7 @@
 /* The dash UI on the S3XY Dash (T113): LVGL on /dev/fb0 (480x1920 portrait panel) drawn as the 1920x480 canvas,
  * rotated in the flush, touch from evdev; display and touch set up as ui/bringup.c (checked on the unit).
  * Demo mode until the data layer is wired: cycles the app's demo scenes, a tap moves on; within a scene the
- * speed and power wobble and the indicators flash, so the ring and glows redraw as in a drive (LVGL's perf
+ * speed, power and pedal wobble and the indicators flash, so the ring and glows redraw as in a drive (LVGL's perf
  * monitor shows the cost). Usage: dash-ui [rotation 0|90|180|270] [touch event device] [seconds per scene] */
 #include "lvgl.h"
 #include "dash_ui.h"
@@ -33,6 +33,7 @@ static void tick(lv_timer_t *t)
 	if (!isnan(s.speed) && s.gear != 'P') s.speed = fmaxf(0, s.speed + 3 * w);
 	if (!isnan(s.rear_kw)) s.rear_kw += 8 * w;
 	if (!isnan(s.front_kw)) s.front_kw += 5 * w;
+	if (!isnan(s.pedal_pct) && s.gear != 'P') s.pedal_pct = fmaxf(0, 30 + 25 * w);
 	bool lit = (now / 375) % 2 == 0; /* the car's flasher, about 80 a minute */
 	s.ind_l = base.ind_l && lit;
 	s.ind_r = base.ind_r && lit;

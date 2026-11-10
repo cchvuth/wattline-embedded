@@ -1,0 +1,68 @@
+# dash.conf: the dash program's settings. key = value, # comments. Every key is optional: absent keys (or no file)
+# take the built-in default shown here. Read at start from /run/dashdata/dash.conf (the card's data partition),
+# or dash -c PATH. Bad lines are logged (/run/dash.log) and skipped.
+
+# The Commander's Panda interface (WiFi CAN). On the bench: the Mac running tools/fake_panda.py, e.g. 192.168.1.240
+panda_host = 192.168.4.1
+panda_port = 1338
+
+# The link (core/sched.h, lib/panda.dart 1.3.0), ms
+tick_ms = 1000            # keep-alive hello and the link checks
+quiet_ms = 3000           # stream silence before resubscribing
+lost_ms = 8000            # silence before the link is given up and retried
+frozen_ms = 8000          # a gap between ticks this long: start over
+backoff_ms = 1000, 3000, 6000, 10000   # retry waits
+ack_resub_ms = 2000       # an ACK resends the list at most this often, after this much silence
+warmup_ms = 2000          # a new stream reads every group this long before polling
+slot_ms = 500             # the polling wheel's slot
+stray_ms = 300            # frames of a removed id this long after its remove...
+strays = 3                # ...this many of them: remove again
+flood_frames = 100        # foreign frames a second that mean the filter did not take...
+flood_ms = 5000           # ...resent at most this often
+hot_ms = 3000             # a press keeps its chip's groups polled
+back_ms = 3000            # an id back on the list is added again this long
+steer_readd_ms = 1000     # the steering group added again once its frames stop this long
+sparse = 1                # sparse polling (steadier speed, slower doors and belts)
+
+# The derived values (core/state.h), ms
+gear_fresh_ms = 2000      # P older than this is a stalled link: closures stay locked (fails closed)
+grip_hold_ms = 3000
+steer_hold_ms = 2000
+yaw_steer_ms = 300
+bt_motor_bad_ms = 30000
+
+# The car and how it shows
+car = modelY7             # model3rwd model3 modelY5rwd modelY5 modelY7 modelYL
+units = km                # km or mi until the car's own setting arrives (CAN 0x257), which then rules
+minor_figures = 1         # 12 V, other power and cell imbalance rows
+
+# Time: the clock comes from CAN 0x318 (UTC); no NTP on S3XY_OBD
+tz = UTC0                 # POSIX TZ, e.g. CET-1CEST,M3.5.0,M10.5.0/3 or <+07>-7 (zone names need tzdata)
+hour12 = 1                # 1: 1:51 PM, 0: 13:51
+set_clock = 1             # set the system clock from 0x318 once per link (logs get real dates)
+
+# Backlight, % of the sysfs range (the car's low/high beams on = night)
+backlight = /sys/class/backlight/backlight   # holds brightness and max_brightness; empty: leave it alone
+bright_day = 100
+bright_night = 30
+bright_idle = 10          # no car data (the bench, a parked car's silent Commander)
+bright_min = 5
+bright_max = 100
+away_min = 0              # no car data and no touch this long: backlight off; 0 never (PLAN 4.11 suggests 10)
+
+# Display and touch (checked on the unit)
+fb = /dev/fb0
+rotate = 270
+touch = /dev/input/event0
+touch_swap = 1
+touch_cal = 479, 0, 0, 1919
+frame_ms = 33
+
+# Logging (RAM): log and log.1, each up to log_kb
+log = /run/dash.log
+log_kb = 256
+
+# The Commander session's files (CMDR=1 builds): the phone id and the pinned Commander. /run is lost at power off,
+# so the Commander asks for approval again each boot until these point at a writable data partition.
+cmdr_id = /run/dash-cmdr-id
+cmdr_pin = /run/dash-cmdr-pin

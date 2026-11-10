@@ -8,7 +8,7 @@
 #define UI_S_NAV 1.3f
 #define UI_S_CAR_H 378.0f
 #define UI_S_LIGHTS 1.25f
-#define UI_S_LINK 1.15f
+#define UI_S_LINK 1.2f
 #define UI_S_CHIP 1.2f
 extern const lv_image_dsc_t ic_autopilot;
 extern const lv_image_dsc_t ic_charge_port;

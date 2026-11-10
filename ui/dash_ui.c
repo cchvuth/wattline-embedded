@@ -7,6 +7,7 @@
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---------- colours (gauge.dart; Flutter's white tints) ---------- */
@@ -260,7 +261,7 @@ static dash_state_t S, P; /* shown now, shown before */
 static bool first = true;
 
 static lv_obj_t *root;
-static lv_obj_t *glow_l, *glow_r, *glow_b, *pedal;
+static lv_obj_t *glow_l, *glow_r, *glow_b, *pedal, *pedal_fill, *pedal_name, *pedal_val;
 
 typedef struct { lv_obj_t *box, *icon, *note; } chip_t;
 static chip_t chips[10];
@@ -362,29 +363,8 @@ static void ring_draw(lv_event_t *e)
 	float r = G.r, w = G.aw;
 	arc(layer, SEC_L0, SEC_SWEEP, W24, px(1.5)); /* the empty track: a hairline */
 	arc(layer, SEC_R0, SEC_SWEEP, W24, px(1.5));
-	bool foot = !s->rwd && s->brake_pct > 0; /* the brake in the ring's foot: two motors */
-	if (foot) {
-		float room = 90 - (SEC_R0 + SEC_SWEEP) - 10, reach = room * fminf(s->brake_pct, 100) / 100;
-		arc(layer, 90 - reach, 2 * reach, ALERT, w * 0.35f);
-		/* BRAKE APPLIED under it, each letter's top on the circle, turned to its tangent. */
-		const lv_font_t *f = font_px(BOLD, ri(r * 0.04f));
-		const char *t = "BRAKE APPLIED";
-		float ls = r * 0.004f, rad = r + w * 0.35f, total = 0, wd[16];
-		for (int i = 0; t[i]; i++) total += wd[i] = lv_font_get_glyph_width(f, t[i], t[i + 1]) + ls;
-		float a = DEG(90) + total / 2 / rad;
-		for (int i = 0; t[i]; i++) {
-			float mid = a - wd[i] / 2 / rad, b = rad + ascent(f);
-			lv_draw_letter_dsc_t d;
-			lv_draw_letter_dsc_init(&d);
-			d.font = f;
-			d.color = rgb(ALERT);
-			d.unicode = t[i];
-			d.rotation = ri((mid * 180 / (float)M_PI - 90) * 10);
-			lv_point_t pt = {ri(G.cx + b * cosf(mid)), ri(G.cy + b * sinf(mid))};
-			if (t[i] != ' ') lv_draw_letter(layer, &d, &pt);
-			a -= wd[i] / rad;
-		}
-	}
+	/* The app's brake in the ring's foot (a red arc and BRAKE APPLIED) is in the pedal's slot under the g-meter
+	 * here (owner); a rear-motor car's brake stays on the ring's right arc. */
 	float zl = SEC_L0 + HALF - DROP, zr = SEC_R0 + HALF + DROP;
 	if (!isnan(s->rear_kw)) motor(layer, s->rear_kw, zl, true);
 	float right = !s->rwd ? s->front_kw : s->brake_pct > 0 ? -s->brake_pct : s->pedal_pct;
@@ -515,10 +495,14 @@ static void gball_draw(lv_event_t *e)
 	}
 }
 
-/* The g-meter block's height: the ball, 6 dp, the figure's line, the peak's line. */
+/* The g-meter block's height: the ball, 6 dp, the figure's line, the peak's line; then the pedal's label and bar. */
+#define PEDAL_H PG(3)
+#define PEDAL_GAP PG(14) /* the pedal's labelled bar, well clear of the figures */
+static const lv_font_t *label_font(void) { return FS(REGULAR, 12, UI_S_FIG); } /* as the dial's labels */
 static float g_height(void)
 {
-	return PG(72) + PG(6) + lv_font_get_line_height(FS(REGULAR, 16, UI_S_FIG)) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_FIG));
+	return PG(72) + PG(6) + lv_font_get_line_height(FS(REGULAR, 16, UI_S_FIG)) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_FIG)) +
+	       PEDAL_GAP + lv_font_get_line_height(label_font()) + PG(3) + PEDAL_H;
 }
 
 /* ---------- the assist disc's strike (widgets.dart _Strike) ---------- */
@@ -543,9 +527,12 @@ static void ap_blink_cb(lv_timer_t *t)
 static const lv_image_dsc_t *chip_icons[10] = {&ic_trunk, &ic_mirror, &ic_door_fl, &ic_door_rl, &ic_charge_port,
 					       &ic_frunk, &ic_recirc, &ic_door_fr, &ic_door_rr, &ic_interior};
 
+/* Each side column: five chips, then the links (left) or the car panel button (right), spaced evenly in the full
+ * height. */
+static float chip_gap(void) { return (G.chip_area - 5 * PC(48) - PL(44)) / 7; }
 static void chip_geom(int i, float *x, float *y)
 {
-	float item = PC(48), gap = (G.chip_area - 5 * item) / 6; /* Column spaceEvenly, each chip 3 dp padded */
+	float item = PC(48), gap = chip_gap(); /* Column spaceEvenly, each chip 3 dp padded, the links' row the last */
 	int row = i % 5;
 	float cy = G.mt + gap * (row + 1) + item * row + item / 2;
 	*y = cy - PC(21);
@@ -568,10 +555,10 @@ void dash_ui_init(lv_obj_t *scr)
 	G.H = lv_display_get_vertical_resolution(disp);
 	G.k = G.H / 480;
 	G.ml = px(14), G.mt = px(6), G.mb = px(10);
-	G.link_top = G.H - G.mb - PL(44);
-	G.chip_area = G.link_top - G.mt; /* the left chips above the links; the right ones the same */
+	G.chip_area = G.H - G.mt - G.mb;
+	G.link_top = G.mt + 6 * chip_gap() + 5 * PC(48); /* the side columns' last row */
 	/* The ring as big as the screen's height allows: its arcs' top ends 2 px under the top edge (they end at 0.83 of
-	 * the outer radius up), the foot's brake arc and BRAKE APPLIED 10 px over the bottom one. The limit sign, the
+	 * the outer radius up), 10 px over the bottom one (the app's foot brake, now under the g-meter, set that room; the gear fits in it). The limit sign, the
 	 * assist disc and the gear then fit too (checked at 480: r 247, 1.28 x the app's at 1536 dp). */
 	G.r = (G.H - 12 * G.k) / (0.83f * 1.0425f + 1.03f);
 	G.cy = 0.83f * 1.0425f * G.r + 2 * G.k;
@@ -580,6 +567,11 @@ void dash_ui_init(lv_obj_t *scr)
 	G.card_w = PN(154);
 	G.cab = ui_car_pics[0].car->header.h / px(236);
 
+#if LV_USE_PERF_MONITOR
+	/* LVGL's fps / CPU overlay: off unless DASH_PERF=1 (performance checks) */
+	const char *perf = getenv("DASH_PERF");
+	if (!perf || strcmp(perf, "1")) lv_sysmon_hide_performance(disp);
+#endif
 	lv_obj_set_style_bg_color(scr, rgb(BLACK), 0);
 	lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 	lv_obj_set_scrollable(scr, false);
@@ -601,9 +593,16 @@ void dash_ui_init(lv_obj_t *scr)
 	lv_obj_set_style_bg_color(glow_b, rgb(ALERT), 0);
 	lv_obj_set_style_bg_grad_color(glow_b, rgb(ALERT), 0);
 
-	/* The pedal: a line along the top, growing from the ring's centre. */
+	/* The pedal (main.dart's line along the top): a bar under the g-meter, a hairline track and the fill in kAccent. */
 	pedal = box(root);
-	fill(pedal, ACCENT);
+	fill(pedal, W24);
+	lv_obj_set_style_radius(pedal, LV_RADIUS_CIRCLE, 0);
+	pedal_name = label(root, label_font(), W70);
+	lv_obj_set_style_text_letter_space(pedal_name, ri(PF(0.8)), 0);
+	pedal_val = label(root, label_font(), WHITE);
+	pedal_fill = box(pedal);
+	fill(pedal_fill, ACCENT);
+	lv_obj_set_style_radius(pedal_fill, LV_RADIUS_CIRCLE, 0);
 
 	/* The action chips (widgets.dart _Actions). */
 	for (int i = 0; i < 10; i++) {
@@ -623,7 +622,8 @@ void dash_ui_init(lv_obj_t *scr)
 	link_make(&link_b);
 	car_panel = icon(root, &ic_car_panel, WHITE);
 	{
-		float cy = G.H - G.mb - PL(22);
+		/* the right column's last row, its right edge on the chips' (IconButton: 40 dp, the 24 dp icon centred) */
+		float cy = G.link_top + PL(22);
 		lv_obj_set_pos(car_panel, ri(G.W - G.ml - inset(cy) - PL(20) - PL(12)), ri(cy - PL(12)));
 	}
 
@@ -765,7 +765,7 @@ static void set_chips(const dash_state_t *s)
 static void set_link(typeof(link_w) *l, int slot, const lv_image_dsc_t *big, const lv_image_dsc_t *small, uint32_t c,
 		     const char *word, bool settled, int stat)
 {
-	float cy = G.H - G.mb - PL(22), x0 = G.ml + inset(cy);
+	float cy = G.link_top + PL(22), x0 = G.ml + inset(cy); /* the left column's last row, from its stepped edge */
 	float x = x0 + (slot == 0 ? 0 : (S.wifi == WIFI_LIVE ? PL(36) : PL(60))), w = settled ? PL(36) : PL(60);
 	place(l->box, x, G.link_top, w, PL(44));
 	if (settled) { /* a small icon on the big buttons' icon line (Alignment(0, -0.5)), its stat under it */
@@ -1252,7 +1252,6 @@ static void ring_dirty(const dash_state_t *s)
 	bool both = first || CHANGED(live) || CHANGED(rwd) || CHANGED(regen_cap_kw);
 	bool left = both || CHANGED(rear_kw) || CHANGED(front_kw);
 	bool right = both || CHANGED(front_kw) || CHANGED(rear_kw) || CHANGED(pedal_pct) || CHANGED(brake_pct);
-	bool foot = both || CHANGED(brake_pct);
 	lv_area_t a;
 	if (left) {
 		a = (lv_area_t){ri(G.cx - R) - 2, ri(G.cy - h) - 2, ri(G.cx - in) + 2, ri(G.cy + h) + 2};
@@ -1260,10 +1259,6 @@ static void ring_dirty(const dash_state_t *s)
 	}
 	if (right) {
 		a = (lv_area_t){ri(G.cx + in) - 2, ri(G.cy - h) - 2, ri(G.cx + R) + 2, ri(G.cy + h) + 2};
-		lv_obj_invalidate_area(ring, &a);
-	}
-	if (foot) {
-		a = (lv_area_t){ri(G.cx - 0.45f * R), ri(G.cy + 0.85f * G.r), ri(G.cx + 0.45f * R), ri(G.cy + R + G.aw)};
 		lv_obj_invalidate_area(ring, &a);
 	}
 }
@@ -1387,7 +1382,7 @@ static void set_energy(const dash_state_t *s, float cx)
 	/* The pair's top: the taller of the two blocks centred in the height. */
 	float dh = 98 * q, pad = PF(5);
 	float eh = dh + pad + (card ? ch_h + 2 * pad : 0) + st_h;
-	bool g_on = s->wifi_live && s->g_shown && s->gear != 'P';
+	bool g_on = s->wifi_live && s->gear != 'P'; /* the g-meter's place, kept while driving */
 	G.pair_top = G.H / 2 - fmaxf(eh, g_on ? g_height() : 0) / 2;
 	float y = G.pair_top - q; /* the arc's outer edge 1 unit into the box */
 	lv_obj_set_pos(dial, ri(cx - 52 * q), ri(y));
@@ -1403,6 +1398,34 @@ static void set_energy(const dash_state_t *s, float cx)
 
 static void set_g(const dash_state_t *s, float cx)
 {
+	/* The pedal (main.dart's line along the top) as a labelled bar at the g-meter block's foot, the circle's width:
+	 * not on a rear-motor car, whose ring has the pedal and the brake; only with the g-meter's place (WiFi, not in
+	 * P). Braking, it is the app's foot brake instead (gauge.dart: kAlert, BRAKE APPLIED, its reach the pressure).
+	 * Only the fill and the figure change, so only they redraw. */
+	float side = PG(72), bar_y = G.pair_top + g_height() - PEDAL_H, lab_y = bar_y - PG(3) - lv_font_get_line_height(label_font());
+	bool bar = s->live && !s->rwd && s->wifi_live && s->gear != 'P', braking = bar && s->brake_pct > 0;
+	show(pedal, bar);
+	show(pedal_name, bar);
+	show(pedal_val, bar);
+	if (bar) {
+		float pct = braking ? s->brake_pct : s->pedal_pct;
+		place(pedal, cx - side / 2, bar_y, side, PEDAL_H);
+		float f = side * fmaxf(0, fminf(100, isnan(pct) ? 0 : pct)) / 100;
+		show(pedal_fill, f >= 1);
+		fill(pedal_fill, braking ? ALERT : ACCENT);
+		place(pedal_fill, 0, 0, fmaxf(f, PEDAL_H), PEDAL_H);
+		set_text(pedal_name, "%s", braking ? "BRAKE APPLIED" : "PEDAL");
+		text_color(pedal_name, braking ? ALERT : W70);
+		if (isnan(pct)) set_text(pedal_val, " —");
+		else set_text(pedal_val, " %d %%", (int)lroundf(pct));
+		/* the name and the figure, centred under the circle */
+		lv_point_t a, b;
+		lv_text_get_size(&a, lv_label_get_text(pedal_name), label_font(), ri(PF(0.8)), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+		lv_text_get_size(&b, lv_label_get_text(pedal_val), label_font(), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+		float x = cx - (a.x + b.x) / 2.0f;
+		lv_obj_set_pos(pedal_name, ri(x), ri(lab_y));
+		lv_obj_set_pos(pedal_val, ri(x + a.x), ri(lab_y));
+	}
 	bool on = s->wifi_live && s->g_shown && s->gear != 'P';
 	show(gball, on);
 	show(g_val, on);
@@ -1422,7 +1445,7 @@ static void set_g(const dash_state_t *s, float cx)
 	snprintf(pk, sizeof pk, "PEAK %.2f", peak);
 	set_text(g_peak, "%s", pk);
 	/* the ball, then its figures centred under it, the block centred in the column's height */
-	float side = PG(72), h1 = lv_obj_get_style_height(g_val, 0), top = G.pair_top;
+	float h1 = lv_obj_get_style_height(g_val, 0), top = G.pair_top;
 	place(gball, cx - side / 2, top, side, side);
 	lv_obj_set_pos(g_val, ri(cx - lv_obj_get_style_width(g_val, 0) / 2.0f), ri(top + side + PG(6)));
 	align(g_peak, LV_ALIGN_TOP_MID, ri(cx - G.W / 2), ri(top + side + PG(6) + h1));
@@ -1467,6 +1490,7 @@ void dash_ui_set(const dash_state_t *s)
 		float cx, cy;
 		chip_geom(i, &cx, &cy);
 		if (i < 5 && cy + PC(42) > car_top) chips_r = fmaxf(chips_r, cx + PC(52));
+		if (i == 0) chips_r = fmaxf(chips_r, G.ml + inset(G.link_top + PL(22)) + 2 * PL(60)); /* the links' row, widest */
 		if (i >= 5 && cy < G.H / 2 + g_height() / 2 && cy + PC(42) > G.H / 2 - g_height() / 2) chips_l = fminf(chips_l, cx);
 	}
 	/* The ring fixed at the centre (owner); each side's blocks spread evenly between it and the chips. */
@@ -1484,12 +1508,6 @@ void dash_ui_set(const dash_state_t *s)
 	}
 	(void)sum;
 	ring_place();
-
-	/* the pedal line: not on a rear-motor car, whose ring has the pedal; growing from the ring's centre, 100 % the
-	 * visible top width */
-	float pw = (G.W - 2 * inset(0) - 2 * G.ml) * fmaxf(0, fminf(100, isnan(s->pedal_pct) ? 0 : s->pedal_pct)) / 100;
-	show(pedal, s->live && !s->rwd && pw >= 1);
-	place(pedal, G.cx - pw / 2, 0, pw, px(4));
 
 	set_chips(s);
 	set_links(s);
