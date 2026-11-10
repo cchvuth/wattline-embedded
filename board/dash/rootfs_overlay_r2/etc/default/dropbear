@@ -1,0 +1,2 @@
+# Dropbear on the home WiFi for development: key logins only (-s: no password logins at all), keys in /root/.ssh/authorized_keys (private overlay)
+DROPBEAR_ARGS="-s"
