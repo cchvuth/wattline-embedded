@@ -31,6 +31,7 @@ void car_init(car_t *c) {
   c->cfg.steer_hold_ms = 2000;
   c->cfg.yaw_steer_ms = 300;
   c->cfg.bt_motor_bad_ms = 30000;
+  c->cfg.bright_stale_ms = 5000;  // 0x273 comes every 500 ms
   c->car = &kCars[CAR_FALLBACK];
   c->kph = true;
   c->p.half_ms = 360;
@@ -43,6 +44,7 @@ void car_init(car_t *c) {
   c->cell_v_max = c->cell_v_min = c->pack_kwh = c->pack_left_kwh = c->pack_buffer_kwh = c->pack_new_kwh = NUL;
   c->outside_c = c->pack_temp_c = NUL;
   c->charge_limit_pct = -1;
+  c->p.bt_bright_bad = -1;
   car_forget(c, NEVER);          // everything else as _forget leaves it
   c->p.gear_at = NEVER;          // Panda(): '—' with an epoch-0 stamp
 }
@@ -114,6 +116,7 @@ void car_frame(car_t *c, uint16_t id, uint8_t bus, const uint8_t *d, uint8_t len
     c->brake_pct = NUL;
   }
   if (id == 0x129) { c->steer_deg = NUL; c->p.steer_at = now; }
+  if (id == 0x273 && len >= 5) c->display_brightness = NUL;   // SNA (or a frame without it) is no level
   int n = sub_index(id);
   if (n < 0) return;
   int utc[6], utc_n = 0;
@@ -313,6 +316,11 @@ void car_frame(car_t *c, uint16_t id, uint8_t bus, const uint8_t *d, uint8_t len
     case SIG_chargeWhy: c->charge_why = LUT(kChargeWhy, ri(v)); break;
     case SIG_chargeLimit: c->charge_limit_pct = ri(v); break;
     case SIG_chargeMinutes: c->charge_minutes = v >= 2047 ? -1 : ri(v); break;
+    case SIG_displayBrightness:
+      c->display_brightness = v;
+      c->p.bright_at = now;
+      c->p.bright_bt = false;
+      break;
     // The Dash's 0x318: kept only whole and in range (order in the table: Y M s h D m).
     case SIG_utcYear: case SIG_utcMonth: case SIG_utcSeconds: case SIG_utcHour: case SIG_utcDay:
     case SIG_utcMinutes:
@@ -365,6 +373,8 @@ void car_forget(car_t *c, int64_t now) {
   c->other_kw = NUL;
   c->lv_kw = c->p.comp_kw = c->p.heat_l_kw = c->p.heat_r_kw = c->p.lv_v = NUL;
   c->brake_pct = NUL;
+  c->display_brightness = NUL;
+  c->p.bright_bt = false;
   car_set_steer(c, NUL, now);
   for (int i = 0; i < 4; i++) c->p.brake_nm[i] = NUL;
   c->p.comp_ok = false;
@@ -451,6 +461,15 @@ void car_apply_bt(car_t *c, int64_t now) {
   if (zz(c, 42, &v)) c->pack_temp_c = v * 0.5;
   if (at(c, 49, &v)) c->pack_heating = v == 1;
   if (at(c, 108, &v)) c->hands_on = v == 15 ? -1 : (int)v;
+  if (at(c, 24, &v)) {   // display_brightness, uint32, unit unverified: taken as % when it fits
+    if (v >= 0 && v <= 100) {
+      c->display_brightness = (double)v;
+      c->p.bright_at = now;
+      c->p.bright_bt = true;
+    } else {
+      c->p.bt_bright_bad = v;
+    }
+  }
 }
 
 void car_from_bt(car_t *c, const bt_map_t *push, int64_t now) {
@@ -510,6 +529,13 @@ bool car_unbuckled_at(const car_t *c, int seat) {
 bool car_any_belt_unbuckled(const car_t *c) {
   for (int s = 1; s <= SEAT_3R; s <<= 1) if ((c->car->seats & s) && car_unbuckled_at(c, s)) return true;
   return false;
+}
+
+double car_display_brightness(const car_t *c, int64_t now) {
+  double v = c->display_brightness;
+  if (isnan(v)) return NUL;
+  if (c->p.bright_bt) return car_via_bt(c) ? v : NUL;   // pushed on a change: any age while the session is up
+  return now >= c->p.bright_at && now - c->p.bright_at <= c->cfg.bright_stale_ms ? v : NUL;
 }
 
 double car_imbalance_mv(const car_t *c) { return (c->cell_v_max - c->cell_v_min) * 1000; }   // NUL in, NUL out

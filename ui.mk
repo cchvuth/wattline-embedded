@@ -34,3 +34,10 @@ build/arm-ui/dash-ui: $(patsubst %.c,build/arm-ui/%.o,ui/main_dash.c $(UI_SRC) $
 arm: build/arm-ui/dash-ui
 
 .PHONY: shots compare arm
+
+# The app/ files this UI work adds (not yet in app.mk): compile-only, both ways, with the Dash's compiler.
+check-app:
+	$(ARM_CC) $(ARM_CFLAGS) $(WARN) -Ibuild -fsyntax-only app/pair.c
+	$(ARM_CC) $(ARM_CFLAGS) $(WARN) -Ibuild -fsyntax-only app/actions.c
+	$(ARM_CC) $(ARM_CFLAGS) $(WARN) -Ibuild -DDASH_CMDR=1 -DAES256=1 -fsyntax-only app/actions.c
+.PHONY: check-app

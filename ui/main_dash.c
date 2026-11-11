@@ -14,6 +14,8 @@
 static int scene, per_scene = 6;
 static uint32_t scene_start;
 static dash_state_t base;
+static int demo_press = -1; /* the demo's press out, and since when */
+static uint32_t demo_at;
 
 static void load(int i)
 {
@@ -37,7 +39,18 @@ static void tick(lv_timer_t *t)
 	bool lit = (now / 375) % 2 == 0; /* the car's flasher, about 80 a minute */
 	s.ind_l = base.ind_l && lit;
 	s.ind_r = base.ind_r && lit;
+	uint32_t since = now - demo_at;
+	if (demo_press >= 0 && since < 600) s.press_pending = (int8_t)demo_press;
+	else if (demo_press >= 0 && since < 4600) snprintf(s.toast, sizeof s.toast, "Demo: no Commander session");
 	dash_ui_set(&s);
+}
+
+/* No Commander in the demo: a press is shown out for a moment, then said so, as a refusal would be. */
+static void on_action(int a, void *ctx)
+{
+	(void)ctx;
+	demo_press = a, demo_at = lv_tick_get();
+	printf("press %d\n", a);
 }
 
 static void on_tap(lv_event_t *e)
@@ -73,6 +86,7 @@ int main(int argc, char **argv)
 	dash_ui_init(scr);
 	lv_obj_set_clickable(scr, true);
 	lv_obj_add_event_cb(scr, on_tap, LV_EVENT_CLICKED, NULL);
+	dash_ui_set_action_cb(on_action, NULL);
 	load(0);
 	lv_timer_create(tick, 33, NULL); /* the state pushed to the widgets at about 30 Hz, as the app's fast tick */
 

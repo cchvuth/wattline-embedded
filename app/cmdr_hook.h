@@ -8,5 +8,7 @@ void cmdr_hook_start(const conf_t *cf);
 void cmdr_hook_stop(void);
 int cmdr_hook_fd(void);                    // in the poll set; -1 none
 void cmdr_hook_step_aside(void);           // before each WiFi hello (main.dart beforeStream)
+void cmdr_hook_ask(void);                  // the settings' approve tap (BLE_KICK, ask)
+void cmdr_hook_forget(void);               // the settings' forget tap (BLE_FORGET)
 void cmdr_hook_sync(car_t *car, const link_t *l, bt_view_t *bt, int64_t now);   // each loop turn
 void cmdr_hook_press(cmdr_action a, const car_t *car, link_t *l, int64_t now);  // a chip's tap (once)

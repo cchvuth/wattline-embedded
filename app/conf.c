@@ -22,6 +22,8 @@ void conf_defaults(conf_t *c) {
   c->set_clock = 1;
   snprintf(c->backlight, sizeof c->backlight, "/sys/class/backlight/backlight");
   c->bright_day = 100, c->bright_night = 30, c->bright_idle = 10, c->bright_min = 5, c->bright_max = 100;
+  c->bright_follow_car = 1, c->bright_follow_scale = 1.0, c->bright_follow_offset = 0;
+  c->bright_ease_ms = 300, c->bright_stale_ms = 5000;
   c->away_min = 0;
   snprintf(c->log_path, sizeof c->log_path, "/run/dash.log");
   c->log_kb = 256;
@@ -32,11 +34,13 @@ void conf_defaults(conf_t *c) {
   c->frame_ms = 33;
   snprintf(c->cmdr_id, sizeof c->cmdr_id, "/run/dash-cmdr-id");
   snprintf(c->cmdr_pin, sizeof c->cmdr_pin, "/run/dash-cmdr-pin");
+  c->watchdog = 1, c->watchdog_s = 15;
 }
 
-enum { KINT, KSTR, KLIST, KCAR };
+enum { KINT, KSTR, KLIST, KCAR, KDBL };
 typedef struct { const char *key; int kind; size_t off; int n; } key_t_;
 #define K_I(k, f) {k, KINT, offsetof(conf_t, f), 1}
+#define K_D(k, f) {k, KDBL, offsetof(conf_t, f), 1}
 #define K_S(k, f) {k, KSTR, offsetof(conf_t, f), sizeof(((conf_t *)0)->f)}
 #define K_L(k, f, n) {k, KLIST, offsetof(conf_t, f), n}
 static const key_t_ kKeys[] = {
@@ -52,9 +56,13 @@ static const key_t_ kKeys[] = {
   K_I("minor_figures", minor_figures), K_I("set_clock", set_clock),
   K_S("backlight", backlight), K_I("bright_day", bright_day), K_I("bright_night", bright_night),
   K_I("bright_idle", bright_idle), K_I("bright_min", bright_min), K_I("bright_max", bright_max),
+  K_I("bright_follow_car", bright_follow_car), K_D("bright_follow_scale", bright_follow_scale),
+  K_D("bright_follow_offset", bright_follow_offset), K_I("bright_ease_ms", bright_ease_ms),
+  K_I("bright_stale_ms", bright_stale_ms),
   K_I("away_min", away_min), K_S("log", log_path), K_I("log_kb", log_kb),
   K_S("fb", fb), K_S("touch", touch), K_I("rotate", rotate), K_I("touch_swap", touch_swap),
   K_L("touch_cal", touch_cal, 4), K_I("frame_ms", frame_ms), K_S("cmdr_id", cmdr_id), K_S("cmdr_pin", cmdr_pin),
+  K_I("watchdog", watchdog), K_I("watchdog_s", watchdog_s),
 };
 
 static char *trim(char *s) {
@@ -84,6 +92,13 @@ static int set(conf_t *c, const char *k, const char *v) {
     char *p = (char *)c + e->off;
     switch (e->kind) {
     case KINT: return to_int(v, (int *)p);
+    case KDBL: {
+      char *end;
+      double x = strtod(v, &end);
+      if (end == v || *trim(end)) return -1;
+      *(double *)p = x;
+      return 0;
+    }
     case KSTR:
       if (strlen(v) >= (size_t)e->n) return -1;
       strcpy(p, v);

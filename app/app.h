@@ -21,12 +21,17 @@ typedef struct {
   int set_clock;                // set the system clock from CAN 0x318, once per link
   char backlight[128];          // sysfs dir with brightness and max_brightness; "" none
   int bright_day, bright_night, bright_idle, bright_min, bright_max, away_min;   // % (away_min 0: never off)
+  int bright_follow_car;        // follow the car's own screen brightness when it is known (1)
+  double bright_follow_scale, bright_follow_offset;   // backlight % = car % * scale + offset, then min..max
+  int bright_ease_ms;           // a change eases over this long, never a visible step (300)
+  int bright_stale_ms;          // car_t.cfg: the car's brightness this old is unknown (5000)
   char log_path[128];
   int log_kb;
   char fb[64], touch[64];
   int rotate, touch_swap, touch_cal[4];
   int frame_ms;
   char cmdr_id[128], cmdr_pin[128];   // the Commander session's files (CMDR=1 builds)
+  int watchdog, watchdog_s;     // /dev/watchdog petted each frame (1/0), its timeout in s (main.c)
 } conf_t;
 
 void conf_defaults(conf_t *c);
@@ -60,7 +65,21 @@ typedef struct {
   uint32_t (*frame)(void *ctx);                    // lv_timer_handler; may be NULL
   int64_t (*idle_ms)(void *ctx);                   // ms since the last touch; may be NULL
   void *ctx;
+  void (*show_settings)(void *ctx);                // app_settings loaded: show them (dash_ui_settings); may be NULL
 } ui_hooks_t;
+// ---- the backlight's level (bright.c): the car's screen brightness, else its lamps, else idle; eased ----
+enum { BRIGHT_CAR, BRIGHT_LAMPS, BRIGHT_IDLE, BRIGHT_AWAY };
+typedef struct {
+  int follow, manual;           // follow the car (bright_follow_car); manual: settings' %, -1 none
+  bool night, bad_logged;
+  int src;                      // BRIGHT_*, -1 none yet
+  double shown, from, target, logged;
+  int64_t live_at, ramp_at;
+} bright_t;
+void bright_init(bright_t *b, const conf_t *cf, int64_t now);
+int bright_step(bright_t *b, const conf_t *cf, const car_t *c, int64_t now, int64_t idle);   // the % to set now
+void bright_manual(bright_t *b, int pct);   // a brightness set by hand: stops following the car until bright_follow
+void bright_follow(bright_t *b);
 extern int dash_bl_pct;         // the backlight as last set, % (-1 not yet)
 int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms);   // run_ms 0: until SIGTERM/SIGINT
 int64_t mono_ms(void);

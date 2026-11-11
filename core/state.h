@@ -21,7 +21,7 @@ typedef struct { uint8_t has[BT_FIELDS], is_int[BT_FIELDS]; int64_t v[BT_FIELDS]
 
 typedef struct {
   // Times the derivations hold, configurable (PLAN 5.3: nothing hard-coded in the logic).
-  struct { int gear_fresh_ms, grip_hold_ms, steer_hold_ms, yaw_steer_ms, bt_motor_bad_ms; } cfg;
+  struct { int gear_fresh_ms, grip_hold_ms, steer_hold_ms, yaw_steer_ms, bt_motor_bad_ms, bright_stale_ms; } cfg;
   const car_type_t *car;
   bool wifi_live;               // written by the link (sched.c): frames are arriving over WiFi
 
@@ -58,6 +58,9 @@ typedef struct {
   bool charging;
   double charge_kw, charge_max_kw;
   int charge_limit_pct, charge_minutes;
+  // The Dash's own: the car's screen brightness, % (0x273 UI_displayBrightnessLevel, or Commander field 24).
+  // NUL unknown or SNA; read it through car_display_brightness(now), which also drops a stale one.
+  double display_brightness;
   // The Dash's own: 0x318 SystemTimeUTC (tools/extra_signals.json). utc_at: NEVER until a valid frame.
   struct { int year, month, day, hour, minute, second; int64_t at; } utc;
 
@@ -74,6 +77,9 @@ typedef struct {
     bool slip_ui, slip_mode, tc_flash, esc_flash, heat_motors, heat_pump, heat_nav, cruise_on, climate_on;
     double cruise_raw;
     bool bt_up;
+    int64_t bright_at;          // display_brightness's last write
+    bool bright_bt;             // ... and it came from the Commander (pushed on a change: no age limit)
+    int64_t bt_bright_bad;      // field 24 seen out of 0..100 (unit unverified): the raw value, for one log line; -1 none
     bt_map_t bt;                // the Commander's pushes merged
   } p;
 } car_t;
@@ -96,6 +102,7 @@ bool car_grip_lit(const car_t *c);
 bool car_front_lit(const car_t *c);
 bool car_unbuckled_at(const car_t *c, int seat);     // a SEAT_* bit
 bool car_any_belt_unbuckled(const car_t *c);
+double car_display_brightness(const car_t *c, int64_t now);   // %, NUL unknown, SNA or stale
 double car_climate_kw(const car_t *c);
 double car_imbalance_mv(const car_t *c);
 double car_range(const car_t *c);

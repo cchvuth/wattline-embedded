@@ -9,4 +9,6 @@
 #define LV_TINY_TTF_CACHE_GLYPH_CNT 64
 #undef LV_MEM_SIZE
 #define LV_MEM_SIZE (12 * 1024 * 1024U)
+#undef LV_USE_QRCODE
+#define LV_USE_QRCODE 1 /* the SSH pairing view */
 #endif

@@ -4,7 +4,7 @@
 #include "signals_gen.h"
 #include <string.h>
 
-_Static_assert(kGroupCount <= LINK_GROUPS, "more polled groups than link_t holds");
+_Static_assert((int)kGroupCount <= (int)LINK_GROUPS, "more polled groups than link_t holds");
 
 const link_cfg_t kLinkDefaults = {
   .tick_ms = 1000, .quiet_ms = 3000, .lost_ms = 8000, .frozen_ms = 8000,

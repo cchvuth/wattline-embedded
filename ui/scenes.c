@@ -72,6 +72,7 @@ static void city_turn(dash_state_t *s)
 	car(s);
 	s->speed = 27, s->gear = 'D', s->front_kw = -9, s->rear_kw = -41, s->pedal_pct = 0;
 	s->braking = true, s->brake_pct = 30, s->ind_l = true, s->blind_r = true;
+	s->steer_deg = 150, s->steer_lines = true; /* into the turn */
 	s->soc_pct = 52, s->range = 158 * 1.609344f, s->speed_limit = 50, s->ap = AP_READY;
 	s->low_beam = true, s->outside_c = 12, s->pack_temp_c = 27, s->regen_cap_kw = 84, s->co2_ppm = 640;
 	s->cabin_c[0] = 21, s->cabin_c[1] = 21, s->cabin_c[2] = 21;

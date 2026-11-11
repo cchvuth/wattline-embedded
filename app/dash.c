@@ -1,8 +1,11 @@
 // The loop (PLAN-merged 5.1, 5.3, 5.6): the Panda UDP socket, core/sched driving the link, a frame every
-// frame_ms that maps the car state to the UI, the backlight from the car's lamps, the clock from CAN 0x318.
+// frame_ms that maps the car state to the UI, the backlight from the car's screen or lamps, the clock from CAN 0x318.
 // Time is CLOCK_MONOTONIC throughout. Datagrams carry the kernel's arrival stamp (SO_TIMESTAMP), so a frame
 // drawn while they queue does not shift the flasher's or the grip hold's timing.
 #include "app.h"
+#include "actions.h"
+#include "pair.h"
+#include "settings.h"
 #include "../core/panda.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -43,9 +46,9 @@ typedef struct {
   uint8_t seen[256];   // ids heard since the socket opened: Panda.frames' keys
   int64_t last;        // the latest time handed to the link: arrival stamps never go back past it
   unsigned sent[4];    // ehllo, 0x18, 0x0f, 0x0e
-  bool clock_done, night, bl_err;
+  bool clock_done, bl_err;
   int bl_max;
-  int64_t live_at;
+  bright_t bright;
 } dash_t;
 
 // ---- the link's port: one connected UDP socket per attempt, as the app's RawDatagramSocket ----
@@ -146,19 +149,10 @@ static void clock_check(dash_t *d, int64_t now) {   // once per link: logs carry
   else log_msg("clock set from 0x318");
 }
 
-// ---- the backlight: the car's lamps say night; dim without car data; off when away ----
+// ---- the backlight: the level from bright.c (the car's screen, its lamps, idle, away), written to sysfs ----
 static void backlight(dash_t *d, int64_t now, int64_t idle) {
   const conf_t *cf = d->cf;
-  const car_t *c = &d->car;
-  bool live = car_live(c);
-  if (live) {
-    d->live_at = now;
-    if (c->low_beam >= 0 || c->high_beam >= 0) d->night = c->low_beam == 1 || c->high_beam == 1;
-  }
-  int pct = live ? (d->night ? cf->bright_night : cf->bright_day) : cf->bright_idle;
-  pct = pct < cf->bright_min ? cf->bright_min : pct > cf->bright_max ? cf->bright_max : pct;
-  int64_t away = (int64_t)cf->away_min * 60000;
-  if (!live && away > 0 && now - d->live_at >= away && idle >= away) pct = 0;
+  int pct = bright_step(&d->bright, cf, &d->car, now, idle);
   if (pct == dash_bl_pct || !cf->backlight[0]) return;
   char p[160];
   if (!d->bl_max) {
@@ -173,11 +167,16 @@ static void backlight(dash_t *d, int64_t now, int64_t idle) {
     if (!d->bl_err) log_msg("backlight %s: %s", p, strerror(errno));
     d->bl_err = true;
   } else {
-    if (pct != dash_bl_pct) log_msg("backlight %d%%", pct);
-    d->bl_err = false;
+    d->bl_err = false;   // the level's changes are logged by bright.c, not each eased step
   }
   if (f) fclose(f);
   dash_bl_pct = pct;
+}
+
+// The settings screen's brightness: following the car, or the slider's level (until the switch is on again).
+static void apply_settings(dash_t *d) {
+  if (app_settings.follow_car) bright_follow(&d->bright);
+  else bright_manual(&d->bright, app_settings.brightness_pct);
 }
 
 static const char *link_word(const link_t *l) { return l->state == LINK_LIVE ? "live" : l->why; }   // live: no _set
@@ -211,13 +210,18 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
   tzset();
 
   int64_t now = mono_ms(), start = now;
-  d->last = d->live_at = now;
+  d->last = now;
+  bright_init(&d->bright, cf, now);
+  settings_load(&app_settings, cf);
+  apply_settings(d);
+  if (ui->show_settings) ui->show_settings(ui->ctx);
   car_init(&d->car);
   d->car.cfg.gear_fresh_ms = cf->gear_fresh_ms;
   d->car.cfg.grip_hold_ms = cf->grip_hold_ms;
   d->car.cfg.steer_hold_ms = cf->steer_hold_ms;
   d->car.cfg.yaw_steer_ms = cf->yaw_steer_ms;
   d->car.cfg.bt_motor_bad_ms = cf->bt_motor_bad_ms;
+  d->car.cfg.bright_stale_ms = cf->bright_stale_ms;
   car_set_type(&d->car, cf->car);
   d->car.kph = cf->kph;
   link_init(&d->link, &d->car, (link_port_t){p_send, p_open, p_close, d}, now);
@@ -237,15 +241,21 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
   dash_state_t s;
   while (!stop && (!run_ms || now - start < run_ms)) {
     int64_t wait = next_frame - now;
-    struct pollfd p[2] = {{.fd = d->fd, .events = POLLIN}, {.fd = -1, .events = POLLIN}};
+    struct pollfd p[3] = {{.fd = d->fd, .events = POLLIN}, {.fd = -1, .events = POLLIN}, {.fd = pair_fd(), .events = POLLIN}};
 #ifdef DASH_CMDR
     p[1].fd = cmdr_hook_fd();   // the session's replies: pushes, press results
 #endif
-    poll(p, 2, (int)(wait < 0 ? 0 : wait > cf->frame_ms ? cf->frame_ms : wait));   // fd -1 entries are skipped
+    poll(p, 3, (int)(wait < 0 ? 0 : wait > cf->frame_ms ? cf->frame_ms : wait));   // fd -1 entries are skipped
     now = mono_ms();
     if (d->fd >= 0) drain(d, now);
     if (now > d->last) d->last = now;
     link_poll(&d->link, now);
+    pair_handle(now);   // the SSH pairing window's server, while it is open
+    if (app_settings_dirty) {   // the settings screen's save (taken in the last frame's touch handling)
+      app_settings_dirty = false;
+      settings_save(&app_settings);
+      apply_settings(d);
+    }
 #ifdef DASH_CMDR
     cmdr_hook_sync(&d->car, &d->link, &bt, now);
 #endif
@@ -257,8 +267,9 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
       next_frame += cf->frame_ms;
       if (next_frame <= now) next_frame = now + cf->frame_ms;   // a long frame: no catching up
       clock_check(d, now);
-      bridge_in_t in = {d->seen, utc_now(&d->car, now), cf->minor_figures, cf->hour12};
+      bridge_in_t in = {d->seen, utc_now(&d->car, now), app_settings.minor_figures, app_settings.hour12};
       bridge_fill(&s, &d->car, &d->link, &bt, &in, now);
+      app_actions_fill(&s, now);   // the press out and the snackbar's line
       ui->set(&s, ui->ctx);
       if (ui->frame) ui->frame(ui->ctx);
       backlight(d, now, ui->idle_ms ? ui->idle_ms(ui->ctx) : INT64_MAX);

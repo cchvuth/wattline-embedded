@@ -6,14 +6,16 @@
 LVGL := third_party/lvgl-9.6.0
 LVGL_SRC := $(shell find $(LVGL)/src -name '*.c')
 UI_SRC := ui/dash_ui.c ui/gen/assets.c ui/gen/roboto.c
-APP_SRC := app/dash.c app/conf.c app/bridge.c app/log.c core/panda.c core/derive.c core/sched.c
-APP_H := app/app.h core/state.h core/sched.h core/panda.h ui/dash_state.h build/signals_gen.h
+APP_SRC := app/dash.c app/conf.c app/bridge.c app/log.c app/bright.c app/actions.c app/pair.c app/settings.c \
+  core/panda.c core/derive.c core/sched.c core/cmdr_msg.c core/pb.c   # cmdr_msg: the actions' labels, every build
+APP_H := app/app.h app/actions.h app/pair.h app/settings.h core/state.h core/sched.h core/panda.h core/cmdr_msg.h \
+  ui/dash_state.h ui/dash_ui.h build/signals_gen.h
 WARN := -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
 CMDR ?= 0
 HA := build/app-host
 AA := build/arm-app
 ifeq ($(CMDR),1)   # the Commander session: port/linux/ble_bluez.c (GDBus) on its own thread, app/cmdr_hook.c in the loop
-APP_SRC += app/cmdr_hook.c core/cmdr.c core/cmdr_msg.c core/sec1.c core/pb.c port/linux/ble_bluez.c third_party/monocypher.c third_party/aes.c
+APP_SRC += app/cmdr_hook.c core/cmdr.c core/sec1.c port/linux/ble_bluez.c third_party/monocypher.c third_party/aes.c
 APP_H += app/cmdr_hook.h port/linux/ble_bluez.h core/cmdr.h
 CMDR_DEFS := -DDASH_CMDR=1 -DAES256=1
 HA := build/app-host-cmdr

@@ -54,6 +54,14 @@ final icons = <(String, Widget Function(double), double, double)>[
   ])
     ('i_${n}_l', (s) => Icon(i, size: s, color: Colors.white), 22, px * S('link')),
   ('i_car_panel', (s) => Icon(Icons.directions_car_outlined, size: s, color: Colors.white), 24, px * S('link')),
+  // The car panel (car_panel.dart: OutlinedButton.icon, 18 dp) and the settings, at the panels' size.
+  for (final (n, i) in [
+    ('lock_open', Icons.lock_open), ('lock', Icons.lock), ('climate', Icons.ac_unit), ('flash', Icons.flashlight_on),
+    ('honk', Icons.campaign), ('add', Icons.add), ('net', Icons.wifi), ('fixed', Icons.lock_outline),
+  ])
+    ('i_p_$n', (s) => Icon(i, size: s, color: Colors.white), 18, px * S('panel')),
+  for (final (n, i) in [('back', Icons.arrow_back), ('close', Icons.close), ('delete', Icons.delete_outline)])
+    ('i_p_$n', (s) => Icon(i, size: s, color: Colors.white), 24, px * S('panel')),
 ];
 
 final cars = {'y': Car.modelY7, 'yl': Car.modelYL, 'three': Car.model3};

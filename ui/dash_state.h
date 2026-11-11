@@ -102,6 +102,23 @@ typedef struct {
 	int16_t co2_ppm;                 /* -1: no figure yet; 0 and up shown */
 	bool co2_stale;                  /* the slot stays, blank */
 
+	/* The car's path either side, dotted (widgets.dart _CarLights): the wheel's angle, deg, left positive, and
+	 * whether to draw them (core car_steer_lines: turned past 3 deg and 2 s after). WiFi. */
+	float steer_deg;
+	bool steer_lines;
+
+	/* Presses (main.dart _press): the action a press is out for (cmdr_action, -1 none), and the snackbar's line
+	 * ("" none; on the car panel its message line). The approval prompt shows while bt is BT_APPROVING. */
+	int8_t press_pending;
+	char toast[128];
+
+	/* Pairing a computer for SSH (app/pair.c): the window is open, its URL and code, seconds left, the result line. */
+	int8_t backlight_pct;            /* the backlight as set now, % (the settings' slider while it follows the car); -1 */
+	bool pair_open;
+	char pair_url[96], pair_code[8];
+	int16_t pair_secs;
+	char pair_result[112];
+
 	/* The route (its own column on the Dash). */
 	bool route;
 	char dest[64];                   /* "" none */

@@ -60,7 +60,7 @@ h_out.append('typedef struct { const lv_image_dsc_t *img; int16_t x, y; } ui_lay
              'typedef struct {\n  const lv_image_dsc_t *car;\n  ui_layer_t drl, drl_glow;\n'
              f'  ui_layer_t seat_green[{len(SEATS)}], seat_red[{len(SEATS)}]; /* {" ".join(SEATS)} */\n'
              f'  ui_layer_t light[{len(ELEMENTS)}]; /* {" ".join(ELEMENTS)} */\n'
-             '  float rows[3], axles[2], tyre_l, tyre_r, tyre_w, pill_l, pill_w;\n} ui_car_pics_t;\n'
+             '  float rows[3], axles[2], tyre_l, tyre_r, tyre_w, pill_l, pill_w, centre, path_from[2];\n} ui_car_pics_t;\n'
              'extern const ui_car_pics_t ui_car_pics[4]; /* y7 y5 yl three */\n')
 
 lights = {}
@@ -72,6 +72,11 @@ for key in ('y', 'yl', 'three'):
         mx, my = geo[f'{key}_{e}']
         emit(f'lt_{key}_{e}', img)
         lights[key, e] = (f'&lt_{key}_{e}', round(x - mx), round(y - my))
+
+# The approval prompt's scroll wheel (main.dart: 72 dp in the snackbar), at the panels' size.
+wheel = Image.open(os.path.join(app, 'bt', 'wheel.png')).convert('RGBA')
+wh = round(56 * px * geo['sizes']['panel'])
+emit('img_wheel', wheel.resize((round(wheel.width * wh / wheel.height), wh), Image.LANCZOS))
 
 tables = []
 for name, d, key, seats in CARS:
@@ -99,13 +104,14 @@ for name, d, key, seats in CARS:
     def ref(t):
         return '{%s, %d, %d}' % t if t else '{0}'
     tables.append('  {.car = &car_%s, .drl = %s, .drl_glow = %s,\n   .seat_green = {%s},\n   .seat_red = {%s},\n   .light = {%s},\n'
-                  '   .rows = {%s}, .axles = {%s}, .tyre_l = %gf, .tyre_r = %gf, .tyre_w = %gf, .pill_l = %gf, .pill_w = %gf}' % (
+                  '   .rows = {%s}, .axles = {%s}, .tyre_l = %gf, .tyre_r = %gf, .tyre_w = %gf, .pill_l = %gf, .pill_w = %gf,\n'
+                  '   .centre = %gf, .path_from = {%gf, %gf}}' % (
                       name, ref(lay.get('drl')), ref(lay.get('drl_glow')),
                       ', '.join(ref(lay.get((s, 'green'))) for s in SEATS),
                       ', '.join(ref(lay.get((s, 'red'))) for s in SEATS),
                       ', '.join(ref(lights.get((key, e))) for e in ELEMENTS),
                       ', '.join('%gf' % v for v in g['rows']), ', '.join('%gf' % v for v in g['axles']),
-                      g['tyreL'], g['tyreR'], g['tyreW'], g['pillL'], g['pillW']))
+                      g['tyreL'], g['tyreR'], g['tyreW'], g['pillL'], g['pillW'], g['centre'], g['pathFrom'][0], g['pathFrom'][1]))
 c_out.append('const ui_car_pics_t ui_car_pics[4] = {\n%s\n};\n' % ',\n'.join(tables))
 
 for k, v in geo['sizes'].items():  # the Dash's sizes over the app's, for dash_ui.c

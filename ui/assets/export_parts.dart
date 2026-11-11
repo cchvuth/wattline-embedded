@@ -61,6 +61,8 @@ Map<String, Object> exportGeometry(Car car) {
     'tyreW': p.tyreW,
     'pillL': p.pillL,
     'pillW': p.pillW,
+    'centre': p.centre,
+    'pathFrom': [p.pathFrom.$1, p.pathFrom.$2],
     'dir': p.dir,
   };
 }

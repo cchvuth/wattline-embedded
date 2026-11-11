@@ -1,6 +1,7 @@
 // See cmdr_hook.h. Nothing here writes to the Commander: requests go to ble_post, whose thread sends only
 // through cmdr_send's allow-list.
 #include "cmdr_hook.h"
+#include "actions.h"
 #include "../core/pb.h"
 #include "../port/linux/ble_bluez.h"
 #include <string.h>
@@ -31,6 +32,8 @@ void cmdr_hook_stop(void) {
 
 int cmdr_hook_fd(void) { return B ? ble_fd(B) : -1; }
 void cmdr_hook_step_aside(void) { post(BLE_STEP_ASIDE, 0, 0, 0); }
+void cmdr_hook_ask(void) { post(BLE_KICK, 1, 0, 0); }      // the owner's tap: may start the approval
+void cmdr_hook_forget(void) { post(BLE_FORGET, 0, 0, 0); }  // unpin the Commander
 
 // A PushVehicleDataHolder body as Panda.fromBt's map: field -> value (varints are the ints it reads).
 static void fields(bt_map_t *m, const uint8_t *d, size_t n) {
@@ -68,7 +71,10 @@ void cmdr_hook_sync(car_t *car, const link_t *l, bt_view_t *bt, int64_t now) {
       static bt_map_t push;
       fields(&push, m.data, m.n);
       car_from_bt(car, &push, now);
-    } else if (m.op == BLE_PRESS) log_msg("bluetooth: press %d: %d", m.a, m.result);
+    } else if (m.op == BLE_PRESS) {
+      log_msg("bluetooth: press %d: %d", m.a, m.result);
+      app_press_result(m.a, m.result, m.gear, now);
+    }
     else if (m.op == BLE_STEP_ASIDE && m.result > 0) log_msg("bluetooth: stepped aside, settle %d ms", m.result);
   }
   ble_state(B, &pub);

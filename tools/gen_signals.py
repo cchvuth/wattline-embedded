@@ -159,7 +159,8 @@ for lut, sname, inline, arg, exp in pat.findall(t):
 app_cases = len(cases)
 for v in ex['vectors']:   # the Dash's own rows
     d = v['data']
-    cases.append(f'  {{ &kSignals[{names.index(v["sig"])}], {{{",".join(map(str, d))}}}, {len(d)}, 1, {v["expect"]}, 0, {{0}}, 0 }},')
+    kind, x = (0, 0) if v['expect'] is None else (1, v['expect'])   # null: decode() gives null
+    cases.append(f'  {{ &kSignals[{names.index(v["sig"])}], {{{",".join(map(str, d))}}}, {len(d)}, {kind}, {x}, 0, {{0}}, 0 }},')
 open(os.path.join(out, 'test_decode.c'), 'w').write(f'''// {len(cases)} decode() vectors from test/obd_test.dart. kind 0 null, 1 == a, 2 |v-a|<=b, 3 not a map key.
 #include <stdio.h>
 #include <math.h>

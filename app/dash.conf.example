@@ -1,6 +1,6 @@
 # dash.conf: the dash program's settings. key = value, # comments. Every key is optional: absent keys (or no file)
 # take the built-in default shown here. Read at start from /run/dashdata/dash.conf (the card's data partition),
-# or dash -c PATH. Bad lines are logged (/run/dash.log) and skipped.
+# or dash -c PATH. Bad lines are logged (see log below) and skipped.
 
 # The Commander's Panda interface (WiFi CAN). On the bench: the Mac running tools/fake_panda.py, e.g. 192.168.1.240
 panda_host = 192.168.4.1
@@ -41,7 +41,7 @@ tz = UTC0                 # POSIX TZ, e.g. CET-1CEST,M3.5.0,M10.5.0/3 or <+07>-7
 hour12 = 1                # 1: 1:51 PM, 0: 13:51
 set_clock = 1             # set the system clock from 0x318 once per link (logs get real dates)
 
-# Backlight, % of the sysfs range (the car's low/high beams on = night)
+# Backlight, % of the sysfs range (without the car's brightness: its low/high beams on = night)
 backlight = /sys/class/backlight/backlight   # holds brightness and max_brightness; empty: leave it alone
 bright_day = 100
 bright_night = 30
@@ -49,6 +49,13 @@ bright_idle = 10          # no car data (the bench, a parked car's silent Comman
 bright_min = 5
 bright_max = 100
 away_min = 0              # no car data and no touch this long: backlight off; 0 never (PLAN 4.11 suggests 10)
+# Follow the car's own screen brightness (CAN 0x273 UI_displayBrightnessLevel, or the Commander's field 24) while it
+# is known: backlight % = car % * scale + offset, kept in bright_min..bright_max. Unknown: the day/night rule above.
+bright_follow_car = 1
+bright_follow_scale = 1.0
+bright_follow_offset = 0
+bright_ease_ms = 300      # every change eases over this long
+bright_stale_ms = 5000    # the car's brightness this old counts as unknown (0x273 comes every 500 ms)
 
 # Display and touch (checked on the unit)
 fb = /dev/fb0
@@ -58,11 +65,17 @@ touch_swap = 1
 touch_cal = 479, 0, 0, 1919
 frame_ms = 33
 
-# Logging (RAM): log and log.1, each up to log_kb
-log = /run/dash.log
+# Logging: log and log.1, each up to log_kb. Default /data/log/dash.log when /data is writable (R3: the card's p3,
+# kept across power-off), else /run/dash.log (RAM)
+log = /data/log/dash.log
 log_kb = 256
 
-# The Commander session's files (CMDR=1 builds): the phone id and the pinned Commander. /run is lost at power off,
-# so the Commander asks for approval again each boot until these point at a writable data partition.
-cmdr_id = /run/dash-cmdr-id
-cmdr_pin = /run/dash-cmdr-pin
+# The Commander session's files (CMDR=1 builds): the phone id and the pinned Commander, made on first run. Default in
+# /data when it is writable (R3), else /run, lost at power off: the Commander then asks for approval again each boot.
+cmdr_id = /data/cmdr_id
+cmdr_pin = /data/cmdr_pin
+
+# The hardware watchdog (/dev/watchdog), petted each frame: a dash that hangs this long reboots the board (the T113
+# allows up to 16 s). A clean stop (SIGTERM) disarms it; a crash leaves it running for the supervisor's restart.
+watchdog = 1
+watchdog_s = 15

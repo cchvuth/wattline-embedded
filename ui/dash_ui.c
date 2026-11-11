@@ -4,6 +4,7 @@
  * and car pictures are the app's own renders (ui/assets/export.sh), the text is Roboto through tiny_ttf. */
 #include "dash_ui.h"
 #include "gen/assets.h"
+#include "../core/cmdr_msg.h" /* cmdr_action: what a tap asks for */
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -257,6 +258,25 @@ static lv_obj_t *run_new(lv_obj_t *parent)
 }
 
 /* ---------- the widgets ---------- */
+static const char *const act_label[ACT_COUNT] = { /* commander.dart S3xyAction */
+	[ACT_FRUNK] = "Frunk", [ACT_TRUNK] = "Trunk", [ACT_LIGHT] = "Light", [ACT_MIRROR_TILT] = "Mirror tilt",
+	[ACT_RECIRC_ON] = "Recirculation", [ACT_RECIRC_OFF] = "Fresh air", [ACT_RECIRC_TOGGLE] = "Recirculation",
+	[ACT_DOOR_FL] = "Front left door", [ACT_DOOR_FR] = "Front right door", [ACT_DOOR_RL] = "Rear left door",
+	[ACT_DOOR_RR] = "Rear right door", [ACT_UNLOCK] = "Unlock", [ACT_LOCK] = "Lock", [ACT_CHARGE_PORT] = "Charge port",
+	[ACT_HONK] = "Honk", [ACT_FLASH] = "Flash", [ACT_CLIMATE] = "Climate",
+};
+/* The chips, in the order they are built (widgets.dart _Actions), and their tooltips (the app's labels). */
+static const int chip_act[10] = {ACT_TRUNK, ACT_MIRROR_TILT, ACT_DOOR_FL, ACT_DOOR_RL, ACT_CHARGE_PORT,
+				 ACT_FRUNK, ACT_RECIRC_TOGGLE, ACT_DOOR_FR, ACT_DOOR_RR, ACT_LIGHT};
+static const char *const chip_tip[10] = {"Trunk", "Mirror tilt", "Front left door", "Rear left door", "Charge port",
+					 "Frunk", "Recirculation", "Front right door", "Rear right door", "Interior lights"};
+
+static lv_obj_t *steer;
+static lv_obj_t *pair_view, *pair_qr, *pair_how, *pair_url_l, *pair_code_l, *pair_left, *pair_or, *pair_cmd, *pair_res, *pair_btn;
+static void steer_draw(lv_event_t *e);
+static void touch_init(void);
+static void set_touch(const dash_state_t *s);
+
 static dash_state_t S, P; /* shown now, shown before */
 static bool first = true;
 
@@ -557,11 +577,11 @@ void dash_ui_init(lv_obj_t *scr)
 	G.ml = px(14), G.mt = px(6), G.mb = px(10);
 	G.chip_area = G.H - G.mt - G.mb;
 	G.link_top = G.mt + 6 * chip_gap() + 5 * PC(48); /* the side columns' last row */
-	/* The ring as big as the screen's height allows: its arcs' top ends 2 px under the top edge (they end at 0.83 of
-	 * the outer radius up), 10 px over the bottom one (the app's foot brake, now under the g-meter, set that room; the gear fits in it). The limit sign, the
-	 * assist disc and the gear then fit too (checked at 480: r 247, 1.28 x the app's at 1536 dp). */
+	/* The ring: the radius the app's foot brake left room for (r 247 at 480, 1.28 x the app's at 1536 dp; the owner
+	 * keeps it), centred on the screen both ways now that the foot brake is under the g-meter. At 480 its arcs end
+	 * 26 px from the top and bottom, the limit sign starts at 36, the gear letter ends at 469. */
 	G.r = (G.H - 12 * G.k) / (0.83f * 1.0425f + 1.03f);
-	G.cy = 0.83f * 1.0425f * G.r + 2 * G.k;
+	G.cy = G.H / 2;
 	G.D = 2 * (G.r + px(6)), G.aw = G.r * 0.085f;
 	G.cx = G.W / 2; /* until the first layout */
 	G.card_w = PN(154);
@@ -628,6 +648,8 @@ void dash_ui_init(lv_obj_t *scr)
 	}
 
 	/* Left: the lights row over the car. */
+	steer = box(root); /* under the car, as the app paints the path lines */
+	lv_obj_add_event_cb(steer, steer_draw, LV_EVENT_DRAW_MAIN, NULL);
 	lights_row = box(root);
 	cab.frame = box(root);
 	cab.grp = box(root);
@@ -716,6 +738,7 @@ void dash_ui_init(lv_obj_t *scr)
 	g_val = run_new(root);
 	g_peak = label(root, FS(REGULAR, 12, UI_S_FIG), W70); /* as the dial's labels */
 	lv_obj_set_style_text_letter_space(g_peak, ri(PF(0.8)), 0);
+	touch_init();
 }
 
 /* ---------- set ---------- */
@@ -743,8 +766,9 @@ static void set_chips(const dash_state_t *s)
 		uint32_t f = level == 2 ? ALERT : level == 1 ? WARN : LIT;
 		uint32_t col = on && level < 2 ? BLACK : WHITE;
 		uint32_t note_col = on ? col : level == 2 ? ALERT : level == 1 ? WARN : col;
+		bool pending = s->press_pending == chip_act[i]; /* a press out: its side in the accent until the answer */
 		fill(c->box, on ? f : 0);
-		border(c->box, on ? f : W70, PC(1));
+		border(c->box, pending ? ACCENT : on ? f : W70, pending ? PC(2) : PC(1));
 		icon_color(c->icon, col);
 		show(c->note, note);
 		if (note) {
@@ -793,6 +817,25 @@ static void set_link(typeof(link_w) *l, int slot, const lv_image_dsc_t *big, con
 	}
 }
 
+/* The Commander link's word, colour and icon (widgets.dart _Controls). */
+static const char *bt_word(dash_bt_t b, uint32_t *c, const lv_image_dsc_t **i)
+{
+	static const struct { const lv_image_dsc_t *i; uint32_t c; const char *w; } t[] = {
+		[BT_IDLE] = {&ic_bt_off_l, W54, "IDLE"}, [BT_OFF] = {&ic_bt_off_l, ALERT, "OFF"},
+		[BT_NO_LOCATION] = {&ic_bt_off_l, ALERT, "NO LOC"}, [BT_SCANNING] = {&ic_bt_find_l, ACCENT, "SCAN"},
+		[BT_LINKING] = {&ic_bt_find_l, ACCENT, "LINK"}, [BT_APPROVING] = {&ic_bt_find_l, WARN, "PRESS"},
+		[BT_REFUSED] = {&ic_bt_off_l, ALERT, "DENIED"}, [BT_DASH] = {&ic_bt_plain_l, W54, "DASH"},
+		[BT_PAUSED] = {&ic_bt_find_l, WARN, "WAIT"}, [BT_AWAY] = {&ic_bt_find_l, W54, "AWAY"},
+		[BT_HELD] = {&ic_bt_off_l, ALERT, "HELD"}, [BT_RETRYING] = {&ic_bt_find_l, WARN, "RETRY"},
+		[BT_BORROWED] = {&ic_bt_l, ACCENT, "BORROW"}, [BT_BUTTONS] = {&ic_bt_l, ACCENT, "ACTION"},
+		[BT_LEAN] = {&ic_bt_l, REGEN, "READY"}, [BT_FULL] = {&ic_bt_l, REGEN, "LIVE"},
+	};
+	if ((unsigned)b >= sizeof t / sizeof t[0]) b = BT_IDLE;
+	*c = t[b].c;
+	if (i) *i = t[b].i;
+	return t[b].w;
+}
+
 static void set_links(const dash_state_t *s)
 {
 	const lv_image_dsc_t *wi = &ic_wifi_l;
@@ -810,27 +853,9 @@ static void set_links(const dash_state_t *s)
 	case WIFI_RETRYING: wi = &ic_wifi_find_l, wc = WARN, ww = "RETRY"; break;
 	}
 	set_link(&link_w, 0, wi, &ic_wifi_s, wc, ww, s->wifi == WIFI_LIVE, s->wifi == WIFI_LIVE ? s->speed_hz : -1);
-	const lv_image_dsc_t *bi = &ic_bt_l;
-	uint32_t bc = W54;
-	const char *bw = "IDLE";
-	switch (s->bt) {
-	case BT_IDLE: bi = &ic_bt_off_l, bc = W54, bw = "IDLE"; break;
-	case BT_OFF: bi = &ic_bt_off_l, bc = ALERT, bw = "OFF"; break;
-	case BT_NO_LOCATION: bi = &ic_bt_off_l, bc = ALERT, bw = "NO LOC"; break;
-	case BT_SCANNING: bi = &ic_bt_find_l, bc = ACCENT, bw = "SCAN"; break;
-	case BT_LINKING: bi = &ic_bt_find_l, bc = ACCENT, bw = "LINK"; break;
-	case BT_APPROVING: bi = &ic_bt_find_l, bc = WARN, bw = "PRESS"; break;
-	case BT_REFUSED: bi = &ic_bt_off_l, bc = ALERT, bw = "DENIED"; break;
-	case BT_DASH: bi = &ic_bt_plain_l, bc = W54, bw = "DASH"; break;
-	case BT_PAUSED: bi = &ic_bt_find_l, bc = WARN, bw = "WAIT"; break;
-	case BT_AWAY: bi = &ic_bt_find_l, bc = W54, bw = "AWAY"; break;
-	case BT_HELD: bi = &ic_bt_off_l, bc = ALERT, bw = "HELD"; break;
-	case BT_RETRYING: bi = &ic_bt_find_l, bc = WARN, bw = "RETRY"; break;
-	case BT_BORROWED: bi = &ic_bt_l, bc = ACCENT, bw = "BORROW"; break;
-	case BT_BUTTONS: bi = &ic_bt_l, bc = ACCENT, bw = "ACTION"; break;
-	case BT_LEAN: bi = &ic_bt_l, bc = REGEN, bw = "READY"; break;
-	case BT_FULL: bi = &ic_bt_l, bc = REGEN, bw = "LIVE"; break;
-	}
+	uint32_t bc;
+	const lv_image_dsc_t *bi;
+	const char *bw = bt_word(s->bt, &bc, &bi);
 	set_link(&link_b, 1, bi, &ic_bt_s, bc, bw, s->bt == BT_LEAN || s->bt == BT_FULL, -1);
 }
 
@@ -947,6 +972,7 @@ static void set_cabin(const dash_state_t *s, float cx, float top)
 	(void)box_h;
 	cab.x = cx - cab.w / 2, cab.y = top + cb(8);
 	lv_obj_set_pos(cab.grp, ri(cab.x - cab.ox), ri(cab.y - cab.oy));
+	place(steer, cab.x - cab.w, 0, 3 * cab.w, G.H); /* the path lines' room: redrawn only as the wheel turns */
 	bool seats = s->wifi_live && s->cabin, belt = false;
 	for (int i = 0; i < DS_SEAT_COUNT; i++)
 		if (seats && s->seat[i] == DS_SEAT_UNBUCKLED && p->seat_red[i].img) belt = true;
@@ -1453,6 +1479,664 @@ static void set_g(const dash_state_t *s, float cx)
 		lv_obj_invalidate(gball);
 }
 
+/* ---------- touch: chips, snackbar, car panel, settings (main.dart _press, _say, _linksChanged; car_panel.dart) ----------
+ * Material 3 dark, as the app's ThemeData.dark(useMaterial3: true) draws its snackbar, dialog, switches and slider. */
+#define PB(dp) (px(dp) * UI_S_PANEL) /* the panels: bigger again, for a finger in a moving car */
+#define M3_SURFACE 0xFF141218u
+#define M3_DIALOG 0xFF2B2930u       /* surfaceContainerHigh */
+#define M3_ON_SURFACE 0xFFE6E0E9u
+#define M3_INVERSE 0xFFE6E0E9u      /* the snackbar */
+#define M3_ON_INVERSE 0xFF322F35u
+#define M3_PRIMARY 0xFFD0BCFFu
+#define M3_ON_PRIMARY 0xFF381E72u
+#define M3_OUTLINE 0xFF938F99u
+#define M3_FIELD 0xFF1D1B20u
+#define M3_KEY 0xFF49454Fu
+
+static dash_action_cb act_cb;
+static void *act_ctx;
+static dash_settings_cb set_cb;
+static void *set_ctx;
+static dash_settings_t ST = {.minor_figures = true, .brightness_pct = 80, .follow_car = true};
+static int view = DASH_VIEW_DASH, edit_slot = -1;
+
+static lv_obj_t *tip, *snack, *snack_wheel, *snack_text;
+static lv_obj_t *panel, *panel_msg, *settings, *set_status, *set_sw[4], *set_slider, *set_bl_note, *net_list, *net_edit, *net_ta[2],
+	*net_kb, *net_err;
+static lv_timer_t *tip_timer;
+
+void dash_ui_set_action_cb(dash_action_cb cb, void *ctx) { act_cb = cb, act_ctx = ctx; }
+void dash_ui_set_settings_cb(dash_settings_cb cb, void *ctx) { set_cb = cb, set_ctx = ctx; }
+
+static void press(int a)
+{
+	if (act_cb) act_cb(a, act_ctx);
+}
+static void save(int what)
+{
+	if (set_cb) set_cb(what, &ST, set_ctx);
+}
+
+/* A tap target: no style of its own, a finger's room round it. */
+static void tappable(lv_obj_t *o, lv_event_cb_t cb, intptr_t arg, float room)
+{
+	lv_obj_set_clickable(o, true);
+	lv_obj_set_ext_click_area(o, ri(room));
+	lv_obj_add_event_cb(o, cb, LV_EVENT_SHORT_CLICKED, (void *)arg);
+}
+static void pressed_look(lv_obj_t *o, uint32_t c) /* InkWell's highlight while held */
+{
+	lv_obj_set_style_bg_color(o, rgb(c), LV_STATE_PRESSED);
+	lv_obj_set_style_bg_opa(o, opa(c), LV_STATE_PRESSED);
+}
+
+/* Chips: a tap presses (once: the app guards and never resends); a long press names it (Tooltip). */
+static void chip_tap(lv_event_t *e) { press(chip_act[(intptr_t)lv_event_get_user_data(e)]); }
+static void tip_hide(lv_timer_t *t)
+{
+	(void)t;
+	show(tip, false);
+	lv_timer_pause(tip_timer);
+}
+static void chip_hold(lv_event_t *e)
+{
+	int i = (intptr_t)lv_event_get_user_data(e);
+	if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
+		lv_timer_reset(tip_timer);
+		lv_timer_resume(tip_timer); /* the tooltip stays a moment after the finger lifts */
+		return;
+	}
+	float x, y;
+	chip_geom(i, &x, &y);
+	set_text(lv_obj_get_child(tip, 0), "%s", chip_tip[i]);
+	align(lv_obj_get_child(tip, 0), LV_ALIGN_CENTER, 0, 0);
+	lv_obj_update_layout(tip);
+	float w = lv_obj_get_width(tip), h = lv_obj_get_height(tip);
+	float tx = i < 5 ? x + PC(52) + PC(8) : x - PC(8) - w; /* beside the chip, towards the middle */
+	lv_obj_set_pos(tip, ri(tx), ri(y + PC(21) - h / 2));
+	show(tip, true);
+	lv_timer_pause(tip_timer);
+}
+
+/* ---- the car panel (car_panel.dart): its own page, an app bar, the groups of outlined buttons, a message line ---- */
+static void close_tap(lv_event_t *e) { (void)e, dash_ui_show(DASH_VIEW_DASH); }
+static void panel_tap(lv_event_t *e) { press((intptr_t)lv_event_get_user_data(e)); }
+static void open_tap(lv_event_t *e) { dash_ui_show((intptr_t)lv_event_get_user_data(e)); }
+
+static lv_obj_t *outlined(lv_obj_t *parent, const lv_image_dsc_t *ic, const char *text, lv_event_cb_t cb, intptr_t arg)
+{
+	/* OutlinedButton(.icon): 40 dp, a stadium, white on a white70 side, 18 dp icon, 14 sp label (w500) */
+	lv_obj_t *b = box(parent);
+	lv_obj_set_height(b, ri(PB(40)));
+	lv_obj_set_width(b, LV_SIZE_CONTENT);
+	lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
+	border(b, W70, PB(1));
+	pressed_look(b, 0x1FFFFFFF);
+	lv_obj_set_style_pad_left(b, ri(PB(ic ? 16 : 24)), 0);
+	lv_obj_set_style_pad_right(b, ri(PB(24)), 0);
+	lv_obj_set_flex_flow(b, LV_FLEX_FLOW_ROW);
+	lv_obj_set_flex_align(b, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+	lv_obj_set_style_pad_column(b, ri(PB(8)), 0);
+	if (ic) icon(b, ic, WHITE);
+	lv_obj_t *l = label(b, FS(MEDIUM, 14, UI_S_PANEL), WHITE);
+	lv_obj_set_style_text_letter_space(l, ri(PB(0.1)), 0);
+	lv_label_set_text(l, text);
+	tappable(b, cb, arg, PB(4));
+	return b;
+}
+static lv_obj_t *group_title(lv_obj_t *parent, const char *t) /* 12 sp, spaced 2, white70 */
+{
+	lv_obj_t *l = label(parent, FS(REGULAR, 12, UI_S_PANEL), W70);
+	lv_obj_set_style_text_letter_space(l, ri(PB(2)), 0);
+	lv_label_set_text(l, t);
+	return l;
+}
+static lv_obj_t *row(lv_obj_t *parent) /* Wrap(spacing 8) */
+{
+	lv_obj_t *r = box(parent);
+	lv_obj_set_size(r, LV_PCT(100), LV_SIZE_CONTENT);
+	lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW_WRAP);
+	lv_obj_set_style_pad_column(r, ri(PB(8)), 0);
+	lv_obj_set_style_pad_row(r, ri(PB(8)), 0);
+	return r;
+}
+static lv_obj_t *column(lv_obj_t *parent, float gap)
+{
+	lv_obj_t *c = box(parent);
+	lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
+	lv_obj_set_style_pad_row(c, ri(gap), 0);
+	return c;
+}
+
+static void panel_build(void)
+{
+	float left = G.ml + inset(0) + PB(8); /* clear of the hidden top corners all the way down */
+	panel = box(lv_layer_top());
+	place(panel, 0, 0, G.W, G.H);
+	fill(panel, BLACK);
+	lv_obj_set_clickable(panel, true); /* the page takes every touch while open */
+	lv_obj_t *bar = box(panel);
+	place(bar, 0, 0, G.W, PB(64) * 0.8f);
+	fill(bar, M3_SURFACE);
+	lv_obj_t *back = icon(bar, &ic_p_back, M3_ON_SURFACE);
+	align(back, LV_ALIGN_LEFT_MID, ri(left + PB(4)), 0);
+	tappable(back, close_tap, 0, PB(16));
+	lv_obj_t *title = label(bar, FS(REGULAR, 22, UI_S_PANEL), M3_ON_SURFACE);
+	lv_label_set_text(title, "Car controls");
+	align(title, LV_ALIGN_LEFT_MID, ri(left + PB(24 + 32)), 0);
+	lv_obj_t *body = column(panel, PB(10));
+	place(body, left, PB(64) * 0.8f + PB(14), G.W - 2 * left, G.H - PB(64) * 0.8f - PB(14));
+	group_title(body, "Locks");
+	lv_obj_t *r = row(body);
+	outlined(r, &ic_p_lock_open, "Unlock", panel_tap, ACT_UNLOCK);
+	outlined(r, &ic_p_lock, "Lock", panel_tap, ACT_LOCK);
+	lv_obj_set_style_margin_bottom(r, ri(PB(6)), 0);
+	group_title(body, "Climate & misc");
+	r = row(body);
+	outlined(r, &ic_p_climate, "Climate", panel_tap, ACT_CLIMATE);
+	outlined(r, &ic_p_flash, "Flash", panel_tap, ACT_FLASH);
+	outlined(r, &ic_p_honk, "Honk", panel_tap, ACT_HONK);
+	lv_obj_set_style_margin_bottom(r, ri(PB(6)), 0);
+	panel_msg = label(body, FS(REGULAR, 14, UI_S_PANEL), WHITE);
+	show(panel, false);
+}
+
+/* ---- settings: the Commander, the display, the networks (an AlertDialog of the app's style) ---- */
+static void approve_tap(lv_event_t *e) { (void)e, save(DASH_CMDR_APPROVE); }
+static void pair_tap(lv_event_t *e)
+{
+	(void)e;
+	save(DASH_PAIR_START);
+	dash_ui_show(DASH_VIEW_PAIR);
+}
+static void forget_tap(lv_event_t *e) { (void)e, save(DASH_CMDR_FORGET); }
+static void slider_look(void);
+static void switch_changed(lv_event_t *e)
+{
+	int i = (intptr_t)lv_event_get_user_data(e);
+	bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+	if (i == 0) ST.minor_figures = on;
+	else if (i == 1) ST.hour12 = !on; /* the switch says 24-hour */
+	else if (i == 2) ST.dev_ssh = on;
+	else ST.follow_car = on, slider_look();
+	save(DASH_SETTINGS_SAVE);
+}
+/* Following the car, the slider shows the live backlight greyed; a finger on it takes over (follow off). */
+static void slider_look(void)
+{
+	uint32_t c = ST.follow_car ? M3_OUTLINE : M3_PRIMARY;
+	lv_obj_set_style_bg_color(set_slider, rgb(c), LV_PART_INDICATOR);
+	lv_obj_set_style_bg_color(set_slider, rgb(c), LV_PART_KNOB);
+	set_text(set_bl_note, "%s", ST.follow_car ? "following the car" : "");
+	if (!ST.follow_car) lv_slider_set_value(set_slider, ST.brightness_pct, LV_ANIM_OFF);
+}
+static void slider_changed(lv_event_t *e)
+{
+	if (ST.follow_car) {
+		ST.follow_car = false;
+		lv_obj_set_state(set_sw[3], LV_STATE_CHECKED, false);
+		ST.brightness_pct = lv_slider_get_value(lv_event_get_target(e));
+		slider_look();
+	}
+	ST.brightness_pct = lv_slider_get_value(lv_event_get_target(e));
+	if (lv_event_get_code(e) == LV_EVENT_RELEASED) save(DASH_SETTINGS_SAVE);
+}
+static lv_obj_t *m3_switch(lv_obj_t *parent, int i)
+{
+	/* Switch: 52 x 32 dp; on, the primary track and an onPrimary thumb; off, an outlined dark track */
+	lv_obj_t *sw = lv_switch_create(parent);
+	lv_obj_set_size(sw, ri(PB(52)), ri(PB(32)));
+	lv_obj_set_style_bg_color(sw, rgb(M3_KEY), LV_PART_MAIN);
+	lv_obj_set_style_bg_opa(sw, LV_OPA_COVER, LV_PART_MAIN);
+	lv_obj_set_style_border_color(sw, rgb(M3_OUTLINE), LV_PART_MAIN);
+	lv_obj_set_style_border_width(sw, ri(PB(2)), LV_PART_MAIN);
+	lv_obj_set_style_bg_color(sw, rgb(M3_PRIMARY), LV_PART_INDICATOR | LV_STATE_CHECKED);
+	lv_obj_set_style_bg_color(sw, rgb(M3_OUTLINE), LV_PART_KNOB);
+	lv_obj_set_style_bg_color(sw, rgb(M3_ON_PRIMARY), LV_PART_KNOB | LV_STATE_CHECKED);
+	lv_obj_set_style_pad_all(sw, ri(-PB(2)), LV_PART_KNOB);
+	lv_obj_set_ext_click_area(sw, ri(PB(10)));
+	lv_obj_add_event_cb(sw, switch_changed, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)i);
+	return sw;
+}
+static lv_obj_t *switch_row(lv_obj_t *parent, const char *text, int i, float w)
+{
+	lv_obj_t *r = box(parent);
+	lv_obj_set_size(r, ri(w), LV_SIZE_CONTENT);
+	lv_obj_t *l = label(r, FS(REGULAR, 14, UI_S_PANEL), M3_ON_SURFACE);
+	lv_label_set_text(l, text);
+	lv_obj_set_width(l, ri(w - PB(52) - PB(16)));
+	align(l, LV_ALIGN_LEFT_MID, 0, 0);
+	set_sw[i] = m3_switch(r, i);
+	align(set_sw[i], LV_ALIGN_RIGHT_MID, 0, 0);
+	lv_obj_set_style_min_height(r, ri(PB(40)), 0);
+	return r;
+}
+static void net_tap(lv_event_t *e) /* a network's row: replace it */
+{
+	edit_slot = (intptr_t)lv_event_get_user_data(e);
+	dash_ui_show(DASH_VIEW_NETWORK);
+}
+static void net_delete(lv_event_t *e)
+{
+	int i = (intptr_t)lv_event_get_user_data(e);
+	if (i >= ST.net_count) return;
+	memmove(&ST.net[i], &ST.net[i + 1], sizeof ST.net[0] * (ST.net_count - i - 1));
+	ST.net_count--;
+	memset(&ST.net[ST.net_count], 0, sizeof ST.net[0]);
+	save(DASH_SETTINGS_SAVE);
+	dash_ui_show(DASH_VIEW_SETTINGS); /* the list again */
+}
+static void net_row(lv_obj_t *parent, const char *ssid, int i, float w)
+{
+	lv_obj_t *r = box(parent);
+	lv_obj_set_size(r, ri(w), ri(PB(26)));
+	lv_obj_t *ic = icon(r, i < 0 ? &ic_p_fixed : &ic_p_net, W70);
+	align(ic, LV_ALIGN_LEFT_MID, 0, 0);
+	lv_obj_t *l = label(r, FS(REGULAR, 14, UI_S_PANEL), M3_ON_SURFACE);
+	lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_DOTS);
+	lv_obj_set_width(l, ri(w - 2 * PB(18) - 2 * PB(12)));
+	lv_label_set_text(l, ssid);
+	align(l, LV_ALIGN_LEFT_MID, ri(PB(18) + PB(12)), 0);
+	if (i < 0) {
+		lv_obj_t *n = label(r, FS(REGULAR, 12, UI_S_PANEL), W54);
+		lv_label_set_text(n, "the car's, built in");
+		align(n, LV_ALIGN_RIGHT_MID, 0, 0);
+		return;
+	}
+	pressed_look(r, 0x1FFFFFFF);
+	tappable(r, net_tap, i, PB(2));
+	lv_obj_t *del = icon(r, &ic_p_delete, W70);
+	align(del, LV_ALIGN_RIGHT_MID, 0, 0);
+	tappable(del, net_delete, i, PB(12));
+}
+static void settings_fill_nets(void)
+{
+	float w = lv_obj_get_style_width(net_list, 0);
+	lv_obj_clean(net_list);
+	group_title(net_list, "NETWORK");
+	net_row(net_list, "S3XY_OBD", -1, w); /* the car's Commander: fixed */
+	for (int i = 0; i < ST.net_count; i++) net_row(net_list, ST.net[i].ssid, i, w); /* never the passphrase */
+	if (ST.net_count < DASH_NETS) lv_obj_set_height(outlined(net_list, &ic_p_add, "Add network", net_tap, ST.net_count), ri(PB(32)));
+}
+static void settings_build(void)
+{
+	float top = PB(6), x0 = G.ml + inset(top) + PB(6), w = G.W - 2 * x0, h = G.H - 2 * top, pad = PB(20);
+	settings = box(lv_layer_top());
+	place(settings, 0, 0, G.W, G.H);
+	fill(settings, 0x8A000000); /* the dialog's barrier, black54 */
+	lv_obj_set_clickable(settings, true);
+	lv_obj_t *d = box(settings);
+	place(d, x0, top, w, h);
+	fill(d, M3_DIALOG);
+	lv_obj_set_style_radius(d, ri(px(28)), 0);
+	lv_obj_t *title = label(d, FS(REGULAR, 24, UI_S_PANEL * 0.8f), M3_ON_SURFACE);
+	lv_label_set_text(title, "Settings");
+	lv_obj_set_pos(title, ri(pad + PB(4)), ri(pad * 0.7f));
+	lv_obj_t *x = icon(d, &ic_p_close, M3_ON_SURFACE);
+	align(x, LV_ALIGN_TOP_RIGHT, ri(-pad), ri(pad * 0.7f));
+	tappable(x, close_tap, 0, PB(16));
+	float cw = (w - 2 * pad - 3 * PB(20)) / 4, gap = PB(20), cy = pad * 0.7f + PB(24) * 0.8f * 1.17f + PB(10);
+	/* the Commander */
+	lv_obj_t *c = column(d, PB(8));
+	place(c, pad, cy, cw, h - cy - PB(8));
+	group_title(c, "COMMANDER");
+	set_status = label(c, FS(MEDIUM, 14, UI_S_PANEL), WHITE);
+	outlined(c, NULL, "Approve this Dash", approve_tap, 0);
+	lv_obj_t *hint = label(c, FS(REGULAR, 12, UI_S_PANEL), W70);
+	lv_obj_set_width(hint, ri(cw));
+	lv_label_set_text(hint, "Tap, then double-press the right scroll wheel in the car when it asks.");
+	outlined(c, NULL, "Forget Commander", forget_tap, 0);
+	/* the display */
+	c = column(d, PB(3));
+	place(c, pad + cw + gap, cy, cw, h - cy - PB(8));
+	group_title(c, "DISPLAY");
+	switch_row(c, "Show 12 V, other power and cell imbalance", 0, cw);
+	switch_row(c, "24-hour clock", 1, cw);
+	switch_row(c, "Follow car screen brightness", 3, cw);
+	lv_obj_t *br = box(c); /* "Brightness", and what it does now */
+	lv_obj_set_size(br, ri(cw), LV_SIZE_CONTENT);
+	lv_obj_t *bl = label(br, FS(REGULAR, 14, UI_S_PANEL), M3_ON_SURFACE);
+	lv_label_set_text(bl, "Brightness");
+	set_bl_note = label(br, FS(REGULAR, 12, UI_S_PANEL), W54);
+	align(set_bl_note, LV_ALIGN_RIGHT_MID, 0, 0);
+	set_slider = lv_slider_create(c);
+	lv_obj_set_size(set_slider, ri(cw - PB(16)), ri(PB(6)));
+	lv_obj_set_style_margin_left(set_slider, ri(PB(8)), 0);
+	lv_slider_set_range(set_slider, 5, 100);
+	lv_obj_set_style_bg_color(set_slider, rgb(M3_KEY), LV_PART_MAIN);
+	lv_obj_set_style_bg_color(set_slider, rgb(M3_PRIMARY), LV_PART_INDICATOR);
+	lv_obj_set_style_bg_color(set_slider, rgb(M3_PRIMARY), LV_PART_KNOB);
+	lv_obj_set_style_pad_all(set_slider, ri(PB(7)), LV_PART_KNOB);
+	lv_obj_set_ext_click_area(set_slider, ri(PB(16)));
+	lv_obj_add_event_cb(set_slider, slider_changed, LV_EVENT_VALUE_CHANGED, NULL);
+	lv_obj_add_event_cb(set_slider, slider_changed, LV_EVENT_RELEASED, NULL);
+	/* the networks */
+	net_list = column(d, PB(6));
+	place(net_list, pad + 2 * (cw + gap), cy, cw, h - cy - PB(8));
+	/* developer access */
+	c = column(d, PB(10));
+	place(c, pad + 3 * (cw + gap), cy, cw, h - cy - PB(8));
+	group_title(c, "DEVELOPER");
+	switch_row(c, "Developer SSH", 2, cw);
+	lv_obj_t *note = label(c, FS(REGULAR, 12, UI_S_PANEL), W54);
+	lv_obj_set_width(note, ri(cw));
+	lv_label_set_text(note, "Needs an authorized key: pair a computer, or put one on the card");
+	outlined(c, NULL, "Pair a computer", pair_tap, 0); /* only from this tap: someone at the Dash */
+	show(settings, false);
+}
+
+/* ---- a network's SSID and passphrase, typed on the on-screen keyboard ---- */
+static void net_save(lv_event_t *e)
+{
+	(void)e;
+	const char *ssid = lv_textarea_get_text(net_ta[0]), *pass = lv_textarea_get_text(net_ta[1]);
+	size_t pl = strlen(pass);
+	bool replacing = edit_slot < ST.net_count;
+	if (!ssid[0] || strlen(ssid) > 32) set_text(net_err, "The name: 1 to 32 characters");
+	else if (!strcmp(ssid, "S3XY_OBD")) set_text(net_err, "S3XY_OBD is the car's, built in");
+	else if ((pl || !replacing) && (pl < 8 || pl > 63)) set_text(net_err, "The passphrase: 8 to 63 characters");
+	else {
+		dash_net_t *n = &ST.net[edit_slot];
+		snprintf(n->ssid, sizeof n->ssid, "%s", ssid);
+		snprintf(n->pass, sizeof n->pass, "%s", pass); /* "" when replacing: keep the one it has */
+		if (!replacing) ST.net_count++;
+		save(DASH_SETTINGS_SAVE);
+		memset(n->pass, 0, sizeof n->pass); /* handed over; not kept here */
+		lv_textarea_set_text(net_ta[1], "");
+		dash_ui_show(DASH_VIEW_SETTINGS);
+	}
+}
+static void net_cancel(lv_event_t *e)
+{
+	(void)e;
+	lv_textarea_set_text(net_ta[1], "");
+	dash_ui_show(DASH_VIEW_SETTINGS);
+}
+static void ta_focus(lv_event_t *e) { lv_keyboard_set_textarea(net_kb, lv_event_get_target(e)); }
+static void kb_done(lv_event_t *e)
+{
+	if (lv_event_get_code(e) == LV_EVENT_READY) net_save(e);
+	else net_cancel(e);
+}
+static void net_edit_build(void)
+{
+	float top = PB(6), x0 = G.ml + inset(top) + PB(6), w = G.W - 2 * x0, pad = PB(16);
+	net_edit = box(lv_layer_top());
+	place(net_edit, 0, 0, G.W, G.H);
+	fill(net_edit, M3_DIALOG);
+	lv_obj_set_clickable(net_edit, true);
+	const char *hint[2] = {"Network name (SSID)", "Passphrase"};
+	float fw = (w - 3 * pad - 2 * PB(110)) / 2;
+	for (int i = 0; i < 2; i++) {
+		lv_obj_t *ta = net_ta[i] = lv_textarea_create(net_edit);
+		lv_textarea_set_one_line(ta, true);
+		lv_textarea_set_max_length(ta, i ? 63 : 32);
+		lv_textarea_set_placeholder_text(ta, hint[i]);
+		if (i) lv_textarea_set_password_mode(ta, true); /* masked as typed */
+		place(ta, x0 + i * (fw + pad), top + pad, fw, PB(46));
+		lv_obj_set_style_text_font(ta, FS(REGULAR, 16, UI_S_PANEL), 0);
+		lv_obj_set_style_text_color(ta, rgb(M3_ON_SURFACE), 0);
+		lv_obj_set_style_bg_color(ta, rgb(M3_FIELD), 0);
+		lv_obj_set_style_border_color(ta, rgb(M3_OUTLINE), 0);
+		lv_obj_set_style_border_color(ta, rgb(M3_PRIMARY), LV_STATE_FOCUSED);
+		lv_obj_set_style_text_color(ta, rgb(M3_OUTLINE), LV_PART_TEXTAREA_PLACEHOLDER);
+		lv_obj_add_event_cb(ta, ta_focus, LV_EVENT_FOCUSED, NULL);
+		lv_obj_add_event_cb(ta, ta_focus, LV_EVENT_CLICKED, NULL);
+	}
+	lv_obj_t *b = outlined(net_edit, NULL, "Cancel", (lv_event_cb_t)net_cancel, 0);
+	lv_obj_set_pos(b, ri(x0 + 2 * (fw + pad)), ri(top + pad));
+	b = outlined(net_edit, NULL, "Save", (lv_event_cb_t)net_save, 0);
+	lv_obj_set_pos(b, ri(x0 + 2 * (fw + pad) + PB(110) + pad / 2), ri(top + pad));
+	net_err = label(net_edit, FS(REGULAR, 12, UI_S_PANEL), 0xFFF2B8B5); /* M3 dark error */
+	lv_obj_set_pos(net_err, ri(x0), ri(top + pad + PB(48)));
+	net_kb = lv_keyboard_create(net_edit);
+	float ky = top + pad + PB(48) + PB(18);
+	lv_obj_set_size(net_kb, ri(w), ri(G.H - ky - top));
+	align(net_kb, LV_ALIGN_TOP_LEFT, ri(x0), ri(ky));
+	lv_obj_set_style_bg_color(net_kb, rgb(M3_DIALOG), 0);
+	lv_obj_set_style_bg_color(net_kb, rgb(M3_KEY), LV_PART_ITEMS);
+	lv_obj_set_style_bg_color(net_kb, rgb(M3_OUTLINE), LV_PART_ITEMS | LV_STATE_PRESSED);
+	lv_obj_set_style_bg_color(net_kb, rgb(0xFF332D41), LV_PART_ITEMS | LV_STATE_CHECKED); /* its control keys */
+	lv_obj_set_style_text_color(net_kb, rgb(M3_ON_SURFACE), LV_PART_ITEMS | LV_STATE_CHECKED);
+	((lv_font_t *)FS(REGULAR, 16, UI_S_PANEL))->fallback = &lv_font_montserrat_28; /* the keys' symbols */
+	lv_obj_set_style_text_color(net_kb, rgb(M3_ON_SURFACE), LV_PART_ITEMS);
+	lv_obj_set_style_text_font(net_kb, FS(REGULAR, 16, UI_S_PANEL), LV_PART_ITEMS);
+	lv_obj_set_style_border_width(net_kb, 0, LV_PART_ITEMS);
+	lv_obj_set_style_shadow_width(net_kb, 0, LV_PART_ITEMS);
+	lv_obj_add_event_cb(net_kb, kb_done, LV_EVENT_READY, NULL);
+	lv_obj_add_event_cb(net_kb, kb_done, LV_EVENT_CANCEL, NULL);
+	show(net_edit, false);
+}
+
+void dash_ui_settings(const dash_settings_t *s)
+{
+	ST = *s;
+	for (int i = 0; i < DASH_NETS; i++) memset(ST.net[i].pass, 0, sizeof ST.net[i].pass); /* never kept for show */
+	if (view == DASH_VIEW_SETTINGS) dash_ui_show(DASH_VIEW_SETTINGS);
+}
+
+void dash_ui_show(int v)
+{
+	view = v;
+	show(panel, v == DASH_VIEW_CAR_PANEL);
+	show(settings, v == DASH_VIEW_SETTINGS);
+	show(net_edit, v == DASH_VIEW_NETWORK);
+	show(pair_view, v == DASH_VIEW_PAIR);
+	show(tip, false);
+	if (v == DASH_VIEW_SETTINGS) {
+		lv_obj_set_state(set_sw[0], LV_STATE_CHECKED, ST.minor_figures);
+		lv_obj_set_state(set_sw[1], LV_STATE_CHECKED, !ST.hour12);
+		lv_obj_set_state(set_sw[2], LV_STATE_CHECKED, ST.dev_ssh);
+		lv_obj_set_state(set_sw[3], LV_STATE_CHECKED, ST.follow_car);
+		lv_slider_set_value(set_slider, ST.follow_car && S.backlight_pct >= 0 ? S.backlight_pct : ST.brightness_pct, LV_ANIM_OFF);
+		slider_look();
+		settings_fill_nets();
+	}
+	if (v == DASH_VIEW_NETWORK) {
+		if (edit_slot < 0 || edit_slot > ST.net_count || edit_slot >= DASH_NETS) edit_slot = ST.net_count;
+		lv_textarea_set_text(net_ta[0], edit_slot < ST.net_count ? ST.net[edit_slot].ssid : "");
+		lv_textarea_set_text(net_ta[1], "");
+		lv_textarea_set_placeholder_text(net_ta[1], edit_slot < ST.net_count ? "Passphrase (empty: keep)" : "Passphrase");
+		set_text(net_err, "");
+		lv_keyboard_set_textarea(net_kb, net_ta[0]);
+	}
+}
+
+/* ---- pairing a computer for SSH: the QR code of the one-time URL, the code, the time left, the command ---- */
+static void pair_cancel(lv_event_t *e)
+{
+	(void)e;
+	if (S.pair_open) save(DASH_PAIR_CANCEL);
+	dash_ui_show(DASH_VIEW_SETTINGS);
+}
+static void pair_build(void)
+{
+	float top = PB(6), x0 = G.ml + inset(top) + PB(10), pad = PB(16), qs = G.H - 2 * top - 2 * pad;
+	pair_view = box(lv_layer_top());
+	place(pair_view, 0, 0, G.W, G.H);
+	fill(pair_view, M3_DIALOG);
+	lv_obj_set_clickable(pair_view, true);
+	lv_obj_t *qbg = box(pair_view); /* the code dark on white, a quiet zone round it */
+	place(qbg, x0, top + pad, qs, qs);
+	fill(qbg, WHITE);
+	lv_obj_set_style_radius(qbg, ri(PB(8)), 0);
+	pair_qr = lv_qrcode_create(qbg);
+	lv_qrcode_set_size(pair_qr, ri(qs - 2 * PB(14)));
+	lv_qrcode_set_dark_color(pair_qr, rgb(BLACK));
+	lv_qrcode_set_light_color(pair_qr, rgb(WHITE));
+	align(pair_qr, LV_ALIGN_CENTER, 0, 0);
+	lv_obj_t *c = column(pair_view, PB(8));
+	float cx = x0 + qs + PB(28);
+	place(c, cx, top + pad, G.W - cx - x0, G.H - 2 * top - 2 * pad);
+	lv_obj_t *title = label(c, FS(REGULAR, 24, UI_S_PANEL * 0.8f), M3_ON_SURFACE);
+	lv_label_set_text(title, "Pair a computer");
+	pair_how = label(c, FS(REGULAR, 14, UI_S_PANEL), W70);
+	lv_label_set_text(pair_how, "On the same WiFi, scan the code or open:");
+	pair_url_l = label(c, FS(MEDIUM, 14, UI_S_PANEL), M3_PRIMARY);
+	lv_obj_t *r = box(c);
+	lv_obj_set_size(r, LV_PCT(100), LV_SIZE_CONTENT);
+	lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW);
+	lv_obj_set_flex_align(r, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+	lv_obj_set_style_pad_column(r, ri(PB(20)), 0);
+	pair_code_l = label(r, font_px(LIGHT, ri(PB(40))), WHITE);
+	lv_obj_set_style_text_letter_space(pair_code_l, ri(PB(4)), 0);
+	pair_left = label(r, FS(REGULAR, 14, UI_S_PANEL), W70);
+	pair_or = label(c, FS(REGULAR, 12, UI_S_PANEL), W70);
+	lv_label_set_text(pair_or, "Or from the computer:");
+	pair_cmd = label(c, FS(REGULAR, 12, UI_S_PANEL), M3_ON_SURFACE);
+	lv_obj_set_width(pair_cmd, LV_PCT(100));
+	lv_label_set_long_mode(pair_cmd, LV_LABEL_LONG_MODE_WRAP);
+	pair_res = label(c, FS(MEDIUM, 14, UI_S_PANEL), WHITE);
+	pair_btn = outlined(pair_view, NULL, "Cancel", pair_cancel, 0);
+	align(pair_btn, LV_ALIGN_BOTTOM_RIGHT, ri(-x0), ri(-top - pad));
+	show(pair_view, false);
+}
+static void set_pair(const dash_state_t *s)
+{
+	if (view != DASH_VIEW_PAIR) return;
+	if (CHANGED(pair_url) && s->pair_url[0]) lv_qrcode_update(pair_qr, s->pair_url, strlen(s->pair_url));
+	show(lv_obj_get_parent(pair_qr), s->pair_open);
+	show(pair_url_l, s->pair_open), show(lv_obj_get_parent(pair_code_l), s->pair_open);
+	show(pair_cmd, s->pair_open), show(pair_or, s->pair_open), show(pair_how, s->pair_open);
+	set_text(pair_url_l, "%s", s->pair_open ? s->pair_url : "");
+	set_text(pair_code_l, "%s", s->pair_open ? s->pair_code : "");
+	if (s->pair_open) set_text(pair_left, "%d:%02d left", s->pair_secs / 60, s->pair_secs % 60);
+	else set_text(pair_left, "");
+	if (s->pair_open) {
+		char cmd[200];
+		snprintf(cmd, sizeof cmd, "curl -fsS --data-binary @$HOME/.ssh/id_ed25519.pub \"%s\"", s->pair_url);
+		set_text(pair_cmd, "%s", cmd);
+	} else
+		set_text(pair_cmd, "");
+	set_text(pair_res, "%s", s->pair_result);
+	text_color(pair_res, !strncmp(s->pair_result, "Key added", 9) ? REGEN : s->pair_result[0] ? WARN : WHITE);
+	set_text(lv_obj_get_child(pair_btn, 0), "%s", s->pair_open ? "Cancel" : "Close");
+}
+
+/* ---- the snackbar (main.dart _say), and the approval prompt in it ---- */
+static void snack_build(void)
+{
+	snack = box(root);
+	fill(snack, M3_INVERSE);
+	lv_obj_set_style_radius(snack, ri(PB(4)), 0);
+	lv_obj_set_size(snack, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+	lv_obj_set_style_pad_hor(snack, ri(PB(16)), 0);
+	lv_obj_set_style_pad_ver(snack, ri(PB(10)), 0);
+	lv_obj_set_flex_flow(snack, LV_FLEX_FLOW_ROW);
+	lv_obj_set_flex_align(snack, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+	lv_obj_set_style_pad_column(snack, ri(PB(16)), 0);
+	snack_wheel = lv_image_create(snack);
+	lv_obj_remove_style_all(snack_wheel);
+	lv_image_set_src(snack_wheel, &img_wheel);
+	snack_text = label(snack, FS(REGULAR, 14, UI_S_PANEL), M3_ON_INVERSE);
+	lv_label_set_long_mode(snack_text, LV_LABEL_LONG_MODE_WRAP);
+	show(snack, false);
+}
+static void set_snack(const dash_state_t *s)
+{
+	bool approving = s->bt == BT_APPROVING; /* the one step that needs a hand: said until it is done */
+	bool say = approving || (s->toast[0] && view != DASH_VIEW_CAR_PANEL);
+	show(snack, say);
+	if (!say) return;
+	show(snack_wheel, approving);
+	const char *t = approving ? "Approve this Dash for the Commander: in the car, double-press the right scroll wheel" : s->toast;
+	set_text(snack_text, "%s", t);
+	lv_point_t sz;
+	float max = G.W * 0.42f;
+	lv_text_get_size(&sz, t, lv_obj_get_style_text_font(snack_text, 0), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+	lv_obj_set_width(snack_text, ri(fminf(sz.x + 1, max)));
+	lv_obj_update_layout(snack);
+	align(snack, LV_ALIGN_BOTTOM_MID, 0, ri(-PB(6)));
+}
+
+/* ---- the car's path either side, dotted (widgets.dart _CarLights, steerLines): under the car ---- */
+static const float steer_ratio[4] = {13.7f, 13.7f, 13.7f, 10.6f}, max_road[4] = {32.8f, 32.8f, 32.8f, 34.1f};
+static void steer_draw(lv_event_t *e)
+{
+	const dash_state_t *s = &S;
+	if (!s->live || !s->wifi_live || !s->steer_lines || isnan(s->steer_deg) || s->no_cabin) return;
+	lv_layer_t *layer = lv_event_get_layer(e);
+	const ui_car_pics_t *p = &ui_car_pics[s->car];
+	float w = cab.w, h = cab.h, ox = cab.x, oy = cab.y;
+	float road = fmaxf(-max_road[s->car], fminf(max_road[s->car], s->steer_deg / steer_ratio[s->car])) * (float)M_PI / 180;
+	float wheelbase = h * (p->axles[1] - p->axles[0]);
+	float r = wheelbase / tanf(fmaxf(fabsf(road), 1e-4f)), side = road > 0 ? -1 : 1;
+	float cx = w * p->centre, ccx = cx + side * r, ccy = h * p->axles[1];
+	bool rev = s->gear == 'R';
+	float step = h * 0.022f, len = h * (rev ? 0.53f : 0.7f), dot = cb(1.6f);
+	lv_draw_rect_dsc_t rd;
+	lv_draw_rect_dsc_init(&rd);
+	rd.radius = LV_RADIUS_CIRCLE;
+	rd.bg_color = rgb(WHITE);
+	for (int sd = -1; sd <= 1; sd += 2) {
+		float px0 = cx + sd * w * p->path_from[1], py0 = h * p->path_from[0];
+		float rad = hypotf(px0 - ccx, py0 - ccy), a0 = atan2f(py0 - ccy, px0 - ccx);
+#define AT(d, X, Y) do { float a_ = a0 + side * (d) / rad; X = ccx + cosf(a_) * rad, Y = ccy + sinf(a_) * rad; } while (0)
+		float q0x, q0y, q1x, q1y, mx, my;
+		AT(0, q0x, q0y);
+		AT(len, q1x, q1y);
+		AT(len / 2, mx, my);
+		float chx = (q0x + q1x) / 2, chy = (q0y + q1y) / 2, ctx = chx + (mx - chx) * 6, cty = chy + (my - chy) * 6;
+		for (float d = 0; d <= len; d += step) {
+			float t = d / len, qx = q0x * (1 - t) * (1 - t) + ctx * 2 * t * (1 - t) + q1x * t * t,
+			      qy = q0y * (1 - t) * (1 - t) + cty * 2 * t * (1 - t) + q1y * t * t;
+			float x = ox + qx, y = oy + (rev ? h - qy : qy);
+			rd.bg_opa = (lv_opa_t)(0.8f * 255 * (1 - d / len));
+			lv_area_t a = {ri(x - dot), ri(y - dot), ri(x + dot) - 1, ri(y + dot) - 1};
+			lv_draw_rect(layer, &rd, &a);
+		}
+	}
+}
+
+static void touch_init(void)
+{
+	for (int i = 0; i < 10; i++) {
+		tappable(chips[i].box, chip_tap, i, (PC(48) - PC(42)) / 2);
+		lv_obj_add_event_cb(chips[i].box, chip_hold, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)i);
+		lv_obj_add_event_cb(chips[i].box, chip_hold, LV_EVENT_RELEASED, (void *)(intptr_t)i);
+		pressed_look(chips[i].box, 0x4DFFFFFF);
+	}
+	tappable(link_w.box, open_tap, DASH_VIEW_SETTINGS, PL(4)); /* the app's link icons open its settings */
+	tappable(link_b.box, open_tap, DASH_VIEW_SETTINGS, PL(4));
+	tappable(car_panel, open_tap, DASH_VIEW_CAR_PANEL, PL(12));
+	tip = box(root);
+	fill(tip, 0xE6616161); /* Tooltip: grey 700 at 90 % */
+	lv_obj_set_style_radius(tip, ri(PC(4)), 0);
+	lv_obj_set_size(tip, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+	lv_obj_set_style_pad_hor(tip, ri(PC(8)), 0);
+	lv_obj_set_style_pad_ver(tip, ri(PC(4)), 0);
+	label(tip, FS(REGULAR, 14, UI_S_CHIP), WHITE);
+	show(tip, false);
+	tip_timer = lv_timer_create(tip_hide, 1500, NULL);
+	lv_timer_pause(tip_timer);
+	snack_build();
+	panel_build();
+	settings_build();
+	net_edit_build();
+	pair_build();
+}
+
+static void set_touch(const dash_state_t *s)
+{
+	set_snack(s);
+	set_pair(s);
+	if (view == DASH_VIEW_CAR_PANEL) { /* its message line: '<label>…' while out, then what came of it */
+		int a = s->press_pending;
+		if (a == ACT_UNLOCK || a == ACT_LOCK || a == ACT_CLIMATE || a == ACT_FLASH || a == ACT_HONK)
+			set_text(panel_msg, "%s…", act_label[a]);
+		else set_text(panel_msg, "%s", s->toast);
+	}
+	if (view == DASH_VIEW_SETTINGS && ST.follow_car && s->backlight_pct >= 0 && CHANGED(backlight_pct))
+		lv_slider_set_value(set_slider, s->backlight_pct, LV_ANIM_OFF); /* the live value, greyed */
+	if (view == DASH_VIEW_SETTINGS) {
+		uint32_t c;
+		const char *w = bt_word(s->bt, &c, NULL);
+		set_text(set_status, "Commander: %s", w);
+		text_color(set_status, c == W54 ? W70 : c);
+	}
+	if (CHANGED(steer_deg) || CHANGED(steer_lines) || CHANGED(car) || CHANGED(gear)) lv_obj_invalidate(steer);
+}
+
 void dash_ui_set(const dash_state_t *s)
 {
 	S = *s;
@@ -1522,6 +2206,7 @@ void dash_ui_set(const dash_state_t *s)
 	ring_dirty(s);
 	set_energy(s, at[3] + w[3] / 2);
 	set_g(s, at[4] + w[4] / 2);
+	set_touch(s);
 	P = *s;
 	first = false;
 }
@@ -1538,6 +2223,9 @@ void dash_state_blank(dash_state_t *s)
 	s->soc_pct = s->range = s->pack_temp_c = s->precond_c = s->climate_kw = s->degradation_pct = NAN;
 	s->minor_figures = true; /* the owner's default on the Dash */
 	s->lv_kw = s->other_kw = s->imbalance_mv = NAN;
+	s->steer_deg = NAN;
+	s->press_pending = -1;
+	s->backlight_pct = -1;
 	s->g_lat = s->g_long = NAN;
 	for (int i = 0; i < 4; i++) s->tyre_psi[i] = NAN;
 	for (int i = 0; i < 3; i++) s->cabin_c[i] = NAN;

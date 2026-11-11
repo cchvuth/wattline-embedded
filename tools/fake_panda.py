@@ -102,7 +102,7 @@ def scene(t):
              outside=12.5, washer=0, slippery=0, tcFlash=0, escFlash=0, tcMode=0,
              tpFL=2.9, tpFR=2.9, tpRL=2.95, tpRR=2.9, tdFL=2.9, tdFR=2.9, tdRL=2.95, tdRR=2.9,
              doorFL=2, doorRL=2, doorFR=2, doorRR=2, trunk=2, frunk=2, mirrorDipped=0, tiltAuto=1, chargePort=0,
-             domeLight=2, mapLights=0,
+             domeLight=2, mapLights=0, displayBrightness=100,   # the car's screen: the backlight follows it
              beltDriver=0, beltPass=0, belt2L=0, belt2C=0, belt2R=0, belt3L=0, belt3R=0,
              buckleD=2, buckle2L=0, buckle2C=0, buckleP=0, buckle2R=0, buckle3L=0, buckle3R=0,
              hvacPower=1, recirc=0, recircPct=0, climateOn=1, autoBlower=2, fan1=11, fan2=0,
@@ -126,16 +126,16 @@ def scene(t):
     if t < 30:
         v.update(gear=4, speed=ramp(t, 24, 30, 100, 30), brake=1, accel=-3.2, rearKw=-45, frontKw=-15,
                  packA=kw(-62), regenMax=60, autopilot=2, lowBeam=4, speedLimit=50,
-                 brakeFL=600, brakeFR=600, brakeRL=300, brakeRR=300)
+                 brakeFL=600, brakeFR=600, brakeRL=300, brakeRR=300, displayBrightness=30)
         return 'brake', v
     if t < 34:
         stopped = t >= 33.5
         v.update(gear=4, speed=ramp(t, 30, 33.5, 30, 0), brake=1, rearKw=0 if stopped else -10,
                  frontKw=0 if stopped else -3, packA=kw(-12), regenMax=0 if stopped else 60, lowBeam=4,
-                 indR=0 if stopped else blink(t, 30), brakeFL=800, brakeFR=800, brakeRL=400, brakeRR=400)
+                 indR=0 if stopped else blink(t, 30), brakeFL=800, brakeFR=800, brakeRL=400, brakeRR=400, displayBrightness=30)
         return 'stop', v
     if t < SILENT[0]:
-        v.update(lowBeam=4, doorFL=1 if t >= 35 else 2)
+        v.update(lowBeam=4, doorFL=1 if t >= 35 else 2, displayBrightness=30)
         return 'parked', v
     if t < SILENT[1]:
         return 'SILENT', v

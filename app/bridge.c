@@ -104,6 +104,8 @@ void bridge_fill(dash_state_t *s, const car_t *c, const link_t *l, const bt_view
   s->rear_kw = live ? c->rear_kw : NAN;
   s->pedal_pct = live ? c->pedal_pct : NAN;
   s->brake_pct = wl ? c->brake_pct : NAN;   // WiFi's alone: frozen once it stalls
+  s->steer_lines = wl && car_steer_lines(c, now);   // WiFi's alone: ID129 or the yaw rate
+  s->steer_deg = s->steer_lines ? (float)c->steer_deg : 0;
   s->regen_cap_kw = live && c->gear != 'P' ? c->regen_max_kw : NAN;   // no regen parked
   s->speed_limit = live ? c->speed_limit : NAN;
   s->ap = ap_of(c, live);

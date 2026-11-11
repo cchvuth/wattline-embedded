@@ -532,6 +532,31 @@ static void test_utc(void) {   // the Dash's 0x318 clock
   FR(0x318, 0, 26, 11, 7); CHECK(C.utc.at == at);                                          // too short
 }
 
+static void test_brightness(void) {   // the Dash's own: 0x273 UI_displayBrightnessLevel, Commander field 24
+  fresh();
+  ISNUL(car_display_brightness(&C, now));
+  FR(0x273, 0, 0, 0, 0, 0, 109, 0, 0x20, 0x10);   // 54.5 %, with the dome and tilt bits beside it
+  NEAR(car_display_brightness(&C, now), 54.5, 1e-9);
+  STR(C.dome_light, "AUTO"); CHECK(C.tilt_auto);   // the row added after them leaves them alone
+  FR(0x273, 0, 0, 0, 0, 0, 255, 0, 0, 0); ISNUL(car_display_brightness(&C, now));   // SNA
+  FR(0x273, 0, 0, 0, 0, 0, 60, 0, 0, 0); NEAR(car_display_brightness(&C, now), 30, 1e-9);
+  now += 5000; NEAR(car_display_brightness(&C, now), 30, 1e-9);
+  now += 1; ISNUL(car_display_brightness(&C, now));   // stale: 0x273 stopped coming
+  FR(0x273, 0, 0, 0, 0, 0, 60, 0, 0, 0);
+  link_disconnect(&L, now); ISNUL(car_display_brightness(&C, now));   // the link gone
+  // Over Bluetooth: field 24 as % when 0..100, any age while the session pushes; else ignored, kept for one log line.
+  fresh();
+  BT(&C, {61, 0}, {24, 70});
+  NEAR(car_display_brightness(&C, now), 70, 1e-9);
+  now += 60000; NEAR(car_display_brightness(&C, now), 70, 1e-9);
+  BT(&C, {24, 180}); NEAR(car_display_brightness(&C, now), 70, 1e-9); CHECK(C.p.bt_bright_bad == 180);
+  L.state = LINK_LIVE; C.wifi_live = true;   // WiFi live: its own frame, not the push
+  ISNUL(car_display_brightness(&C, now));
+  FR(0x273, 0, 0, 0, 0, 0, 100, 0, 0, 0); NEAR(car_display_brightness(&C, now), 50, 1e-9);
+  car_from_bt(&C, NULL, now);
+  NEAR(car_display_brightness(&C, now), 50, 1e-9);
+}
+
 static void test_foreign(void) {   // 'ids nobody asked for are dropped and counted, not decoded'
   fresh();
   uint8_t b[16];
@@ -866,6 +891,7 @@ int main(void) {
   test_steer_brake();
   test_parked();
   test_utc();
+  test_brightness();
   test_foreign();
   test_sparse();
   test_subscribe_list();
