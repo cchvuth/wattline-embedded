@@ -1,0 +1,5 @@
+config BR2_PACKAGE_BT_FWCUTTER
+	bool "bt-fwcutter"
+	help
+	  Cuts a Realtek Bluetooth firmware patch and its UART config out of a binary that embeds them (the device's
+	  own original Bluetooth daemon), so no firmware has to ship in the image. /usr/sbin/bt-fwcutter.

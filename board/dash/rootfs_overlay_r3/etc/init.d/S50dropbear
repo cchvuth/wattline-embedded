@@ -1,0 +1,10 @@
+#!/bin/sh
+# R3: SSH at boot by dash-ssh-enable boot: Dropbear (key logins only) runs only when SSH is on and there is a key
+# (/data/ssh, paired from the Dash's screen; or ssh/authorized_keys on the card's p2 for development). No key, no server.
+# The host key is made once per device in /data/ssh; none is in the image.
+case "$1" in
+start|"") /usr/sbin/dash-ssh-enable boot ;;
+stop) start-stop-daemon -K -q -p /var/run/dropbear.pid ;;
+restart|reload) "$0" stop; sleep 1; "$0" start ;;
+esac
+exit 0

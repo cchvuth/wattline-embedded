@@ -1,0 +1,13 @@
+#!/bin/sh
+# R3: the dash under dash-supervise (restarts it when it stops; a hung dash is the watchdog's). dash.off on the card's p2
+# keeps it from starting (development, recovery).
+PID=/run/dash-supervise.pid
+case "$1" in
+start|"") start-stop-daemon -S -b -m -p $PID -x /usr/sbin/dash-supervise ;;
+stop)   # the dash stops cleanly (disarming the watchdog) before the supervisor ends
+	start-stop-daemon -K -q -p $PID
+	i=0; while [ -d /proc/$(cat $PID 2>/dev/null || echo none) ] && [ $i -lt 10 ]; do sleep 1; i=$((i+1)); done
+	rm -f $PID ;;
+restart) "$0" stop; "$0" start ;;
+esac
+exit 0

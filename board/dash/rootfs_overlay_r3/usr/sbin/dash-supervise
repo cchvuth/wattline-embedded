@@ -1,0 +1,16 @@
+#!/bin/sh
+# Keeps the dash running: starts /usr/bin/dash and restarts it 2 s after it stops. Its stdout/stderr (GLib, crashes) go
+# to dash.out beside the dash's own log (/data/log, else /run), two files of up to 256 KiB. TERM: the dash is stopped
+# (it disarms the watchdog), then this loop ends. A dash that hangs stops petting the watchdog: the board reboots.
+O=/data/log/dash.out; [ -d /data/log ] || O=/run/dash.out
+P=
+trap '[ -n "$P" ] && kill $P && wait $P; exit 0' TERM INT
+while :; do
+	[ -e /run/dashdata/dash.off ] && { echo "$(date) dash.off on the card: not started" >> $O; exit 0; }
+	[ "$(stat -c %s $O 2>/dev/null || echo 0)" -gt 262144 ] && mv $O $O.1
+	echo "$(date) start" >> $O
+	/usr/bin/dash >> $O 2>&1 &
+	P=$!; wait $P; r=$?; P=
+	echo "$(date) exit $r" >> $O
+	sleep 2
+done

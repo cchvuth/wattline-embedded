@@ -1,0 +1,12 @@
+#!/bin/sh
+# dash-ssh-disable [forget]: SSH off and kept off across reboots (the card's ssh/authorized_keys too): flag off
+# (/data/ssh/disabled), Dropbear and its open sessions stopped (this one too, when run over SSH). "forget" also deletes
+# the paired keys (/data/ssh/authorized_keys); the host key stays. dash-ssh-enable turns it back on.
+mkdir -p /data/ssh && chmod 700 /data/ssh
+rm -f /data/ssh/enabled; touch /data/ssh/disabled
+[ "$1" = forget ] && rm -f /data/ssh/authorized_keys
+sync
+echo "ssh: off"
+start-stop-daemon -K -q -p /var/run/dropbear.pid
+killall -q dropbear
+exit 0

@@ -1,0 +1,37 @@
+#!/bin/sh
+# wifi-connect SSID [PASSPHRASE] [SSID2 PASSPHRASE2 ...]: join whichever of these networks is in range (the first listed
+# wins when several are) as a station (WPA2/WPA3 personal; an empty passphrase = open), then DHCP. A network wpa_supplicant
+# would refuse (SSID not 1-32 bytes, passphrase not 8-63) is skipped, so it cannot take the others down with it.
+# The config is written to /run (RAM) only, mode 600; no passphrase is printed.
+[ -n "$1" ] || { echo "usage: wifi-connect SSID [PASSPHRASE] [SSID2 PASSPHRASE2 ...]" >&2; exit 1; }
+C=/run/wpa_supplicant.conf
+umask 077
+{
+	echo "ctrl_interface=/run/wpa_supplicant"
+	P=100; N=0
+	while [ $# -gt 0 ]; do
+		S=$1; K=$2; N=$((N + 1))
+		shift; [ $# -gt 0 ] && shift
+		s=$(printf %s "$S" | wc -c); k=$(printf %s "$K" | wc -c)
+		if [ $s -lt 1 ] || [ $s -gt 32 ] || { [ $k -ne 0 ] && { [ $k -lt 8 ] || [ $k -gt 63 ]; }; }; then
+			echo "wifi-connect: network $N skipped: SSID must be 1-32 bytes, passphrase empty or 8-63" >&2
+			continue
+		fi
+		echo "network={"
+		echo "	ssid=$(printf %s "$S" | xxd -p | tr -d '\n')"
+		echo "	priority=$P"
+		if [ -n "$K" ]; then
+			echo "	psk=\"$K\""
+			echo "	key_mgmt=WPA-PSK WPA-PSK-SHA256 SAE"
+			echo "	ieee80211w=1"
+		else
+			echo "	key_mgmt=NONE"
+		fi
+		echo "}"
+		P=$((P - 1))
+	done
+} > $C
+killall -q udhcpc wpa_supplicant; sleep 1
+ip link set wlan0 up || exit 1
+wpa_supplicant -B -i wlan0 -D nl80211 -c $C || exit 1
+udhcpc -i wlan0 -b -t 15

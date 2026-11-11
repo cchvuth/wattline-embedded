@@ -1,0 +1,18 @@
+#!/bin/sh
+# R3: the card's partitions, found by device type (SD), never by name. p3 (ext4, writable, made once by dash-mkdata) on
+# /data after fsck -p; p2 (DASHDATA, FAT: dash.conf, wifi.txt, ssh/) read-only on /run/dashdata. No p3, or one fsck
+# cannot fix: /data stays in RAM (lost at power-off) and everything still runs.
+case "$1" in start|"") ;; *) exit 0;; esac
+i=0; until grep -qx SD /sys/block/mmcblk[0-9]/device/type 2>/dev/null || [ $i -ge 10 ]; do sleep 1; i=$((i+1)); done
+D=; for d in /sys/block/mmcblk[0-9]; do [ "$(cat $d/device/type 2>/dev/null)" = SD ] && D=/dev/${d##*/}; done
+mkdir -p /data /run/dashdata
+if [ -n "$D" ] && [ -b ${D}p3 ]; then
+	fsck.ext4 -p ${D}p3; r=$?   # 0 clean, 1/2 fixed, 4+ not fixed: leave it alone
+	if [ $r -lt 4 ] && mount -t ext4 -o noatime ${D}p3 /data; then echo "data: ${D}p3 on /data (fsck $r)"
+	else echo "data: ${D}p3 not mounted (fsck $r): /data in RAM"; fi
+else
+	echo "data: no p3: /data in RAM"
+fi
+mkdir -p /data/log
+[ -n "$D" ] && [ -b ${D}p2 ] && mount -t vfat -o ro ${D}p2 /run/dashdata && echo "dashdata: ${D}p2 on /run/dashdata (ro)"
+exit 0

@@ -1,0 +1,25 @@
+#!/bin/sh
+# dash-ssh-enable [boot]: SSH on, key logins only (-s). Makes /data/ssh (0700) and the device's own host key in it
+# (dropbear_ed25519_host_key, its public half in .pub) if missing, sets the flag (/data/ssh/enabled; clears /data/ssh/disabled) and (re)starts
+# Dropbear when /data/ssh/authorized_keys holds a key. Dropbear reads the keys straight from /data/ssh (-D): a key the
+# pairing adds there works at once, no restart. "boot" (S50dropbear): reads the flag, changes nothing.
+# Development fallback: ssh/authorized_keys on the card's p2 also starts it (from a mode-600 copy in /run), unless
+# dash-ssh-disable turned SSH off; paired keys in /data win when the flag is on.
+# Exit: 0 running, 2 on but no key yet (run again after pairing), 3 off (boot only), 1 error.
+S=/data/ssh H=/data/ssh/dropbear_ed25519_host_key PID=/var/run/dropbear.pid C=/run/dashdata/ssh/authorized_keys
+umask 077
+mkdir -p $S && chmod 700 $S || exit 1
+[ "$1" = boot ] || { touch $S/enabled && rm -f $S/disabled; } || exit 1
+K=
+[ -s $C ] && [ ! -e $S/disabled ] && mkdir -p /run/ssh-card && tr -d '\r' < $C > /run/ssh-card/authorized_keys && K=/run/ssh-card
+[ -e $S/enabled ] && [ -s $S/authorized_keys ] && K=$S
+[ -n "$K" ] || [ "$1" != boot ] || { echo "ssh: off"; exit 3; }
+if [ ! -s $H ]; then   # made aside, then moved: a power cut leaves no half key
+	rm -f $H.new $H.new.pub; dropbearkey -t ed25519 -f $H.new >/dev/null 2>&1 && mv $H.new $H || { echo "ssh: no host key" >&2; exit 1; }
+	dropbearkey -y -f $H 2>/dev/null | grep "^ssh-" > $H.pub; rm -f $H.new.pub
+fi
+[ -n "$K" ] || { echo "ssh: on, no key yet"; exit 2; }
+# a restart takes the keys folder as it is now; open sessions stay
+if start-stop-daemon -K -q -p $PID; then i=0; while [ -d /proc/$(cat $PID 2>/dev/null || echo none) ] && [ $i -lt 5 ]; do sleep 1; i=$((i+1)); done; fi
+start-stop-daemon -S -q -p $PID -x /usr/sbin/dropbear -- -s -r $H -D $K -P $PID || { echo "ssh: dropbear did not start" >&2; exit 1; }
+echo "ssh: on, keys from $K"

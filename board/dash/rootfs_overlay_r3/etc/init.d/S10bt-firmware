@@ -1,0 +1,30 @@
+#!/bin/sh
+# Bluetooth firmware for the RTL8733BS. None ships in the image: on first boot it is cut (bt-fwcutter) from this
+# unit's own original software, whose Bluetooth daemon (bin/blink on its "res" ext4 partition) embeds Realtek patches,
+# and kept in /data/firmware/rtl_bt. Runs after S05data (/data) and before S11modules loads hci_uart, then points the
+# kernel's firmware loader at /data/firmware so btrtl finds it there.
+# Never writes to the eMMC: only partitions the kernel already holds read-only (S00emmc-ro) are looked at, mounted
+# ro,noload (no journal replay). Nothing found: logged, and the boot goes on (WiFi does not need it).
+case "$1" in start|"") ;; *) exit 0;; esac
+F=/data/firmware; D=$F/rtl_bt; LOG=/data/log/bt-firmware.log
+if [ ! -s $D/rtl8733bs_fw.bin ] || [ ! -s $D/rtl8733bs_config.bin ]; then
+	mkdir -p $D /run/bt-fwcut; M=/run/bt-fwcut; ok=
+	for d in /sys/block/mmcblk[0-9]; do
+		[ "$(cat $d/device/type 2>/dev/null)" = MMC ] || continue
+		for p in /dev/${d##*/}p*; do
+			[ -b $p ] && [ "$(blockdev --getro $p)" = 1 ] || continue
+			mount -t ext4 -o ro,noload $p $M 2>/dev/null || continue
+			for b in $M/res/bin/blink $M/bin/blink; do
+				[ -f $b ] || continue
+				echo "== $p ${b#$M}" >> $LOG
+				bt-fwcutter $b $D/rtl8733bs_fw.bin $D/rtl8733bs_config.bin >> $LOG 2>&1 && ok="$p ${b#$M}" && break
+			done
+			umount $M
+			[ -n "$ok" ] && break 2
+		done
+	done
+	if [ -n "$ok" ]; then echo "bt-firmware: cut from $ok into $D"
+	else echo "bt-firmware: none found on the eMMC (see $LOG): no Bluetooth"; fi
+fi
+[ -s $D/rtl8733bs_fw.bin ] && echo -n $F > /sys/module/firmware_class/parameters/path
+exit 0

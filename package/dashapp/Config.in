@@ -1,0 +1,7 @@
+config BR2_PACKAGE_DASHAPP
+	bool "dashapp"
+	depends on BR2_PACKAGE_BLUEZ5_UTILS # bluetoothd on D-Bus; brings libglib2 (gio) for the Commander session
+	select BR2_PACKAGE_LIBGLIB2
+	help
+	  The dash program (dash-native app/, LVGL UI, CMDR=1: the Commander's Bluetooth session), installed as /usr/bin/dash.
+	  The source is not in this tree: it is read from /native (a Docker mount of the dash-native checkout).

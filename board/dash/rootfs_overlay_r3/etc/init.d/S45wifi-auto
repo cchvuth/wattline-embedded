@@ -1,0 +1,21 @@
+#!/bin/sh
+# R3 WiFi at boot, station only, whichever network is in range (the first listed wins when several are): the Commander's
+# S3XY_OBD (its public default passphrase), then the networks the dash's settings saved in /data/wifi/networks.conf,
+# then the card's wifi.txt (p2, mounted by S05data). Both files: two lines per network, SSID then passphrase (empty:
+# open). They are the owner's: read only, nothing from them is printed or copied.
+case "$1" in start|"") ;; *) exit 0;; esac
+(
+	for i in $(seq 1 20); do [ -e /sys/class/net/wlan0 ] && break; sleep 1; done
+	[ -e /sys/class/net/wlan0 ] || exit 0
+	set -- S3XY_OBD 12345678
+	for f in /data/wifi/networks.conf /run/dashdata/wifi.txt; do
+		[ -f $f ] || continue
+		while IFS= read -r S || [ -n "$S" ]; do
+			K=; IFS= read -r K
+			S=$(printf %s "$S" | tr -d '\r'); K=$(printf %s "$K" | tr -d '\r')
+			[ -n "$S" ] && set -- "$@" "$S" "$K"
+		done < $f
+	done
+	wifi-connect "$@" > /run/wifi-auto.log 2>&1
+) &
+exit 0
