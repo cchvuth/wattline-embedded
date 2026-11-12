@@ -31,6 +31,7 @@ typedef struct {
   int rotate, touch_swap, touch_cal[4];
   int frame_ms;
   char cmdr_id[128], cmdr_pin[128];   // the Commander session's files (CMDR=1 builds)
+  int record_max_mb;            // drive recordings (record.c) kept to this total, oldest deleted first; 0 no cap
   int watchdog, watchdog_s;     // /dev/watchdog petted each frame (1/0), its timeout in s (main.c)
 } conf_t;
 

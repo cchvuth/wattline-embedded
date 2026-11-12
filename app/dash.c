@@ -5,6 +5,7 @@
 #include "app.h"
 #include "actions.h"
 #include "pair.h"
+#include "record.h"
 #include "settings.h"
 #include "../core/panda.h"
 #include <errno.h>
@@ -125,6 +126,7 @@ static void drain(dash_t *d, int64_t now) {
     if (at > now) at = now;
     if (at < d->last) at = d->last;   // never back in time (and a realtime clock step lands here)
     d->last = at;
+    record_panda(b, (size_t)n, at);   // nothing while recording is off
     int fd = d->fd;
     link_on_datagram(&d->link, b, (size_t)n, at);
     if (d->fd == fd) panda_parse(b, (size_t)n, mark_seen, d);   // a frozen link starts over without it
@@ -256,6 +258,7 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
       settings_save(&app_settings);
       apply_settings(d);
     }
+    record_sync(app_settings.record, cf, now);   // the switch takes effect here, at once
 #ifdef DASH_CMDR
     cmdr_hook_sync(&d->car, &d->link, &bt, now);
 #endif
@@ -280,6 +283,7 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
     }
   }
   stats(d);
+  record_sync(false, cf, now);   // flushed and closed
 #ifdef DASH_CMDR
   cmdr_hook_stop();
 #endif

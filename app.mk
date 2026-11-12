@@ -1,14 +1,15 @@
 # The dash program (app/): make -f app.mk host | test | arm     (arm: in the build container, tools/arm-app.sh)
 #   host  build/app-host/dash-host: the loop + the real UI drawn headless, for the bench tests on the Mac
-#   test  dash-host against tools/fake_panda.py over loopback for a scripted minute (test/test_app_bench.py)
+#   test  dash-host against tools/fake_panda.py over loopback for a scripted minute (test/test_app_bench.py), then a
+#         drive recorded and replayed through fake_panda.py --replay (test/test_record.py)
 #   arm   build/arm-app/dash (+ .stripped) for the Dash
 #   CMDR=1 (any target) adds the Commander session (port/linux/ble_bluez.c, GDBus): build/{app-host,arm-app}-cmdr/
 LVGL := third_party/lvgl-9.6.0
 LVGL_SRC := $(shell find $(LVGL)/src -name '*.c')
 UI_SRC := ui/dash_ui.c ui/gen/assets.c ui/gen/roboto.c
-APP_SRC := app/dash.c app/conf.c app/bridge.c app/log.c app/bright.c app/actions.c app/pair.c app/settings.c \
+APP_SRC := app/dash.c app/conf.c app/bridge.c app/log.c app/bright.c app/actions.c app/pair.c app/settings.c app/record.c \
   core/panda.c core/derive.c core/sched.c core/cmdr_msg.c core/pb.c   # cmdr_msg: the actions' labels, every build
-APP_H := app/app.h app/actions.h app/pair.h app/settings.h core/state.h core/sched.h core/panda.h core/cmdr_msg.h \
+APP_H := app/app.h app/actions.h app/pair.h app/settings.h app/record.h core/state.h core/sched.h core/panda.h core/cmdr_msg.h \
   ui/dash_state.h ui/dash_ui.h build/signals_gen.h
 WARN := -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
 CMDR ?= 0
@@ -42,6 +43,7 @@ $(HA)/dash-host: $(patsubst %.c,$(HA)/%.o,app/main_host.c $(APP_SRC)) $(patsubst
 host: $(HA)/dash-host
 test: host
 	python3 -I test/test_app_bench.py $(HA)/dash-host
+	python3 -I test/test_record.py $(HA)/dash-host
 
 # --- ARM (the Dash): the Buildroot toolchain, LVGL and UI objects shared with ui.mk (build/arm-ui/)
 ARM_CC ?= /work/out-r0/host/bin/arm-buildroot-linux-gnueabihf-gcc

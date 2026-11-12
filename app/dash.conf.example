@@ -79,3 +79,8 @@ cmdr_pin = /data/cmdr_pin
 # allows up to 16 s). A clean stop (SIGTERM) disarms it; a crash leaves it running for the supervisor's restart.
 watchdog = 1
 watchdog_s = 15
+
+# Drive recording (the settings' "Record drives" switch): each drive's CAN datagrams and Commander pushes go to
+# /data/rec/<session>.panda and .cmdr, for replays at the desk (tools/fake_panda.py --replay FILE.panda). The folder
+# is kept to this many MB, the oldest sessions deleted first; 0: no cap.
+record_max_mb = 200

@@ -34,6 +34,7 @@ void conf_defaults(conf_t *c) {
   c->frame_ms = 33;
   snprintf(c->cmdr_id, sizeof c->cmdr_id, "/run/dash-cmdr-id");
   snprintf(c->cmdr_pin, sizeof c->cmdr_pin, "/run/dash-cmdr-pin");
+  c->record_max_mb = 200;
   c->watchdog = 1, c->watchdog_s = 15;
 }
 
@@ -62,7 +63,7 @@ static const key_t_ kKeys[] = {
   K_I("away_min", away_min), K_S("log", log_path), K_I("log_kb", log_kb),
   K_S("fb", fb), K_S("touch", touch), K_I("rotate", rotate), K_I("touch_swap", touch_swap),
   K_L("touch_cal", touch_cal, 4), K_I("frame_ms", frame_ms), K_S("cmdr_id", cmdr_id), K_S("cmdr_pin", cmdr_pin),
-  K_I("watchdog", watchdog), K_I("watchdog_s", watchdog_s),
+  K_I("watchdog", watchdog), K_I("watchdog_s", watchdog_s), K_I("record_max_mb", record_max_mb),
 };
 
 static char *trim(char *s) {

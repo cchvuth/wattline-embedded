@@ -78,6 +78,7 @@ void settings_load(dash_settings_t *st, const conf_t *cf) {
         else if (!strcmp(k, "brightness_pct")) st->brightness_pct = v < 5 ? 5 : v > 100 ? 100 : v;
         else if (!strcmp(k, "follow_car")) st->follow_car = v;
         else if (!strcmp(k, "ssh")) st->dev_ssh = v;
+        else if (!strcmp(k, "record")) st->record = v;
       }
       fclose(f);
       log_msg("settings: %s", path);

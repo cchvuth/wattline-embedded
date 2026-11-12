@@ -2,6 +2,8 @@
 // -i ms a JSON line of what it was given (the test reads these). -p DIR: a PNG of the screen every 5 s.
 // usage: dash-host [-c dash.conf] [-t seconds] [-i ms] [-p dir]
 #include "app.h"
+#include "record.h"
+#include "settings.h"
 #include "lvgl.h"
 #include "../ui/dash_ui.h"
 #include "src/libs/lodepng/lodepng.h"
@@ -72,13 +74,19 @@ static uint32_t frame(void *ctx) {
 int main(int argc, char **argv) {
   const char *path = NULL;
   int secs = 0, o;
-  while ((o = getopt(argc, argv, "c:t:i:p:")) != -1)
+  while ((o = getopt(argc, argv, "c:t:i:p:s:")) != -1)
     switch (o) {
     case 'c': path = optarg; break;
     case 't': secs = atoi(optarg); break;
     case 'i': every = atoi(optarg); break;
     case 'p': png_dir = optarg; break;
-    default: fprintf(stderr, "usage: dash-host [-c dash.conf] [-t seconds] [-i ms] [-p dir]\n"); return 2;
+    case 's': {
+      static char rec[512];
+      snprintf(rec, sizeof rec, "%s/rec", optarg);
+      settings_root = optarg, record_dir = rec;
+      break;
+    }
+    default: fprintf(stderr, "usage: dash-host [-c dash.conf] [-t seconds] [-i ms] [-p dir] [-s dir]\n"); return 2;
     }
   conf_t cf;
   conf_defaults(&cf);

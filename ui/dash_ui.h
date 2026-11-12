@@ -29,6 +29,7 @@ typedef struct {
 	int net_count;
 	dash_net_t net[DASH_NETS];
 	bool dev_ssh;             /* developer SSH: needs an authorized key on the card */
+	bool record;              /* record drive data (CAN and Commander pushes) to /data/rec, for bench replays */
 } dash_settings_t;
 enum { DASH_SETTINGS_SAVE, DASH_CMDR_APPROVE, DASH_CMDR_FORGET, DASH_PAIR_START, DASH_PAIR_CANCEL };
 typedef void (*dash_settings_cb)(int what, const dash_settings_t *s, void *ctx);
