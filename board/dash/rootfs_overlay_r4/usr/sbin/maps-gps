@@ -1,0 +1,17 @@
+#!/bin/sh
+# maps-gps [PORT] : point gpsd at the phone companion app's NMEA-over-TCP stream, which
+# rides the same Bluetooth tether bt-pan brought up. The phone is the PAN gateway and the
+# companion app listens on PORT there; we read the gateway from the routing table rather
+# than assume Android's 192.168.44.1 (the subnet varies by OEM/version).
+#
+# Chain: companion app (phone GPS) -> NMEA over TCP on the BT-PAN -> this gpsd ->
+#   browser path:  geoclue gpsd source -> WebKit Geolocation API
+#   native path:   libgps / gpspipe straight into the dash (no geoclue needed)
+PORT=${1:-11123}
+GW=$(ip route show default 2>/dev/null | awk '/^default/{print $3; exit}')
+[ -n "$GW" ] || { echo "maps-gps: no default route yet (run bt-pan first)" >&2; exit 1; }
+
+# gpsd takes a raw-NMEA TCP feed as a tcp:// device. -N foreground (for the supervisor),
+# -n read without waiting for a client. Clients then read it on localhost:2947.
+echo "maps-gps: gpsd <- tcp://$GW:$PORT"
+exec gpsd -N -n "tcp://$GW:$PORT"

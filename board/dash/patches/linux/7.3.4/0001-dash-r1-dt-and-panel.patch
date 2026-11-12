@@ -116,7 +116,7 @@ diff -ruN a/arch/arm/boot/dts/allwinner/sun8i-t113s-dash-r1.dts b/arch/arm/boot/
 +		enable-gpios = <&pio 6 10 GPIO_ACTIVE_HIGH>;
 +		brightness-levels = <0 100>;	/* 0..100 = percent duty */
 +		num-interpolated-steps = <100>;
-+		default-brightness-level = <100>;
++		default-brightness-level = <30>;	/* from the panel coming up (~2 s) until the dash sets its own */
 +	};
 +
 +	soc {

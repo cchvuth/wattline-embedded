@@ -1,0 +1,14 @@
+#!/bin/sh
+# spike-i2c: read-only scan of I2C buses 1 and 2 for an auth coprocessor (expected at 0x10 or 0x11), three
+# times, since the chip NACKs while asleep. Reads only (i2cdetect -r): nothing is ever written to either bus.
+for b in 1 2; do
+	if [ ! -e /dev/i2c-$b ]; then echo "BUS$b=missing (no /dev/i2c-$b)"; continue; fi
+	echo "BUS$b=$(cat /sys/class/i2c-dev/i2c-$b/name 2>/dev/null) ($(basename $(readlink -f /sys/class/i2c-dev/i2c-$b/device/..)))"
+	for n in 1 2 3; do
+		echo "--- bus $b, scan $n"
+		i2cdetect -y -r $b | tee /run/spike-i2c-$b-$n.txt
+		F=$(tail -n +2 /run/spike-i2c-$b-$n.txt | cut -c5- | tr ' ' '\n' | grep -v -e '^--$' -e '^$' | tr '\n' ' ')
+		echo "FOUND_BUS${b}_SCAN$n=${F:-none}"
+		sleep 1
+	done
+done

@@ -1,0 +1,19 @@
+#!/bin/sh
+# Boot screen, as early as init can: shown until the dash draws over it (S99dash). The kernel's text console is
+# detached from the framebuffer first, so no cursor or text lands on the picture.
+# The picture: splash.bgra.gz on the card's p2 (DASHDATA) if there is one, else the built-in one. Both are the panel's
+# 480x1920 BGRA framebuffer, gzipped, as board/dash/splash/mksplash.py makes them.
+case "$1" in
+start|"")
+	for v in /sys/class/vtconsole/vtcon*; do grep -q "frame buffer" $v/name 2>/dev/null && echo 0 > $v/bind; done
+	[ -c /dev/fb0 ] || exit 0
+	F=/usr/share/splash/splash.bgra.gz M=/run/splash-card
+	for d in /sys/block/mmcblk[0-9]; do
+		[ "$(cat $d/device/type 2>/dev/null)" = SD ] && [ -b /dev/${d##*/}p2 ] || continue
+		mkdir -p $M && mount -t vfat -o ro /dev/${d##*/}p2 $M 2>/dev/null || continue
+		[ -s $M/splash.bgra.gz ] && cp $M/splash.bgra.gz /run/splash.bgra.gz && F=/run/splash.bgra.gz
+		umount $M; rmdir $M
+	done
+	zcat $F > /dev/fb0 2>/dev/null || zcat /usr/share/splash/splash.bgra.gz > /dev/fb0 2>/dev/null ;;
+esac
+exit 0

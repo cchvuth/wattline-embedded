@@ -1,0 +1,9 @@
+# Bluetooth PAN (PANU) for the maps route: internet tethered from the phone over
+# Bluetooth, since the single RTL8733BS WiFi is busy with the car's CAN data.
+# bnep is the BNEP encapsulation the PAN profile rides on; the filters are tiny and
+# let bluetoothd drop multicast/non-IP frames the phone's NAP floods.
+# Enable by adding this file to BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES in the defconfig
+# (do it when the current image build is done, not mid-build).
+CONFIG_BT_BNEP=m
+CONFIG_BT_BNEP_MC_FILTER=y
+CONFIG_BT_BNEP_PROTO_FILTER=y

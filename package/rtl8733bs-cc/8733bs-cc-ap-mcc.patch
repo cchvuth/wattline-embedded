@@ -1,0 +1,185 @@
+diff --color -ru a/Makefile b/Makefile
+--- a/Makefile	2026-11-13 18:00:02
++++ b/Makefile	2026-11-13 18:00:02
+@@ -1388,6 +1388,9 @@
+ 
+ ifeq ($(CONFIG_MCC_MODE), y)
+ EXTRA_CFLAGS += -DCONFIG_MCC_MODE
+ endif
++
++# Dash R4 spike (8733bs_cc): concurrent mode, a second interface (wlan1) for the phone's access point
++EXTRA_CFLAGS += -DCONFIG_CONCURRENT_MODE
+ 
+ ifeq ($(CONFIG_RTW_NAPI), y)
+diff --color -ru a/hal/hal_mcc.c b/hal/hal_mcc.c
+--- a/hal/hal_mcc.c	2026-11-13 18:22:17
++++ b/hal/hal_mcc.c	2026-11-13 18:22:18
+@@ -18,6 +18,14 @@
+ #include <drv_types.h> /* PADAPTER */
+ #include <rtw_mcc.h> /* mcc structure */
+ #include <hal_data.h> /* HAL_DATA */
++
++#ifdef CONFIG_P2P
++#define DASH_P2P_ROLE(a) ((a)->wdinfo.role)
++#define DASH_P2P_NOA(a) ((a)->wdinfo.p2p_ps_mode == P2P_PS_NOA)
++#else /* Dash R4 spike: MCC (station + AP) built without P2P, so no wdinfo */
++#define DASH_P2P_ROLE(a) (-1)
++#define DASH_P2P_NOA(a) 0
++#endif
+ #include <rtw_pwrctrl.h> /* power control */
+ 
+ /*  use for AP/GO + STA/GC case */
+@@ -1134,7 +1142,6 @@
+ 	struct dvobj_priv *dvobj = adapter_to_dvobj(padapter);
+ 	_adapter *iface = NULL;
+ 	struct mcc_adapter_priv *pmccadapriv = NULL;
+-	struct wifidirect_info *pwdinfo = NULL;
+ 	struct mlme_priv *pmlmepriv = NULL;
+ 	u8 ret = _SUCCESS, i = 0;
+ 	u8 order = 1;
+@@ -1145,7 +1152,6 @@
+ 			continue;
+ 
+ 		pmccadapriv = &iface->mcc_adapterpriv;
+-		pwdinfo = &iface->wdinfo;
+ 
+ 		if (MLME_IS_GO(iface))
+ 			pmccadapriv->role = MCC_ROLE_GO;
+@@ -1165,7 +1171,7 @@
+ 		} else {
+ 			/* bypass non-linked/non-linking interface */
+ 			RTW_INFO(FUNC_ADPT_FMT" P2P Role:%d, mlme state:0x%2x\n",
+-				FUNC_ADPT_ARG(iface), pwdinfo->role, MLME_STATE(iface));
++				FUNC_ADPT_ARG(iface), DASH_P2P_ROLE(iface), MLME_STATE(iface));
+ 			continue;
+ 		}
+ 
+@@ -3108,7 +3114,7 @@
+ 			if (mccadapriv->role == MCC_ROLE_MAX)
+ 				continue;
+ 			
+-			if (iface->wdinfo.p2p_ps_mode == P2P_PS_NOA) {
++			if (DASH_P2P_NOA(iface)) {
+ 				noa_enable = _TRUE;
+ 				break;
+ 			}
+@@ -3622,7 +3628,7 @@
+ 			mccadapriv = &iface->mcc_adapterpriv;
+ 
+ 			if (mccadapriv) {
+-				u8 p2p_ps_mode = iface->wdinfo.p2p_ps_mode;
++				u8 noa = DASH_P2P_NOA(iface);
+ 
+ 				RTW_PRINT_SEL(sel, "adapter mcc info:\n");
+ 				RTW_PRINT_SEL(sel, "ifname:%s\n", ADPT_ARG(iface));
+@@ -3632,7 +3638,7 @@
+ 				RTW_PRINT_SEL(sel, "current TP:%d\n", mccadapriv->mcc_tp);
+ 				RTW_PRINT_SEL(sel, "mgmt queue macid:%d\n", mccadapriv->mgmt_queue_macid);
+ 				RTW_PRINT_SEL(sel, "macid bitmap:0x%02x\n", mccadapriv->mcc_macid_bitmap);
+-				RTW_PRINT_SEL(sel, "P2P NoA:%s\n\n", p2p_ps_mode == P2P_PS_NOA ? "enable":"disable");
++				RTW_PRINT_SEL(sel, "P2P NoA:%s\n\n", noa ? "enable":"disable");
+ 				RTW_PRINT_SEL(sel, "registry data:\n");
+ 				RTW_PRINT_SEL(sel, "ap target tx TP(BW:20M):%d Mbps\n", regpriv->rtw_mcc_ap_bw20_target_tx_tp);
+ 				RTW_PRINT_SEL(sel, "ap target tx TP(BW:40M):%d Mbps\n", regpriv->rtw_mcc_ap_bw40_target_tx_tp);
+@@ -3827,6 +3833,7 @@
+ 
+ void rtw_hal_mcc_process_noa(PADAPTER padapter)
+ {
++#ifdef CONFIG_P2P /* Dash R4 spike: P2P GO/GC NoA only */
+ 	struct wifidirect_info *pwdinfo = &(padapter->wdinfo);
+ 	struct dvobj_priv *dvobj = adapter_to_dvobj(padapter);
+ 	struct mcc_obj_priv *pmccobjpriv = &(dvobj->mcc_objpriv);
+@@ -3852,6 +3859,7 @@
+ 		break;
+ 
+ 	}
++#endif /* CONFIG_P2P */
+ }
+ 
+ void rtw_hal_mcc_parameter_init(PADAPTER padapter)
+diff --color -ru a/include/hal_ic_cfg.h b/include/hal_ic_cfg.h
+--- a/include/hal_ic_cfg.h	2026-11-13 18:20:54
++++ b/include/hal_ic_cfg.h	2026-11-13 18:20:54
+@@ -703,7 +703,7 @@
+ 
+ 	#ifdef CONFIG_MCC_MODE
+ 		#define CONFIG_MCC_MODE_V2
+-		#define CONFIG_MCC_PHYDM_OFFLOAD
++		/* Dash R4 spike: no CONFIG_MCC_PHYDM_OFFLOAD on the 8733B (phydm has its MCC DM for 8822B/C/E only: no build) */
+ 	#endif /* CONFIG_MCC_MODE */
+ 
+ 	#if defined(CONFIG_TDLS) && defined(CONFIG_TDLS_CH_SW)
+diff --color -ru a/os_dep/linux/ioctl_cfg80211.c b/os_dep/linux/ioctl_cfg80211.c
+--- a/os_dep/linux/ioctl_cfg80211.c	2026-11-13 17:59:52
++++ b/os_dep/linux/ioctl_cfg80211.c	2026-11-13 17:59:52
+@@ -10175,7 +10175,11 @@
+ 		#else
+ 		.max_interfaces = CONFIG_IFACE_NUMBER,
+ 		#endif
++		#ifdef CONFIG_MCC_MODE /* Dash R4 spike: station and AP on different channels, time-shared */
++		.num_different_channels = 2,
++		#else
+ 		.num_different_channels = 1,
++		#endif
+ 	},
+ };
+ #endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 0, 0)) */
+@@ -10208,8 +10212,10 @@
+ #endif
+ 
+ 	wiphy->interface_modes =	BIT(NL80211_IFTYPE_STATION)
+-								#if 0 /* Dash: station only; cfg80211 refuses AP and ad-hoc */
++								#if 0 /* Dash: no ad-hoc */
+ 								| BIT(NL80211_IFTYPE_ADHOC) /* todo : AD-HOC task group will refine it */
++								#endif
++								#ifdef CONFIG_AP_MODE /* Dash R4 spike (8733bs_cc): the access point for the phone */
+ 								| BIT(NL80211_IFTYPE_AP)
+ 								#endif
+ 								#ifdef CONFIG_WIFI_MONITOR
+@@ -10736,6 +10742,37 @@
+ 	return cfg80211_rtw_get_station(wiphy, wdev->netdev, mac, sinfo);
+ }
+ 
++#ifdef CONFIG_AP_MODE /* Dash R4 spike: the AP station ops, wdev in Linux 7.x */
++static int cfg80211_rtw_add_station_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++	const u8 *mac, struct station_parameters *params)
++{
++	return cfg80211_rtw_add_station(wiphy, wdev->netdev, mac, params);
++}
++
++static int cfg80211_rtw_del_station_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++	struct station_del_parameters *params)
++{
++	return cfg80211_rtw_del_station(wiphy, wdev->netdev, params);
++}
++
++static int cfg80211_rtw_change_station_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++	const u8 *mac, struct station_parameters *params)
++{
++	return cfg80211_rtw_change_station(wiphy, wdev->netdev, mac, params);
++}
++
++static int cfg80211_rtw_dump_station_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++	int idx, u8 *mac, struct station_info *sinfo)
++{
++	return cfg80211_rtw_dump_station(wiphy, wdev->netdev, idx, mac, sinfo);
++}
++
++#define cfg80211_rtw_add_station cfg80211_rtw_add_station_wdev
++#define cfg80211_rtw_del_station cfg80211_rtw_del_station_wdev
++#define cfg80211_rtw_change_station cfg80211_rtw_change_station_wdev
++#define cfg80211_rtw_dump_station cfg80211_rtw_dump_station_wdev
++#endif /* CONFIG_AP_MODE */
++
+ #define cfg80211_rtw_add_key cfg80211_rtw_add_key_wdev
+ #define cfg80211_rtw_get_key cfg80211_rtw_get_key_wdev
+ #define cfg80211_rtw_del_key cfg80211_rtw_del_key_wdev
+@@ -10777,7 +10814,7 @@
+ 	.add_virtual_intf = cfg80211_rtw_add_virtual_intf,
+ 	.del_virtual_intf = cfg80211_rtw_del_virtual_intf,
+ 
+-#if 0 /* Dash: station only, no AP ops (was CONFIG_AP_MODE) */
++#ifdef CONFIG_AP_MODE /* Dash R4 spike (8733bs_cc): AP ops back */
+ #if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 4, 0)) && !defined(COMPAT_KERNEL_RELEASE)
+ 	.add_beacon = cfg80211_rtw_add_beacon,
+ 	.set_beacon = cfg80211_rtw_set_beacon,

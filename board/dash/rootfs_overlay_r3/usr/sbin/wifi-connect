@@ -3,6 +3,12 @@
 # wins when several are) as a station (WPA2/WPA3 personal; an empty passphrase = open), then DHCP. A network wpa_supplicant
 # would refuse (SSID not 1-32 bytes, passphrase not 8-63) is skipped, so it cannot take the others down with it.
 # The config is written to /run (RAM) only, mode 600; no passphrase is printed.
+# bgscan: rescans while joined, so a better-placed network takes over (home WiFi in the garage, then the car's on the
+# road); wifi-event renews DHCP on every (re)join, so the new network's address replaces the old one's.
+# The old wpa_supplicant is stopped first, even with no networks left (a removed one must not stay joined).
+killall -q wpa_cli udhcpc wpa_supplicant
+rm -f /run/wifi-id
+i=0; while pidof wpa_supplicant >/dev/null && [ $i -lt 10 ]; do sleep 1; i=$((i+1)); done
 [ -n "$1" ] || { echo "usage: wifi-connect SSID [PASSPHRASE] [SSID2 PASSPHRASE2 ...]" >&2; exit 1; }
 C=/run/wpa_supplicant.conf
 umask 077
@@ -20,6 +26,7 @@ umask 077
 		echo "network={"
 		echo "	ssid=$(printf %s "$S" | xxd -p | tr -d '\n')"
 		echo "	priority=$P"
+		[ $P -lt 100 ] && echo "	bgscan=\"simple:30:-70:60\""   # the first has nothing better to roam to
 		if [ -n "$K" ]; then
 			echo "	psk=\"$K\""
 			echo "	key_mgmt=WPA-PSK WPA-PSK-SHA256 SAE"
@@ -31,7 +38,7 @@ umask 077
 		P=$((P - 1))
 	done
 } > $C
-killall -q udhcpc wpa_supplicant; sleep 1
 ip link set wlan0 up || exit 1
 wpa_supplicant -B -i wlan0 -D nl80211 -c $C || exit 1
+wpa_cli -B -i wlan0 -p /run/wpa_supplicant -a /usr/sbin/wifi-event   # before udhcpc, which can wait ~45 s
 udhcpc -i wlan0 -b -t 15

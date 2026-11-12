@@ -1,6 +1,6 @@
 #!/bin/sh
 # dash-mkdata: run ONCE. Adds the writable partition p3 (Linux type, 1 GiB, ext4 labelled DASHDATA2) right after p2 on
-# the SD card (found by device type, never by name), leaving p1 (BOOT) and p2 (DASHDATA: backup/, wifi.txt) as they
+# the SD card (found by device type, never by name), leaving p1 (BOOT) and p2 (DASHDATA: backup/) as they
 # are. Refuses unless the card has an MBR with exactly p1 and p2 and free space after p2. p1/p2 (start, size, type) and
 # the disk id are compared before and after the table is written: any change, it stops before mkfs.
 die() { echo "dash-mkdata: $*" >&2; exit 1; }
@@ -38,7 +38,7 @@ echo "start=$S, size=$Z, type=83" | sfdisk --append $D || { remount; die "sfdisk
 i=0; until [ -b ${D}p3 ] || [ $i -ge 10 ]; do sleep 1; i=$((i+1)); done
 K1=$(keep "$(sfdisk -d $D)")
 [ "$K0" = "$K1" ] || { remount; echo "before:"; echo "$K0"; echo "after:"; echo "$K1"; die "p1/p2 or the disk id changed: STOP, no mkfs"; }
-[ -b ${D}p3 ] || { remount; die "${D}p3 did not appear: reboot, then run again (the table is written)"; }
+[ -b ${D}p3 ] || { remount; die "${D}p3 did not appear: the table is written; reboot, then: mkfs.ext4 -L DASHDATA2 ${D}p3"; }
 [ "$(cat /sys/block/$N/${N}p3/start) $(cat /sys/block/$N/${N}p3/size)" = "$S $Z" ] || { remount; die "${D}p3 is not where it was put"; }
 mkfs.ext4 -q -L DASHDATA2 ${D}p3 || { remount; die "mkfs.ext4 failed"; }
 e2fsck -fn ${D}p3 >/dev/null || { remount; die "e2fsck after mkfs failed"; }

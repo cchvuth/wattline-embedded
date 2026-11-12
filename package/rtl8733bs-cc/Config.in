@@ -1,0 +1,9 @@
+config BR2_PACKAGE_RTL8733BS_CC
+	bool "rtl8733bs-cc"
+	depends on BR2_LINUX_KERNEL
+	help
+	  R4 spike only: the RTL8733BS driver a second time, as 8733bs_cc.ko in /lib/modules/<krel>/extra, with
+	  concurrent mode (wlan0 station, wlan1 access point, one channel) and the AP ops on. Never loaded at
+	  boot (spike-wifi-cc swaps it in, with an automatic rollback). BT coexistence on (no MCC: the driver
+	  allows only one of the two, and without coex an AP starves classic Bluetooth).
+	  Same private source as rtl8733bs (/radio/src/work); 8733bs-cc-ap-mcc.patch is applied to the build copy only.

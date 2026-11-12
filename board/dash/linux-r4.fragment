@@ -1,0 +1,14 @@
+# R4 spike = R3 + the PCF8563 RTC (i2c0 0x51) and room in CMA for the video engine's buffers.
+# cedrus, the media controller (its request API is always built in 7.3.4: MEDIA_CONTROLLER_REQUEST_API is gone)
+# and V4L2 mem2mem come with the sunxi defconfig already; listed so the build checks them.
+CONFIG_RTC_DRV_PCF8563=y
+CONFIG_MEDIA_SUPPORT=y
+CONFIG_MEDIA_CONTROLLER=y
+CONFIG_V4L2_MEM2MEM_DEV=y
+CONFIG_STAGING_MEDIA=y
+CONFIG_VIDEO_SUNXI_CEDRUS=y
+# 16 MiB (sunxi default) holds the panel's framebuffer and little else; 720p decode needs ~10 MiB more, 1080p ~25
+CONFIG_CMA_SIZE_MBYTES=64
+# RFCOMM: Android Auto's wireless handshake and the Hands-Free profile both run over it; without it bluetoothd
+# cannot open the listener and publishes no SDP record, so the phone never sees either service.
+CONFIG_BT_RFCOMM=m

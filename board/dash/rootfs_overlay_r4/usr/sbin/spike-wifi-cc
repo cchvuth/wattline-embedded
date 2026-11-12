@@ -1,0 +1,143 @@
+#!/bin/sh
+# spike-wifi-cc: R4 spike. Swap the WiFi driver 8733bs -> 8733bs_cc (concurrent mode + MCC) with an automatic rollback,
+# then run a test access point on wlan1 beside the station on wlan0. Survives the SSH drop (detached, nohup'd).
+#   spike-wifi-cc            start (returns at once; follow /data/log/spike-wifi.log)
+#   spike-wifi-cc --restore  back to the product module now (also detached: the SSH session drops again)
+#   spike-wifi-cc --status   module, interfaces, AP, timer
+# Steps: rmmod 8733bs, insmod 8733bs_cc with the product's options (/etc/modprobe.d/8733bs.conf: EU channel plan 0x5E,
+# default TX power), rerun S45wifi-auto, wait up to 60 s for an IPv4 address on wlan0; none -> the product module back.
+# Then wlan1 = AP "dash-test" on 5 GHz channel 36 (WPA2-PSK, random passphrase in /run/spike-ap.txt, mode 600), udhcpd on
+# 192.168.77.1/24. After 15 minutes everything is torn down and the product module comes back, unless /run/spike-keep
+# exists. If the product module cannot bring wlan0 back, the Dash reboots (the boot loads the product module).
+LOG=/data/log/spike-wifi.log
+CC=/lib/modules/$(uname -r)/extra/8733bs_cc.ko
+OPTS=$(sed -n 's/^options 8733bs //p' /etc/modprobe.d/8733bs.conf)
+LOCK=/run/spike-wifi.lock
+KEEP_S=${SPIKE_KEEP_S:-900}	# seconds; the override is for the stub test (tools/spike-wifi-cc-test.sh)
+
+log() { echo "$(date -u '+%Y-%m-%d %H:%M:%S') $*"; }
+addr() { ip -4 addr show dev "$1" 2>/dev/null | sed -n 's/.*inet \([0-9./]*\).*/\1/p' | head -1; }
+wait_dev() { i=0; until [ -e /sys/class/net/$1 ] || [ $i -ge $2 ]; do sleep 1; i=$((i+1)); done; [ -e /sys/class/net/$1 ]; }
+wait_ip() { i=0; until [ -n "$(addr wlan0)" ] || [ $i -ge 60 ]; do sleep 1; i=$((i+1)); done; [ -n "$(addr wlan0)" ]; }
+loaded() { grep -q "^$1 " /proc/modules; }
+stop_net() {
+	[ -f /run/spike-hostapd.pid ] && kill $(cat /run/spike-hostapd.pid) 2>/dev/null
+	[ -f /run/spike-udhcpd.pid ] && kill $(cat /run/spike-udhcpd.pid) 2>/dev/null
+	rm -f /run/spike-hostapd.pid /run/spike-udhcpd.pid
+	killall -q wpa_cli udhcpc wpa_supplicant
+	sleep 2
+}
+
+# back to the boot state: the product module and S45wifi-auto; a reboot if that cannot bring wlan0 back
+product() {
+	stop_net
+	if loaded 8733bs_cc && ! rmmod 8733bs_cc; then log "RESTORE_FAIL: rmmod 8733bs_cc failed: rebooting"; sync; reboot; exit 1; fi
+	loaded 8733bs || modprobe 8733bs || log "RESTORE: modprobe 8733bs failed"
+	if ! wait_dev wlan0 20; then log "RESTORE_FAIL: no wlan0 from the product module: rebooting"; sync; reboot; exit 1; fi
+	/etc/init.d/S45wifi-auto start
+	if wait_ip; then log "RESTORE_OK: 8733bs, wlan0 $(addr wlan0)"
+	else log "RESTORE_OK: 8733bs back, but wlan0 has no address after 60 s (no known network in range?)"; fi
+	rm -f /run/spike-restore /run/spike-ap.txt /run/spike-hostapd.conf /run/spike-udhcpd.conf
+}
+
+swap() {
+	log "START: 8733bs -> 8733bs_cc (options: $OPTS); wlan0 was $(addr wlan0)"
+	[ -f "$CC" ] || { log "FAIL: $CC missing"; return 1; }
+	[ -n "$OPTS" ] || { log "FAIL: no options for 8733bs in /etc/modprobe.d/8733bs.conf"; return 1; }
+	stop_net
+	if ! rmmod 8733bs; then log "FAIL: rmmod 8733bs"; product; return 1; fi
+	if ! insmod "$CC" $OPTS; then log "FAIL: insmod 8733bs_cc"; product; return 1; fi
+	if ! wait_dev wlan0 20; then log "FAIL: no wlan0 from 8733bs_cc"; product; return 1; fi
+	/etc/init.d/S45wifi-auto start
+	if ! wait_ip; then log "FAIL: wlan0 got no IPv4 address within 60 s on 8733bs_cc: restoring"; product; return 1; fi
+	log "STA_OK: 8733bs_cc, wlan0 $(addr wlan0), $(iw dev wlan0 link | sed -n 's/^\s*freq: /freq /p') (SSID not logged)"
+	log "IFACES: $(ls /sys/class/net | tr '\n' ' ')"
+	return 0
+}
+
+ap() {
+	if ! wait_dev wlan1 10; then log "AP_FAIL: no wlan1 (concurrent mode not active in 8733bs_cc?)"; return 1; fi
+	umask 077
+	P=$(dd if=/dev/urandom bs=24 count=1 2>/dev/null | base64 | tr -d '/+=\n' | cut -c1-16)
+	printf 'SSID=dash-test\nPASSPHRASE=%s\n' "$P" > /run/spike-ap.txt
+	chmod 600 /run/spike-ap.txt
+	cat > /run/spike-hostapd.conf <<-EOC
+	interface=wlan1
+	driver=nl80211
+	ctrl_interface=/run/hostapd
+	ssid=dash-test
+	hw_mode=a
+	channel=36
+	ieee80211n=1
+	wmm_enabled=1
+	auth_algs=1
+	wpa=2
+	wpa_key_mgmt=WPA-PSK
+	rsn_pairwise=CCMP
+	wpa_passphrase=$P
+	EOC
+	if ! hostapd -B -t -P /run/spike-hostapd.pid -f /data/log/spike-hostapd.log /run/spike-hostapd.conf; then
+		log "AP_FAIL: hostapd did not start (/data/log/spike-hostapd.log)"; return 1
+	fi
+	i=0; until iw dev wlan1 info 2>/dev/null | grep -q 'type AP' || [ $i -ge 20 ]; do sleep 1; i=$((i+1)); done
+	log "WLAN1: $(iw dev wlan1 info 2>/dev/null | sed -n 's/^\s*\(type\|channel\) /\1 /p' | tr '\n' ' ')"
+	iw dev wlan1 info 2>/dev/null | grep -q 'type AP' || { log "AP_FAIL: wlan1 is not in AP mode after 20 s (/data/log/spike-hostapd.log)"; return 1; }
+	ip addr add 192.168.77.1/24 dev wlan1 2>/dev/null
+	cat > /run/spike-udhcpd.conf <<-EOC
+	interface wlan1
+	start 192.168.77.10
+	end 192.168.77.20
+	max_leases 10
+	lease_file /run/spike-udhcpd.leases
+	pidfile /run/spike-udhcpd.pid
+	option subnet 255.255.255.0
+	option lease 3600
+	EOC
+	touch /run/spike-udhcpd.leases
+	udhcpd /run/spike-udhcpd.conf || { log "AP_FAIL: udhcpd did not start"; return 1; }
+	log "AP_OK: dash-test on channel 36, 192.168.77.1/24, DHCP .10-.20 (passphrase: cat /run/spike-ap.txt)"
+}
+
+stats() {	# a line a minute: the station's traffic (the CAN stream rides on wlan0) and the AP's
+	R0=$(cat /sys/class/net/wlan0/statistics/rx_bytes 2>/dev/null || echo 0)
+	T0=$(cat /sys/class/net/wlan1/statistics/tx_bytes 2>/dev/null || echo 0)
+	sleep 60
+	R1=$(cat /sys/class/net/wlan0/statistics/rx_bytes 2>/dev/null || echo 0)
+	T1=$(cat /sys/class/net/wlan1/statistics/tx_bytes 2>/dev/null || echo 0)
+	log "STAT: wlan0 $(addr wlan0) rx $(( (R1 - R0) / 60 )) B/s; wlan1 tx $(( (T1 - T0) / 60 )) B/s, $(iw dev wlan1 station dump 2>/dev/null | grep -c '^Station') station(s)"
+}
+
+run() {
+	mkdir $LOCK 2>/dev/null || { log "already running ($LOCK)"; exit 1; }
+	trap 'rmdir $LOCK 2>/dev/null' EXIT
+	rm -f /run/spike-restore
+	if [ "$1" = restore ]; then product; exit 0; fi
+	swap || exit 1
+	ap
+	log "TIMER: back to the product module in $((KEEP_S / 60)) min unless /run/spike-keep exists (now: $([ -e /run/spike-keep ] && echo yes || echo no))"
+	t=0
+	while [ $t -lt $KEEP_S ] && [ ! -e /run/spike-restore ]; do stats; t=$((t + 60)); done
+	if [ ! -e /run/spike-restore ] && [ -e /run/spike-keep ]; then
+		log "KEEP: /run/spike-keep exists: staying on 8733bs_cc (spike-wifi-cc --restore to go back)"; exit 0
+	fi
+	log "ROLLBACK: $([ -e /run/spike-restore ] && echo 'asked (--restore)' || echo 'timer'): back to the product module"
+	product
+}
+
+case "$1" in
+--run) run "$2" ;;
+--restore)
+	touch /run/spike-restore
+	if [ -d $LOCK ]; then echo "spike-wifi-cc: the running test restores within a minute (log $LOG)"
+	else mkdir -p /data/log; setsid nohup "$0" --run restore >> $LOG 2>&1 < /dev/null & echo "spike-wifi-cc: restoring in the background (log $LOG)"; fi ;;
+--status)
+	echo "MODULE=$(grep -o '^8733bs[_a-z]* ' /proc/modules | tr -d ' ' | tr '\n' ' ')"
+	for i in wlan0 wlan1; do [ -e /sys/class/net/$i ] && echo "$(echo $i | tr a-z A-Z)=$(addr $i) $(iw dev $i info 2>/dev/null | sed -n 's/^\s*\(type\|channel\) /\1 /p' | tr '\n' ' ')"; done
+	echo "RUNNING=$([ -d $LOCK ] && echo yes || echo no) KEEP=$([ -e /run/spike-keep ] && echo yes || echo no)"
+	tail -n 5 $LOG 2>/dev/null ;;
+"")
+	mkdir -p /data/log
+	setsid nohup "$0" --run >> $LOG 2>&1 < /dev/null &
+	echo "spike-wifi-cc: started in the background; WiFi drops for up to ~90 s. Log: $LOG (spike-wifi-cc --status)" ;;
+*) echo "usage: spike-wifi-cc [--restore|--status]" >&2; exit 1 ;;
+esac

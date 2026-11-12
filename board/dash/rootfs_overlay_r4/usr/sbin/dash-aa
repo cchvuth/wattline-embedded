@@ -1,0 +1,44 @@
+#!/bin/sh
+# dash-aa start|stop : wireless Android Auto on demand, from the Dash's Network tab.
+# Brings up the 5 GHz AP, the RFCOMM + HFP profiles that hand the phone the AP creds,
+# and the receiver (TCP 5288 + TLS + video -> the decode/blit sink). Started only by the
+# on-screen button, so the Dash advertises AA only while the user wants it -- a phone set
+# to "start Android Auto if last used" won't latch onto us the rest of the time.
+#
+# The head-unit certificate is user-supplied at /etc/wattline/aa.{crt,key}; without it the
+# phone rejects the TLS handshake, so start refuses when it is missing (and the Network
+# tab hides the button). /run/dash-aa marks it running, for that button's on/off label.
+SSID=${SSID:-WattlineAA}
+PSK=${PSK:-wattline-aa}
+IP=${IP:-192.168.53.1}
+CERT=/etc/wattline/aa.crt
+MARK=/run/dash-aa
+
+stop() {
+	killall aa hostapd udhcpd 2>/dev/null
+	rm -f "$MARK" /run/dash-project   # drop the projection marker too, in case aa serve was killed mid-session
+	bluetoothctl -- discoverable off >/dev/null 2>&1 || true
+	# the AP held wlan0: if there is no second radio, hand it back to the station so home Wi-Fi (SSH/OTA) returns
+	ip link show wlan1 >/dev/null 2>&1 || /etc/init.d/S45wifi-auto restart >/dev/null 2>&1 &
+}
+
+case "$1" in
+start)
+	[ -f "$CERT" ] || { echo "dash-aa: no head-unit certificate at $CERT" >&2; exit 1; }
+	[ -f "$MARK" ] && exit 0   # already up
+	IFACE=wlan1; ip link show wlan1 >/dev/null 2>&1 || IFACE=wlan0
+	BSSID=$(cat /sys/class/net/"$IFACE"/address)
+	echo "dash-aa: AP on $IFACE ($BSSID) ssid=$SSID ip=$IP"
+	aa ap "$IFACE" "$SSID" "$PSK" "$IP"
+	bluetoothctl -- system-alias Wattline >/dev/null 2>&1 || true   # the name the phone sees (not the default BlueZ x.y)
+	bluetoothctl -- discoverable on >/dev/null 2>&1 || true
+	bluetoothctl -- pairable on     >/dev/null 2>&1 || true
+	aa bt "$IP" "$SSID" "$PSK" "$BSSID" &
+	aa serve &
+	: > "$MARK"
+	;;
+stop)
+	stop ;;
+*)
+	echo "usage: dash-aa start|stop" >&2; exit 2 ;;
+esac

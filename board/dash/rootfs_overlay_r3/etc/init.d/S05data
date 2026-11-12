@@ -1,6 +1,6 @@
 #!/bin/sh
 # R3: the card's partitions, found by device type (SD), never by name. p3 (ext4, writable, made once by dash-mkdata) on
-# /data after fsck -p; p2 (DASHDATA, FAT: dash.conf, wifi.txt, ssh/) read-only on /run/dashdata. No p3, or one fsck
+# /data after fsck -p; p2 (DASHDATA, FAT: dash.conf, ssh/) read-only on /run/dashdata. No p3, or one fsck
 # cannot fix: /data stays in RAM (lost at power-off) and everything still runs.
 case "$1" in start|"") ;; *) exit 0;; esac
 i=0; until grep -qx SD /sys/block/mmcblk[0-9]/device/type 2>/dev/null || [ $i -ge 10 ]; do sleep 1; i=$((i+1)); done
