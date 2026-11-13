@@ -27,6 +27,7 @@ typedef enum {
 } dash_ap_t;
 
 /* The links' buttons (widgets.dart _Controls). */
+#define DASH_NEARBY 6
 typedef enum { WIFI_IDLE, WIFI_OFF, WIFI_SCANNING, WIFI_JOINING, WIFI_HELLO, WIFI_LIVE, WIFI_QUIET, WIFI_AWAY, WIFI_RETRYING } dash_wifi_t;
 typedef enum {
 	BT_IDLE, BT_OFF, BT_NO_LOCATION, BT_SCANNING, BT_LINKING, BT_APPROVING, BT_REFUSED, BT_DASH, BT_PAUSED,
@@ -41,6 +42,16 @@ typedef struct {
 	dash_wifi_t wifi;
 	dash_bt_t bt;
 	int16_t speed_hz; /* speed frames a second on the settled WiFi button; -1: none */
+	/* A link's timer (a retry, a back-off, the hello's wait): whole seconds left, 0 none, and the seconds it started
+	 * from (the ring round the icon drains from full). Whole seconds: the ring is redrawn once a second at most. */
+	int16_t wifi_secs, wifi_span, bt_secs, bt_span;
+	char wifi_line[128];             /* the Network tab's status line (main.dart's connection page) */
+	char net_line[128];              /* the Network tab's: the joined network, its address, ssh */
+	char net_ssid[33];               /* the joined network's name, "" none (marks its row Connected) */
+	int8_t ssh;                      /* dropbear: -1 off, else the sessions open */
+	int8_t nearby_n;                 /* networks in range, strongest first (the Network tab's Nearby list) */
+	char nearby[DASH_NEARBY][33];
+	char bt_line[224];               /* the Commander tab's */
 
 	dash_car_t car;
 	bool rwd; /* a rear-motor car: the ring's right arc is the pedals */
@@ -54,6 +65,7 @@ typedef struct {
 	float regen_cap_kw;              /* NAN: none (parked, unknown) */
 	float speed_limit;               /* NAN: blank sign */
 	dash_ap_t ap;
+	char ap_word[12];                /* its words, on a long press: "TACC", "HOLD WHEEL" ... */
 	float cruise_set;                /* NAN: no cruise */
 	int8_t follow_gap;               /* -1: none */
 	bool washer_low;

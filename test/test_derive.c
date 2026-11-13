@@ -22,6 +22,7 @@ static struct {
   uint8_t filter[256];
   bool session, can, ack_hello, ack_commands;
   int acks_due, foreign, opens, removes, speed_frames, sent;
+  int64_t settle_until;
   bool (*drop)(const uint8_t *b, size_t n);
   const uint16_t *only; int n_only;      // the ids still on the bus, whatever the filter
   uint8_t data[2048][8];
@@ -48,6 +49,7 @@ static void k_send(void *ctx, const uint8_t *b, size_t n) {
   if (K.ack_commands) K.acks_due++;
 }
 static bool k_open(void *ctx) { (void)ctx; K.opens++; return true; }
+static int k_settle(void *ctx, int64_t t) { (void)ctx; return t < K.settle_until ? (int)(K.settle_until - t) : 0; }
 
 static void rec(uint8_t *b, uint16_t id, uint8_t bus, const uint8_t *d, uint8_t len) {
   memset(b, 0, 16);
@@ -87,7 +89,7 @@ static void fresh(void) {
   memset(&K, 0, sizeof K);
   K.can = true;
   car_init(&C);
-  link_init(&L, &C, (link_port_t){k_send, k_open, NULL, NULL}, now);
+  link_init(&L, &C, (link_port_t){k_send, k_open, NULL, NULL, NULL}, now);
 }
 
 #define BYTES(...) (const uint8_t[]){__VA_ARGS__}, (uint8_t)sizeof((const uint8_t[]){__VA_ARGS__})
@@ -634,7 +636,7 @@ static void s_send(void *ctx, const uint8_t *b, size_t n) { (void)ctx; if (S.n <
 static void test_subscribe_list(void) {
   memset(&S, 0, sizeof S);
   car_init(&C);
-  link_init(&L, &C, (link_port_t){s_send, NULL, NULL, NULL}, now);
+  link_init(&L, &C, (link_port_t){s_send, NULL, NULL, NULL, NULL}, now);
   link_connect(&L, now);
   CHECK(S.n == 4 && S.len[0] == 5 && S.len[1] == 1 && S.b[1][0] == 0x18);   // hello, clear, two lists
   CHECK(S.len[2] == 1 + 3 * 43 && S.len[3] == 1 + 3 * (kSubscribeCount - 43));
@@ -844,6 +846,31 @@ static void test_link(void) {
   CHECK(K.opens == 2);
   CHECK(K.session);
   link_disconnect(&L, now);
+
+  // the settle (main.dart): Bluetooth stepping aside holds the open back, without a backoff step
+  fresh();
+  L.port.settle = k_settle;
+  K.settle_until = now + 700;
+  link_connect(&L, now);
+  CHECK(K.opens == 0 && L.state == LINK_RETRYING && L.attempt == 0);
+  run(500);
+  CHECK(K.opens == 0);   // still within the settle
+  run(400);
+  CHECK(K.opens == 1 && K.session);   // then the hello, at once
+  link_disconnect(&L, now);
+
+  fresh();   // link_kick: a pending retry goes now (Bluetooth came ready); nothing pending, nothing happens
+  K.can = false;
+  link_connect(&L, now);
+  link_kick(&L, now);
+  CHECK(K.opens == 1);   // saying hello: not a retry
+  run(8100);
+  CHECK(L.state == LINK_RETRYING && K.opens == 1);
+  link_kick(&L, now);
+  CHECK(K.opens == 2 && L.state == LINK_HELLO && L.retry_at == NEVER);
+  link_disconnect(&L, now);
+  link_kick(&L, now);
+  CHECK(K.opens == 2 && L.state == LINK_IDLE);
 
   fresh();   // backoff: 1, 3, 6, 10, 10 s while nothing answers; the stream resets it
   K.can = false;

@@ -7,7 +7,7 @@
 LVGL := third_party/lvgl-9.6.0
 LVGL_SRC := $(shell find $(LVGL)/src -name '*.c')
 UI_SRC := ui/dash_ui.c ui/gen/assets.c ui/gen/roboto.c
-APP_SRC := app/dash.c app/conf.c app/bridge.c app/log.c app/bright.c app/actions.c app/pair.c app/settings.c app/record.c \
+APP_SRC := app/dash.c app/conf.c app/bridge.c app/log.c app/bright.c app/actions.c app/pair.c app/settings.c app/record.c app/wifi.c \
   core/panda.c core/derive.c core/sched.c core/cmdr_msg.c core/pb.c   # cmdr_msg: the actions' labels, every build
 APP_H := app/app.h app/actions.h app/pair.h app/settings.h app/record.h core/state.h core/sched.h core/panda.h core/cmdr_msg.h \
   ui/dash_state.h ui/dash_ui.h build/signals_gen.h

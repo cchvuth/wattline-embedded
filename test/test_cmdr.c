@@ -158,6 +158,8 @@ static const cmdr_io io = {0, f_adapter, f_scan, f_connect, f_rpc, f_notify, f_d
 
 static struct { int calls, nulls; size_t last; } data;
 static void on_data(void *x, const uint8_t *d, size_t n) { (void)x; data.calls++; data.nulls += !d; data.last = n; }
+static int said[8], nsaid;   // the states published from inside a dial (on_state)
+static void on_state(void *x) { if (nsaid < 8) said[nsaid++] = ((cmdr_t *)x)->state; }
 
 static int64_t now;
 static void run(cmdr_t *c, int64_t ms) { // the main loop, 50 ms steps
@@ -174,6 +176,9 @@ static void fresh(cmdr_t *c, int wifi_first) {
   cfg.pin_path = PIN_PATH;
   cfg.wifi_first = wifi_first;
   cfg.on_data = on_data;
+  cfg.on_state = on_state;
+  cfg.data_ctx = c;
+  nsaid = 0;
   now = 1000;
   cmdr_init(c, &cfg, &io);
 }
@@ -195,6 +200,7 @@ int main(void) {
   fresh(&c, 0);
   cmdr_connect(&c, now);
   CHECK(c.state == CS_READY && c.level == CMDR_FULL);
+  CHECK(nsaid == 2 && said[0] == CS_SCANNING && said[1] == CS_LINKING);   // said before the scan and the connect block
   CHECK(dev.last_dev_type == 1 && !dev.scan_had_pin);
   CHECK(dev.types[32] == 1 && dev.types[124] == 1 && dev.types[48] == 1 && dev.types[82] == 1);
   CHECK(dev.last_sub_fields == 45 && dev.notifies == 1);
@@ -454,6 +460,34 @@ int main(void) {
     CHECK(cmdr_press_guard(a, 1, 'P') == (a == ACT_MIRROR_TILT ? CMDR_E_GEAR : 0));
     CHECK(cmdr_press_guard(a, 0, 'R') == (cmdr_action_opens(a) ? CMDR_E_PARK : 0));
   }
+
+  // The owner's Approve tap while Bluetooth is stepped aside for WiFi (wifi_first): kept, and dialled with the ask
+  // once WiFi is live again, so the approval comes up (it was dropped: the tap did nothing).
+  fresh(&c, 1);
+  dev.approved = 0;
+  cmdr_connect(&c, now);
+  cmdr_step_aside(&c, now), cmdr_wifi(&c, 1, 0, now), run(&c, 2500);
+  CHECK(c.state == CS_REFUSED);           // the boot dial, never asked: parked
+  cmdr_wifi(&c, 0, 1, now), cmdr_step_aside(&c, now), run(&c, 1000);
+  cmdr_kick(&c, 1, now);                   // the tap, WiFi mid-try
+  CHECK(c.state == CS_PAUSED && c.asks == 1);
+  run(&c, 3000);
+  cmdr_resume(&c, now), cmdr_wifi(&c, 1, 0, now), run(&c, 5000);
+  CHECK(c.state == CS_APPROVING);
+
+  // The tap while the Commander is not seen (a phone holds it): the misses do not use the ask up, so once it is seen
+  // the approval is asked (it ended REFUSED with no prompt).
+  fresh(&c, 1);
+  dev.approved = 0;
+  cmdr_connect(&c, now);
+  cmdr_step_aside(&c, now), cmdr_wifi(&c, 1, 0, now), run(&c, 2500);
+  dev.advertising = 0;
+  cmdr_kick(&c, 1, now);
+  for (int i = 0; i < 4; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
+  CHECK(c.state == CS_AWAY && c.asks == 1);
+  dev.advertising = 1;
+  for (int i = 0; i < 40 && c.state != CS_APPROVING; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
+  CHECK(c.state == CS_APPROVING);
 
   remove(ID_PATH);
   remove(PIN_PATH);

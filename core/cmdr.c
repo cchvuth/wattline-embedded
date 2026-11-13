@@ -93,6 +93,11 @@ static int request(cmdr_t *c, const uint8_t *m, size_t n, uint64_t *status, uint
 // ---- session ----
 
 static void set(cmdr_t *c, cmdr_state s, const char *why) { c->state = s, c->why = why; }
+// Said at once (published from inside the dial): a scan and a connect block for up to 20 s between turns.
+static void dialling(cmdr_t *c, cmdr_state s, const char *why) {
+  set(c, s, why);
+  if (c->cfg.on_state) c->cfg.on_state(c->cfg.data_ctx);
+}
 
 static void clear_nav(cmdr_t *c) {
   c->has_dest = c->has_miles = c->has_minutes = c->has_arrive = c->has_recirc = 0;
@@ -214,6 +219,7 @@ static int open_link(cmdr_t *c, int64_t now, cmdr_state *kind, const char **why)
   int has_pin = load(c->cfg.pin_path, pin, sizeof pin);
   *kind = CS_RETRYING;
   if (!c->io.adapter_on(c->io.ctx)) return *kind = CS_OFF, *why = "bluetooth is off", -1;
+  dialling(c, CS_SCANNING, "looking for the Commander");
   if (c->io.scan(c->io.ctx, has_pin ? pin : NULL, c->addr)) {
     *kind = CS_AWAY;
     *why = has_pin ? "this car's Commander not advertising (car asleep? phone app on it?)"
@@ -221,6 +227,7 @@ static int open_link(cmdr_t *c, int64_t now, cmdr_state *kind, const char **why)
     return -1;
   }
   c->linked = 1; // held before connecting: a link nobody closes keeps the Commander from advertising
+  dialling(c, CS_LINKING, "connecting to the Commander");
   if ((c->has = c->io.connect(c->io.ctx, c->addr)) < 0) return *why = "connect failed", -1;
   if ((c->has & (CMDR_HAS_SESSION | CMDR_HAS_API)) != (CMDR_HAS_SESSION | CMDR_HAS_API))
     return *why = "unknown Commander firmware", -1;
@@ -276,13 +283,16 @@ static void dial(cmdr_t *c, int64_t now) {
     c->retry_at = now + WAIT_POLL_MS;
     return;
   }
+  int spent = 0;
   if (!c->asked && c->asks > 0) { // the retry of an owner's ask is asked too
     c->asked = 1;
     c->asks--;
+    spent = 1;
   }
   teardown(c);
   cmdr_state kind;
   int e = open_link(c, now, &kind, &why);
+  if (e < 0 && kind == CS_AWAY && spent) c->asks++;   // not seen: nothing was asked, the tap still stands
   if (e < 0) {
     teardown(c);
     schedule_retry(c, why, kind, now);
@@ -366,6 +376,11 @@ void cmdr_tick(cmdr_t *c, int64_t now) {
 }
 
 void cmdr_kick(cmdr_t *c, int ask, int64_t now) {
+  if (ask && c->paused && !ready(c)) {   // stepped aside for WiFi: the tap is kept, and dialled as WiFi lets go
+    c->asks = 1, c->parked = 0, c->attempt = 0, c->redial = 1;
+    set(c, CS_PAUSED, "waiting for the WiFi stream");
+    return;
+  }
   if (!c->on || ready(c)) return;
   if (ask) {
     c->asked = 1; // an approval already running counts as asked too

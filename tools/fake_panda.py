@@ -14,7 +14,10 @@ The clock starts at the first id list (0x0f) received. Every datagram received i
 listen-only gate (core/panda.c panda_out_ok); anything else counts as illegal. A summary line (JSON) is printed
 at exit (SIGINT/SIGTERM or --duration).
 
-usage: fake_panda.py [--bind 0.0.0.0] [--port 1338] [--duration s] [--once] [--quiet]
+--replay FILE.panda streams a drive the dash recorded (app/record.h: u32 ms, u16 length, the records) instead,
+with its original timing from the first id list, still only the subscribed ids; it stops at the end (--loop: again).
+
+usage: fake_panda.py [--bind 0.0.0.0] [--port 1338] [--duration s] [--once] [--quiet] [--replay FILE.panda [--loop]]
 """
 import argparse, json, os, re, select, signal, socket, struct, subprocess, sys, time
 
@@ -79,6 +82,16 @@ def record(cid, bus, data):
 
 
 ACK = record(6, 15, b'\0')
+
+
+def load_replay(path):   # [(s from the first datagram, datagram)]
+    b, out, o = open(path, 'rb').read(), [], 0
+    while o + 6 <= len(b):
+        ms, n = struct.unpack_from('<IH', b, o)
+        out.append((ms / 1000, b[o + 6:o + 6 + n]))
+        o += 6 + n
+    assert out, f'{path}: no datagrams'
+    return [(t - out[0][0], d) for t, d in out]
 
 
 def ramp(t, t0, t1, a, b):
@@ -159,6 +172,7 @@ class Panda:
         self.counts = dict(ehllo=0, clear=0, add=0, remove=0, illegal=0, acks=0, datagrams=0, frames=0)
         self.illegal = []
         self.sent_ids = {}
+        self.replay, self.loop, self.at, self.done = None, False, 0, False
 
     def frame(self, cid, values):
         pages = self.pages[cid]
@@ -180,7 +194,7 @@ class Panda:
 
     def silent(self, now):
         t = self.t(now)
-        return t is not None and SILENT[0] <= t % CYCLE < SILENT[1]
+        return self.replay is None and t is not None and SILENT[0] <= t % CYCLE < SILENT[1]
 
     def on_datagram(self, sock, d, addr, now):
         ok = out_ok(d)
@@ -216,9 +230,33 @@ class Panda:
         sock.sendto(ACK, addr)
         self.counts['acks'] += 1
 
+    def stream_replay(self, sock, now):
+        n = 0
+        while self.at < len(self.replay) and self.replay[self.at][0] <= now - self.t0:
+            d = self.replay[self.at][1]
+            self.at += 1
+            recs = [d[o:o + 16] for o in range(0, len(d) - 15, 16)
+                    if struct.unpack_from('<I', d, o)[0] >> 21 in self.subs]
+            for r in recs:
+                cid = struct.unpack_from('<I', r)[0] >> 21
+                self.sent_ids[cid] = self.sent_ids.get(cid, 0) + 1
+            if recs:
+                sock.sendto(b''.join(recs), self.client)
+                self.counts['datagrams'] += 1
+                n += len(recs)
+        if self.at == len(self.replay):
+            if self.loop:
+                self.at, self.t0 = 0, now
+            else:
+                self.done = True
+        self.counts['frames'] += n
+        return n
+
     def stream(self, sock, now):
         if self.client is None or self.t0 is None or self.silent(now):
             return 0
+        if self.replay is not None:
+            return self.stream_replay(sock, now)
         phase, values = scene(self.t(now) % CYCLE)
         recs = []
         for cid in sorted(self.subs):
@@ -242,8 +280,12 @@ def main():
     ap.add_argument('--duration', type=float, default=0, help='seconds, 0 = until Ctrl-C')
     ap.add_argument('--once', action='store_true', help='stop after one 60 s cycle (from the first id list)')
     ap.add_argument('--quiet', action='store_true')
+    ap.add_argument('--replay', metavar='FILE.panda', help='stream a recorded drive instead of the scripted one')
+    ap.add_argument('--loop', action='store_true', help='with --replay: start over at the end')
     a = ap.parse_args()
     p = Panda(load_signals(), a.quiet)
+    if a.replay:
+        p.replay, p.loop = load_replay(a.replay), a.loop
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((a.bind, a.port))
@@ -259,7 +301,7 @@ def main():
         now = time.monotonic()
         if a.duration and now - start >= a.duration:
             break
-        if a.once and p.t0 is not None and now - p.t0 >= CYCLE:
+        if p.done or (a.once and not a.replay and p.t0 is not None and now - p.t0 >= CYCLE):
             break
         r, _, _ = select.select([sock], [], [], max(0.0, next_tick - now))
         now = time.monotonic()
@@ -278,7 +320,11 @@ def main():
         if now >= next_line:
             next_line += 1
             t = p.t(now)
-            if t is not None:
+            if t is not None and p.replay is not None:
+                if not a.quiet:
+                    print(f't={t:5.1f} replay {p.at}/{len(p.replay)} datagrams | {len(p.subs):2} ids subscribed, '
+                          f'{frames_s:4} frames/s', flush=True)
+            elif t is not None:
                 phase, v = scene(t % CYCLE)
                 if p.silent(now):
                     phase = 'SILENT (link loss)'

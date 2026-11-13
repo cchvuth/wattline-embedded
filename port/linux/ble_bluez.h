@@ -35,20 +35,23 @@ enum {
   BLE_PAUSE,       // cmdr_pause; replied: result = 1 if a link was up or on its way
   BLE_RESUME,      // cmdr_resume
   BLE_DATA_HOLD,   // cmdr_data_hold(a = hold)
-  BLE_PRESS,       // cmdr_press(a = cmdr_action, b = parked, gear); replied: result = CMDR_OK / CMDR_E_*
+  BLE_PRESS,       // cmdr_press(a = cmdr_action, b = parked, gear); replied: result = CMDR_OK / CMDR_E_*, b = last_status
+  BLE_WIFI_FIRST,  // cfg.wifi_first = a (the settings' switch)
   BLE_DATA,        // reply only: one vehicle-data push (cfg.on_data); n 0 = the link dropped
 };
 typedef struct {
   int op, id;  // id is the app's own, echoed in the reply
   int a, b;
   char gear;
+  int64_t at;  // BLE_PRESS: when it was tapped (CLOCK_MONOTONIC ms); stale ones are dropped, never sent late
   int result;
   size_t n;
   uint8_t data[BLE_MAX];
 } ble_msg;
 typedef struct ble ble;
 
-// cfg->on_data is replaced: pushes come back as BLE_DATA replies on the app's thread.
+// cfg->on_data and on_state are replaced: pushes come back as BLE_DATA replies on the app's thread; a dial's state is
+// published as it moves.
 ble *ble_start(const cmdr_cfg *cfg, const char *adapter_path);  // e.g. "/org/bluez/hci0"; NULL: no system bus
 ble *ble_start_io(const cmdr_cfg *cfg, const cmdr_io *io);      // any transport (tests)
 int ble_fd(ble *b);                       // POLLIN: replies waiting

@@ -9,6 +9,9 @@ test:
 	$(CC) $(HOSTFLAGS) -Ibuild -o build/test_bright test/test_bright.c app/bright.c app/conf.c core/derive.c core/sched.c core/panda.c -lm && build/test_bright
 	$(CC) $(HOSTFLAGS) -DLV_CONF_INCLUDE_SIMPLE -Iport/sim -Ithird_party/lvgl-9.6.0 -Ithird_party/lvgl-9.6.0/src -Ibuild \
 	  -o build/test_settings test/test_settings.c app/settings.c app/conf.c core/derive.c core/sched.c core/panda.c -lm && build/test_settings
+	$(CC) $(HOSTFLAGS) -Ibuild -o build/test_wifi test/test_wifi.c app/wifi.c && build/test_wifi
+	$(CC) $(HOSTFLAGS) -std=gnu11 -DACTIONS_SELFTEST -DDASH_CMDR=1 -DLV_CONF_INCLUDE_SIMPLE -Iport/sim -Ithird_party/lvgl-9.6.0 \
+	  -Ithird_party/lvgl-9.6.0/src -Ibuild -o build/actions_check app/actions.c app/pair.c app/wifi.c core/cmdr_msg.c core/pb.c && build/actions_check
 	cd test && $(CC) $(HOSTFLAGS) -DAES256=1 -I../third_party -o ../build/test_sec1 sec1_crypto_check.c ../third_party/aes.c ../third_party/monocypher.c && ../build/test_sec1
 
 .PHONY: test

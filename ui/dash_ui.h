@@ -15,8 +15,8 @@ typedef void (*dash_action_cb)(int action, void *ctx);
 void dash_ui_set_action_cb(dash_action_cb cb, void *ctx);
 
 /* The settings screen (the link icons open it). Passphrases go only one way: typed here, handed to the callback,
- * never shown; a network with pass "" keeps the one it has. S3XY_OBD (the car's Commander) is built in and not in
- * the list. */
+ * never shown; a network with pass "" keeps the one it has. The car's adapter (S3XY_OBD at first) is an ordinary
+ * entry, kept first in the list by settings.c. */
 #define DASH_NETS 4
 typedef struct {
 	char ssid[33];
@@ -26,15 +26,31 @@ typedef struct {
 	bool minor_figures, hour12;
 	int brightness_pct;       /* 5..100: the manual value */
 	bool follow_car;          /* follow the car screen's brightness (0x273); moving the slider turns it off */
+	int follow_offset;        /* -50..50: % points added to the followed brightness ("Follow offset") */
 	int net_count;
 	dash_net_t net[DASH_NETS];
 	bool dev_ssh;             /* developer SSH: needs an authorized key on the card */
 	bool record;              /* record drive data (CAN and Commander pushes) to /data/rec, for bench replays */
+	int car;                  /* CAR_* (core/state.h): the body, seats and drive, as the phone app's picker */
+	bool sparse;              /* sparse polling: steadier speed, slower doors and belts */
+	bool wifi_first;          /* Bluetooth waits for the WiFi stream, no time limit */
+	char tz[64];              /* POSIX TZ for the clocks (arrival, charge done) */
+	char panda_host[64];      /* the Commander's Panda interface (WiFi CAN) */
+	int panda_port;
+	char join[33];            /* not saved: join this network now (it goes first; the rest stay as fallback), "" none */
 } dash_settings_t;
-enum { DASH_SETTINGS_SAVE, DASH_CMDR_APPROVE, DASH_CMDR_FORGET, DASH_PAIR_START, DASH_PAIR_CANCEL };
+enum { DASH_SETTINGS_SAVE, DASH_CMDR_APPROVE, DASH_CMDR_FORGET, DASH_PAIR_START, DASH_PAIR_CANCEL,
+       DASH_SETTINGS_OPEN /* the screen shown: the app may hand fresher values back (SSH turned on by pairing) */,
+       DASH_NET_SCAN /* the Network tab shown: a fresh scan for its Nearby list */,
+       DASH_AA_START, DASH_AA_STOP /* the on-screen button: bring wireless Android Auto up / tear it down */ };
 typedef void (*dash_settings_cb)(int what, const dash_settings_t *s, void *ctx);
 void dash_ui_set_settings_cb(dash_settings_cb cb, void *ctx);
 void dash_ui_settings(const dash_settings_t *s); /* the saved values, as the screen should show them */
+void dash_ui_settings_tab(int i);                 /* 0 Commander, 1 Car, 2 Display, 3 Network, 4 Advanced */
+void dash_ui_ask_car(void);                       /* first boot: the Car tab, "Which car do you have?" over it */
 
-enum { DASH_VIEW_DASH, DASH_VIEW_CAR_PANEL, DASH_VIEW_SETTINGS, DASH_VIEW_NETWORK, DASH_VIEW_PAIR };
+enum { DASH_VIEW_DASH, DASH_VIEW_CAR_PANEL, DASH_VIEW_SETTINGS, DASH_VIEW_NETWORK, DASH_VIEW_PAIR, DASH_VIEW_PROJECT };
+/* The phone map (Android Auto) takes the left 2/3; the dash shrinks to a strip on the right. The left region is where
+ * decoded video is drawn; project_region() gives its pixel rect so the video layer can blit straight to the framebuffer. */
+void dash_ui_project_region(int *x, int *y, int *w, int *h);
 void dash_ui_show(int view); /* also opened and closed by touch */

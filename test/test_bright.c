@@ -67,7 +67,11 @@ int main(void) {
   brightness(160);                                // a level set by hand stops following until re-enabled
   bright_manual(&B, 70);
   step(0);
-  CHECK(step(300) == 70 && B.src == BRIGHT_LAMPS);
+  CHECK(step(300) == 70 && B.src == BRIGHT_MANUAL);
+  C.wifi_live = false;                            // set by hand: held even with no car data, not dimmed to idle
+  step(0);
+  CHECK(step(300) == 70 && B.src == BRIGHT_MANUAL);
+  C.wifi_live = true;
   bright_follow(&B);
   step(0);
   CHECK(step(300) == 80 && B.src == BRIGHT_CAR);

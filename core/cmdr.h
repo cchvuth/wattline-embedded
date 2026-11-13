@@ -50,6 +50,7 @@ typedef struct {
   int lean_for_ms;  // after WiFi went, a fresh session stays lean this long
   void (*on_data)(void *ctx, const uint8_t *data, size_t n);  // each vehicle-data push; NULL when the link drops
   void *data_ctx;
+  void (*on_state)(void *ctx);  // the state moved inside a dial, before a blocking call (data_ctx); NULL: none
 } cmdr_cfg;
 extern const cmdr_cfg cmdr_cfg_default;
 
@@ -61,6 +62,8 @@ typedef enum {
   CS_RETRYING,   // a dial failed: backoff 2, 5, 10, 20, 30 s
   CS_APPROVING,  // linked, polling SendUUID: double-press the right scroll wheel
   CS_REFUSED,    // not approved: parked until a tap
+  CS_SCANNING,   // dialling: looking for the Commander (up to 5 s)
+  CS_LINKING,    // dialling: connecting and the handshake (up to 15 s)
   CS_READY,
 } cmdr_state;
 enum { CMDR_NONE, CMDR_LEAN, CMDR_FULL };  // what a session subscribes to

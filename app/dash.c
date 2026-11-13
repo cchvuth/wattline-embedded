@@ -28,6 +28,8 @@ int dash_bl_pct = -1;
 static volatile sig_atomic_t stop;
 static void on_sig(int s) { (void)s; stop = 1; }
 
+void (*app_stopping)(void);
+
 int64_t mono_ms(void) {
   struct timespec t;
   clock_gettime(CLOCK_MONOTONIC, &t);
@@ -48,24 +50,49 @@ typedef struct {
   int64_t last;        // the latest time handed to the link: arrival stamps never go back past it
   unsigned sent[4];    // ehllo, 0x18, 0x0f, 0x0e
   bool clock_done, bl_err;
+  int64_t aside_until;  // Bluetooth asked to step aside: the hello waits until then (its settle, from the reply)
+  bool aside_asked;
+  char host[64];       // the Panda's address, from the settings (dash.conf's until set there)
+  int port;
   int bl_max;
   bright_t bright;
 } dash_t;
 
 // ---- the link's port: one connected UDP socket per attempt, as the app's RawDatagramSocket ----
+// Before each attempt Bluetooth steps aside, and the hello waits its settle (main.dart: Bluetooth first, then the WiFi
+// stream, took the Commander down). Asked once an attempt; the reply (cmdr_hook_sync) sets how long; 400 ms meanwhile.
+static int p_settle(void *x, int64_t now) {
+#ifdef DASH_CMDR
+  dash_t *d = x;
+  const char *w;
+  if (!d->aside_asked && wifi_join(now, &w) >= 0) return 0;   // not joined: no stream to make way for (the open fails on
+                                                              // no route); stepping aside here only kept Bluetooth down
+  if (!d->aside_asked) {
+    d->aside_asked = true;
+    d->aside_until = now + 400;
+    cmdr_hook_step_aside();
+  }
+  int64_t s = cmdr_hook_settle_until();
+  if (s > d->aside_until) d->aside_until = s;
+  if (now < d->aside_until) return (int)(d->aside_until - now);
+  if (cmdr_hook_aside_pending(now)) return 200;   // Bluetooth still mid-dial (up to 20 s): its answer, then the settle
+  d->aside_asked = false;   // the next attempt asks again
+#else
+  (void)x, (void)now;
+#endif
+  return 0;
+}
+
 static bool p_open(void *x) {
   dash_t *d = x;
   if (d->fd >= 0) close(d->fd), d->fd = -1;
   memset(d->seen, 0, sizeof d->seen);
   d->clock_done = false;
-#ifdef DASH_CMDR
-  cmdr_hook_step_aside();   // Bluetooth steps aside before the hello (ponytail: the hello does not wait out its settle)
-#endif
-  struct addrinfo hint = {.ai_family = AF_INET, .ai_socktype = SOCK_DGRAM}, *ai;
+  struct addrinfo hint = {.ai_family = AF_INET, .ai_socktype = SOCK_DGRAM, .ai_flags = AI_NUMERICHOST}, *ai;   // never DNS
   char port[8];
-  snprintf(port, sizeof port, "%d", d->cf->panda_port);
-  int e = getaddrinfo(d->cf->panda_host, port, &hint, &ai);
-  if (e) { log_msg("panda %s: %s", d->cf->panda_host, gai_strerror(e)); return false; }
+  snprintf(port, sizeof port, "%d", d->port);
+  int e = getaddrinfo(d->host, port, &hint, &ai);
+  if (e) { log_msg("panda %s: %s", d->host, gai_strerror(e)); return false; }
   int fd = socket(AF_INET, SOCK_DGRAM, 0), one = 1, buf = 256 * 1024;
   if (fd >= 0) {
     fcntl(fd, F_SETFL, O_NONBLOCK);
@@ -73,7 +100,7 @@ static bool p_open(void *x) {
     setsockopt(fd, SOL_SOCKET, SO_TIMESTAMP, &one, sizeof one);
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buf, sizeof buf);
     if (connect(fd, ai->ai_addr, ai->ai_addrlen)) {   // no route yet: WiFi not joined
-      log_msg("panda %s:%d: %s", d->cf->panda_host, d->cf->panda_port, strerror(errno));
+      log_msg("panda %s:%d: %s", d->host, d->port, strerror(errno));
       close(fd);
       fd = -1;
     }
@@ -134,14 +161,17 @@ static void drain(dash_t *d, int64_t now) {
 }
 
 // ---- the clock: CAN 0x318 (UTC, 1 s steps) carried on by the monotonic clock ----
+// The car's clock (0x318), run on from when it was read; without one, the Dash's own clock once it is valid (set from
+// the car earlier this boot, or otherwise past 2025): Bluetooth alone brings no car clock.
 static int64_t utc_now(const car_t *c, int64_t now) {
-  if (c->utc.at == NEVER) return -1;
+  if (c->utc.at == NEVER) { int64_t r = real_us() / 1000; return r > 1735689600000LL ? r : -1; }
   struct tm tm = {.tm_year = c->utc.year - 1900, .tm_mon = c->utc.month - 1, .tm_mday = c->utc.day,
                   .tm_hour = c->utc.hour, .tm_min = c->utc.minute, .tm_sec = c->utc.second};
   return (int64_t)timegm(&tm) * 1000 + (now - c->utc.at);
 }
 
 static void clock_check(dash_t *d, int64_t now) {   // once per link: logs carry real dates (no NTP on S3XY_OBD)
+  if (d->car.utc.at == NEVER) return;   // only the car's own clock sets the Dash's, never the Dash's fallback
   int64_t utc = utc_now(&d->car, now);
   if (!d->cf->set_clock || d->clock_done || utc < 0) return;
   d->clock_done = true;
@@ -176,9 +206,25 @@ static void backlight(dash_t *d, int64_t now, int64_t idle) {
 }
 
 // The settings screen's brightness: following the car, or the slider's level (until the switch is on again).
-static void apply_settings(dash_t *d) {
+static bool started;   // the car and the link set up: the settings' car and polling can be applied to them
+static void apply_settings(dash_t *d, int64_t now) {
   if (app_settings.follow_car) bright_follow(&d->bright);
   else bright_manual(&d->bright, app_settings.brightness_pct);
+  d->bright.offset = app_settings.follow_offset;   // the settings' "Follow offset", applied when following
+  settings_apply_tz(app_settings.tz);   // the clocks follow at the next frame
+  bool moved = strcmp(d->host, app_settings.panda_host) || d->port != app_settings.panda_port;
+  snprintf(d->host, sizeof d->host, "%s", app_settings.panda_host);
+  d->port = app_settings.panda_port;
+  if (!started) return;
+  if (moved) {   // a new Panda address: the link starts over on it
+    log_msg("panda now %s:%d", d->host, d->port);
+    link_connect(&d->link, now);
+  }
+  if (d->car.car != &kCars[app_settings.car]) car_set_type(&d->car, app_settings.car);   // the picker: at once
+  link_set_sparse(&d->link, app_settings.sparse);
+#ifdef DASH_CMDR
+  cmdr_hook_wifi_first(app_settings.wifi_first);
+#endif
 }
 
 static const char *link_word(const link_t *l) { return l->state == LINK_LIVE ? "live" : l->why; }   // live: no _set
@@ -208,15 +254,14 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
   sigaction(SIGINT, &sa, NULL);
   sigaction(SIGTERM, &sa, NULL);
   signal(SIGPIPE, SIG_IGN);
-  setenv("TZ", cf->tz, 1);
-  tzset();
 
   int64_t now = mono_ms(), start = now;
   d->last = now;
   bright_init(&d->bright, cf, now);
   settings_load(&app_settings, cf);
-  apply_settings(d);
+  apply_settings(d, now);   // the time zone too (dash.conf's until set in the settings)
   if (ui->show_settings) ui->show_settings(ui->ctx);
+  if (!settings_car_saved && ui->ask_car) ui->ask_car(ui->ctx);   // first boot: which car (main.dart _askCar)
   car_init(&d->car);
   d->car.cfg.gear_fresh_ms = cf->gear_fresh_ms;
   d->car.cfg.grip_hold_ms = cf->grip_hold_ms;
@@ -224,22 +269,29 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
   d->car.cfg.yaw_steer_ms = cf->yaw_steer_ms;
   d->car.cfg.bt_motor_bad_ms = cf->bt_motor_bad_ms;
   d->car.cfg.bright_stale_ms = cf->bright_stale_ms;
-  car_set_type(&d->car, cf->car);
+  car_set_type(&d->car, app_settings.car);   // the settings' (dash.conf's until set there)
   d->car.kph = cf->kph;
-  link_init(&d->link, &d->car, (link_port_t){p_send, p_open, p_close, d}, now);
+  double tp[4];   // the last pressures: shown until the car sends new ones (only on the move)
+  settings_tyres_load(tp);
+  d->car.tp_fl = tp[0], d->car.tp_fr = tp[1], d->car.tp_rl = tp[2], d->car.tp_rr = tp[3];
+  link_init(&d->link, &d->car, (link_port_t){p_send, p_open, p_close, d, p_settle}, now);
   d->link.cfg = cf->link;
-  link_set_sparse(&d->link, cf->sparse);
-  log_msg("start: panda %s:%d, car %s, tz %s", cf->panda_host, cf->panda_port, kCars[cf->car].id, cf->tz);
+  link_set_sparse(&d->link, app_settings.sparse);
+  log_msg("start: panda %s:%d, car %s, tz %s", d->host, d->port, kCars[app_settings.car].id, app_settings.tz);
   link_connect(&d->link, now);
   bt_view_t bt;
   bt_view_none(&bt);
 #ifdef DASH_CMDR
-  cmdr_hook_start(cf);
+  cmdr_hook_start(cf, app_settings.wifi_first);
 #endif
+  started = true;
 
   int64_t next_frame = now, next_stat = now + 10000;
   link_state_t was = (link_state_t)-1;
   const char *why = NULL;
+#ifdef DASH_CMDR
+  bool was_ready = false;
+#endif
   dash_state_t s;
   while (!stop && (!run_ms || now - start < run_ms)) {
     int64_t wait = next_frame - now;
@@ -253,15 +305,25 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
     if (now > d->last) d->last = now;
     link_poll(&d->link, now);
     pair_handle(now);   // the SSH pairing window's server, while it is open
+    if (app_settings_refresh) {   // the settings screen opened: SSH may have come on since (the pairing turns it on)
+      app_settings_refresh = false;
+      bool was = app_settings.dev_ssh;
+      settings_refresh(&app_settings);
+      if (app_settings.dev_ssh != was && ui->show_settings) ui->show_settings(ui->ctx);
+    }
     if (app_settings_dirty) {   // the settings screen's save (taken in the last frame's touch handling)
       app_settings_dirty = false;
       settings_save(&app_settings);
-      apply_settings(d);
+      apply_settings(d, now);
     }
     record_sync(app_settings.record, cf, now);   // the switch takes effect here, at once
 #ifdef DASH_CMDR
     cmdr_hook_sync(&d->car, &d->link, &bt, now);
+    bool bt_ready = bt.link == BT_BUTTONS || bt.link == BT_LEAN || bt.link == BT_FULL;
+    if (bt_ready && !was_ready) link_kick(&d->link, now);   // it still scans: no WiFi with ScanMyTesla off (main.dart)
+    was_ready = bt_ready;
 #endif
+    settings_tyres_keep((double[4]){d->car.tp_fl, d->car.tp_fr, d->car.tp_rl, d->car.tp_rr}, now, false);
     if (d->link.state != was || d->link.why != why) {
       log_msg("wifi: %s", link_word(&d->link));
       was = d->link.state, why = d->link.why;
@@ -271,6 +333,12 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
       if (next_frame <= now) next_frame = now + cf->frame_ms;   // a long frame: no catching up
       clock_check(d, now);
       bridge_in_t in = {d->seen, utc_now(&d->car, now), app_settings.minor_figures, app_settings.hour12};
+      in.wifi_join = wifi_join(now, &in.join_why);
+      in.net_line = wifi_net_line();
+      in.ssid = wifi_ssid();
+      in.nearby_n = wifi_nearby(&in.nearby);
+      in.ssh = wifi_ssh();
+      in.host = d->host, in.port = d->port;
       bridge_fill(&s, &d->car, &d->link, &bt, &in, now);
       app_actions_fill(&s, now);   // the press out and the snackbar's line
       ui->set(&s, ui->ctx);
@@ -283,6 +351,8 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
     }
   }
   stats(d);
+  settings_tyres_keep((double[4]){d->car.tp_fl, d->car.tp_fr, d->car.tp_rl, d->car.tp_rr}, now, true);
+  if (app_stopping) app_stopping();   // the watchdog disarmed first: the Bluetooth thread's join can outlast it
   record_sync(false, cf, now);   // flushed and closed
 #ifdef DASH_CMDR
   cmdr_hook_stop();

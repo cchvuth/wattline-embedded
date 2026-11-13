@@ -8,6 +8,9 @@
 
 void bt_view_none(bt_view_t *b) {
   b->link = BT_IDLE;
+  b->why = "off", b->push_info = b->car_link = "";
+  b->push_count = 0;
+  b->until = -1;
   b->dest = NULL;
   b->nav_minutes = b->nav_miles = b->nav_arrive_pct = NAN;
   b->recirc_mode = -1;
@@ -28,22 +31,29 @@ static void clock_in(char *out, size_t n, const bridge_in_t *in, double seconds)
   else snprintf(out, n, "%02d:%02d", tm.tm_hour, tm.tm_min);
 }
 
-// main.dart _autopilot.
-static dash_ap_t ap_of(const car_t *c, bool live) {
+// main.dart _autopilot, and its words (the long press).
+static dash_ap_t ap_of(const car_t *c, bool live, const char **word) {
   switch (live ? c->hands_on : -1) {
-  case 3: return AP_HOLD;
-  case 4: case 5: case 9: case 10: return AP_HOLD_RED;
-  case 6: return AP_SLOWING;
-  case 7: return AP_LOCKED;
+  case 3: return *word = "HOLD WHEEL", AP_HOLD;
+  case 4: case 5: case 9: case 10: return *word = "HOLD WHEEL", AP_HOLD_RED;
+  case 6: return *word = "SLOWING", AP_SLOWING;
+  case 7: return *word = "AP LOCKED", AP_LOCKED;
   }
-  const char *a = c->autopilot;
-  if (a && !strcmp(a, "AP READY") && !isnan(c->cruise_set)) return AP_TACC;   // on WiFi: ready with cruise holding
+  const char *a = *word = c->autopilot;
+  if (a && !strcmp(a, "AP READY") && !isnan(c->cruise_set)) return *word = "TACC", AP_TACC;   // on WiFi: ready with cruise holding
   if (!a) return AP_NONE;
   if (!strcmp(a, "TACC")) return AP_TACC;
   if (!strcmp(a, "AUTOPILOT") || !strcmp(a, "NAV ON AP") || !strcmp(a, "FSD")) return AP_STEERING;
-  if (!strcmp(a, "AP ENDING")) return AP_TAKEOVER;
+  if (!strcmp(a, "AP ENDING")) return *word = "TAKE OVER", AP_TAKEOVER;
   if (!strcmp(a, "AP FAULT")) return AP_FAULT;
   return AP_READY;   // ready, or just ended
+}
+
+// A link's timer in whole seconds (the ring's steps), and the seconds it started from: a new deadline starts full.
+static void countdown(int64_t until, int64_t now, int64_t *last, int64_t *from, int16_t *secs, int16_t *span) {
+  if (until != *last) *last = until, *from = now;
+  *secs = until > now ? (int16_t)((until - now + 999) / 1000) : 0;
+  *span = *secs ? (int16_t)((until - *from + 999) / 1000) : 0;
 }
 
 static dash_wifi_t wifi_of(const link_t *l) {
@@ -88,9 +98,28 @@ void bridge_fill(dash_state_t *s, const car_t *c, const link_t *l, const bt_view
   bool live = car_live(c), wl = c->wifi_live;
   s->live = live;
   s->wifi_live = wl;
-  s->wifi = wifi_of(l);
+  bool join = in->wifi_join >= 0 && l->state != LINK_LIVE;   // not joined yet: no link to speak of
+  s->wifi = join ? (dash_wifi_t)in->wifi_join : wifi_of(l);
   s->bt = bt->link;
   s->speed_hz = l->state == LINK_LIVE && l->speed_known ? l->speed_hz : -1;
+  static int64_t wl_last = -2, wl_from, bl_last = -2, bl_from;
+  countdown(join || l->until == NEVER ? -1 : l->until, now, &wl_last, &wl_from, &s->wifi_secs, &s->wifi_span);
+  countdown(bt->until, now, &bl_last, &bl_from, &s->bt_secs, &s->bt_span);
+  // The settings' status lines (main.dart's connection page).
+  if (l->state == LINK_LIVE)
+    snprintf(s->wifi_line, sizeof s->wifi_line, "Status: live, %d speed frames/s, %d frames/s in all, from %s:%d",
+             l->speed_hz, l->frame_hz, in->host ? in->host : "?", in->port);
+  else snprintf(s->wifi_line, sizeof s->wifi_line, "Status: %s", join ? in->join_why : l->why ? l->why : "");
+  text(s->net_line, sizeof s->net_line, in->net_line);
+  text(s->net_ssid, sizeof s->net_ssid, in->ssid);
+  s->ssh = (int8_t)(in->ssh > 99 ? 99 : in->ssh);
+  s->nearby_n = (int8_t)(in->nearby && in->nearby_n > 0 ? (in->nearby_n < DASH_NEARBY ? in->nearby_n : DASH_NEARBY) : 0);
+  for (int i = 0; i < s->nearby_n; i++) text(s->nearby[i], sizeof s->nearby[i], in->nearby[i]);
+  bool ready = bt->link == BT_BUTTONS || bt->link == BT_LEAN || bt->link == BT_FULL;
+  if (ready)
+    snprintf(s->bt_line, sizeof s->bt_line, "Bluetooth: connected. Car data: %s, %u pushes. Car link: %s.", bt->push_info,
+             bt->push_count, bt->car_link);
+  else snprintf(s->bt_line, sizeof s->bt_line, "Bluetooth: %s", bt->why ? bt->why : "");
   int t = (int)(c->car - kCars);
   s->car = t == CAR_Y7 ? DASH_CAR_Y7 : t == CAR_YL ? DASH_CAR_YL : t == CAR_Y5 || t == CAR_Y5_RWD ? DASH_CAR_Y5 : DASH_CAR_3;
   s->rwd = c->car->rwd;
@@ -108,7 +137,9 @@ void bridge_fill(dash_state_t *s, const car_t *c, const link_t *l, const bt_view
   s->steer_deg = s->steer_lines ? (float)c->steer_deg : 0;
   s->regen_cap_kw = live && c->gear != 'P' ? c->regen_max_kw : NAN;   // no regen parked
   s->speed_limit = live ? c->speed_limit : NAN;
-  s->ap = ap_of(c, live);
+  const char *word = NULL;
+  s->ap = ap_of(c, live, &word);
+  text(s->ap_word, sizeof s->ap_word, word);
   s->cruise_set = c->cruise_set;
   s->follow_gap = (int8_t)c->follow_gap;
   s->washer_low = c->washer_low;

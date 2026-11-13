@@ -4,6 +4,7 @@
 // With a writable /data (R3: the card's p3, else RAM) the log and the Commander's files default to it.
 // The hardware watchdog (watchdog = 1) is petted each frame: a hung loop reboots the board; a clean exit disarms it.
 #include "app.h"
+#include "settings.h"
 #include "actions.h"
 #include "lvgl.h"
 #include "../ui/dash_ui.h"
@@ -26,6 +27,13 @@ static uint32_t frame(void *ctx) {
 }
 static int64_t idle(void *ctx) { (void)ctx; return lv_display_get_inactive_time(NULL); }
 static void show_settings(void *ctx) { (void)ctx; dash_ui_settings(&app_settings); }
+static void ask_car(void *ctx) { (void)ctx; dash_ui_ask_car(); }
+
+static void watchdog_off(void) {   // the magic close: a clean stop does not reboot
+  if (wd >= 0 && write(wd, "V", 1) == 1) log_msg("watchdog disarmed");
+  if (wd >= 0) close(wd);
+  wd = -1;
+}
 
 int main(int argc, char **argv) {
   const char *path = argc > 2 && !strcmp(argv[1], "-c") ? argv[2] : "/run/dashdata/dash.conf";
@@ -66,9 +74,9 @@ int main(int argc, char **argv) {
   dash_ui_set_action_cb(app_on_action, NULL);       // taps -> one Commander press (actions.c)
   dash_ui_set_settings_cb(app_on_settings, NULL);   // the settings screen -> actions.c, saved by dash.c (settings.c)
 
-  ui_hooks_t ui = {set, frame, idle, NULL, show_settings};
+  ui_hooks_t ui = {set, frame, idle, NULL, show_settings, ask_car};
+  app_stopping = watchdog_off;
   int rc = dash_run(&cf, &ui, 0);
-  if (wd >= 0 && write(wd, "V", 1) == 1) log_msg("watchdog disarmed");   // the magic close: a clean stop does not reboot
-  if (wd >= 0) close(wd);
+  watchdog_off();
   return rc;
 }

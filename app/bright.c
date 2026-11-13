@@ -5,11 +5,12 @@
 #include <math.h>
 #include <string.h>
 
-static const char *const kSrc[] = {"follows the car's screen", "day/night from the lamps", "idle: no car data", "away: off"};
+static const char *const kSrc[] = {"follows the car's screen", "day/night from the lamps", "idle: no car data", "away: off", "set by hand"};
 
 void bright_init(bright_t *b, const conf_t *cf, int64_t now) {
   memset(b, 0, sizeof *b);
   b->follow = cf->bright_follow_car;
+  b->offset = 0;   // the settings' "Follow offset" bias, on top of dash.conf's bright_follow_offset
   b->manual = -1;
   b->src = -1;
   b->live_at = now;
@@ -28,8 +29,9 @@ int bright_step(bright_t *b, const conf_t *cf, const car_t *c, int64_t now, int6
   }
   double car = car_display_brightness(c, now), t;
   int src;
-  if (live && b->follow && !isnan(car)) t = car * cf->bright_follow_scale + cf->bright_follow_offset, src = BRIGHT_CAR;
-  else if (live) t = b->manual >= 0 ? b->manual : b->night ? cf->bright_night : cf->bright_day, src = BRIGHT_LAMPS;
+  if (live && b->follow && !isnan(car)) t = car * cf->bright_follow_scale + cf->bright_follow_offset + b->offset, src = BRIGHT_CAR;
+  else if (b->manual >= 0) t = b->manual, src = BRIGHT_MANUAL;   // a level set by hand: held with or without car data
+  else if (live) t = b->night ? cf->bright_night : cf->bright_day, src = BRIGHT_LAMPS;
   else t = cf->bright_idle, src = BRIGHT_IDLE;
   t = t < cf->bright_min ? cf->bright_min : t > cf->bright_max ? cf->bright_max : t;
   int64_t away = (int64_t)cf->away_min * 60000;

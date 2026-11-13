@@ -386,12 +386,14 @@ static void reply(ble *b, const ble_msg *m) {
 }
 
 static void on_data(void *u, const uint8_t *d, size_t n) {
+  if (d && !n) return;   // an empty push (its one field back to 0, left out by proto3): not a dropped link
   ble_msg m = {.op = BLE_DATA, .n = d ? n : 0};
   if (m.n > sizeof m.data) return; // cannot be: a push is one notification
   if (m.n) memcpy(m.data, d, m.n);
   reply(u, &m);
 }
 
+static void on_state(void *u) { publish(u); }   // inside a dial: SCAN / LINK shown while the scan and connect block
 static void on_push(void *u, const uint8_t *d, size_t n) { cmdr_on_push(&((ble *)u)->c, d, n), publish(u); }
 static void on_lost(void *u) { cmdr_link_lost(&((ble *)u)->c, now_ms()), publish(u); }
 static void on_power(void *u, int on) { cmdr_adapter(&((ble *)u)->c, on, now_ms()), publish(u); }
@@ -423,7 +425,12 @@ static gboolean request(gpointer u) {
   case BLE_PAUSE: m->result = cmdr_pause(c, now), reply(b, m); break;
   case BLE_RESUME: cmdr_resume(c, now); break;
   case BLE_DATA_HOLD: cmdr_data_hold(c, m->a, now); break;
-  case BLE_PRESS: m->result = cmdr_press(c, (cmdr_action)m->a, m->b, m->gear, now), reply(b, m); break;
+  case BLE_PRESS:   // queued behind a slow reconnect: dropped rather than sent seconds late on old park/gear facts
+    m->result = m->at && now - m->at > 2000 ? CMDR_E_NOT_READY : cmdr_press(c, (cmdr_action)m->a, m->b, m->gear, now);
+    m->b = (int)c->last_status;
+    reply(b, m);
+    break;
+  case BLE_WIFI_FIRST: c->cfg.wifi_first = m->a; break;
   case BLE_STOP: cmdr_pause(c, now), g_main_loop_quit(b->loop); break;
   }
   publish(b);
@@ -443,7 +450,7 @@ ble *ble_start_io(const cmdr_cfg *cfg, const cmdr_io *io) {
   if (pipe(b->pfd)) return g_free(b), NULL;
   for (int i = 0; i < 2; i++) fcntl(b->pfd[i], F_SETFL, O_NONBLOCK), fcntl(b->pfd[i], F_SETFD, FD_CLOEXEC);
   cmdr_cfg cf = cfg ? *cfg : cmdr_cfg_default;
-  cf.on_data = on_data, cf.data_ctx = b;
+  cf.on_data = on_data, cf.on_state = on_state, cf.data_ctx = b;
   b->io = *io;
   cmdr_init(&b->c, &cf, io);
   g_mutex_init(&b->mu);
@@ -459,6 +466,13 @@ ble *ble_start_io(const cmdr_cfg *cfg, const cmdr_io *io) {
   return b;
 }
 
+static gboolean subscribe(gpointer u) {
+  bz *t = u;
+  t->sub = g_dbus_connection_signal_subscribe(t->bus, BLUEZ, PROPS, "PropertiesChanged", NULL, NULL,
+                                              G_DBUS_SIGNAL_FLAGS_NONE, pushes, t, NULL);
+  return G_SOURCE_REMOVE;
+}
+
 ble *ble_start(const cmdr_cfg *cfg, const char *adapter_path) {
   cmdr_io io;
   if (ble_bluez_open(&io, adapter_path)) return NULL;
@@ -467,11 +481,9 @@ ble *ble_start(const cmdr_cfg *cfg, const char *adapter_path) {
   if (!b) return ble_bluez_close(&io), NULL;
   b->own_io = 1;
   t->on_push = on_push, t->on_lost = on_lost, t->on_power = on_power, t->u = b;
-  // Subscribed with the thread's context as the default: the signals run on that thread.
-  g_main_context_push_thread_default(b->ctx);
-  t->sub = g_dbus_connection_signal_subscribe(t->bus, BLUEZ, PROPS, "PropertiesChanged", NULL, NULL,
-                                              G_DBUS_SIGNAL_FLAGS_NONE, pushes, t, NULL);
-  g_main_context_pop_thread_default(b->ctx);
+  // Subscribed on the session's own thread (its context the default there), so the signals run on that thread. Done
+  // by invoke, not by pushing the context from here: the thread may already own it, and the push would then fail.
+  g_main_context_invoke(b->ctx, subscribe, t);
   return b;
 }
 

@@ -3,6 +3,7 @@
 # or dash -c PATH. Bad lines are logged (see log below) and skipped.
 
 # The Commander's Panda interface (WiFi CAN). On the bench: the Mac running tools/fake_panda.py, e.g. 192.168.1.240
+# (the start values: the settings' Advanced > Panda host, once set, is kept in /data/settings.conf)
 panda_host = 192.168.4.1
 panda_port = 1338
 
@@ -38,6 +39,7 @@ minor_figures = 1         # 12 V, other power and cell imbalance rows
 
 # Time: the clock comes from CAN 0x318 (UTC); no NTP on S3XY_OBD
 tz = UTC0                 # POSIX TZ, e.g. CET-1CEST,M3.5.0,M10.5.0/3 or <+07>-7 (zone names need tzdata)
+                          # (the start value: the settings' Time zone, once picked, is kept in /data/settings.conf)
 hour12 = 1                # 1: 1:51 PM, 0: 13:51
 set_clock = 1             # set the system clock from 0x318 once per link (logs get real dates)
 
@@ -74,6 +76,13 @@ log_kb = 256
 # /data when it is writable (R3), else /run, lost at power off: the Commander then asks for approval again each boot.
 cmdr_id = /data/cmdr_id
 cmdr_pin = /data/cmdr_pin
+# Bluetooth beside the WiFi stream (main.dart's Advanced sliders), ms: the wait after Bluetooth steps aside before the
+# WiFi hello; the stream live -> the buttons back, -> the car data back; no stream -> Bluetooth back anyway (only with
+# the settings' "Bluetooth waits for WiFi" off).
+bt_settle_ms = 3000
+bt_buttons_ms = 500
+bt_data_ms = 2000
+bt_back_ms = 15000
 
 # The hardware watchdog (/dev/watchdog), petted each frame: a dash that hangs this long reboots the board (the T113
 # allows up to 16 s). A clean stop (SIGTERM) disarms it; a crash leaves it running for the supervisor's restart.

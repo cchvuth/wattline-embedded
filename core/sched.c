@@ -127,6 +127,12 @@ static void attempt_connect(link_t *l, int64_t now) {
   if (!l->on) return;
   l->retry_at = NEVER;
   teardown(l, now);
+  int wait = l->port.settle ? l->port.settle(l->port.ctx, now) : 0;   // main.dart: the hello after Bluetooth's settle
+  if (wait > 0) {   // not a failure: no backoff step, tried again once it has passed
+    set_state(l, LINK_RETRYING, "Bluetooth stepping aside", now + wait, now);
+    l->retry_at = now + wait;
+    return;
+  }
   if (l->port.open && !l->port.open(l->port.ctx)) { schedule_retry(l, "socket failed", now); return; }
   l->last_recv = NEVER;
   l->streaming = false;
@@ -151,6 +157,10 @@ void link_disconnect(link_t *l, int64_t now) {
   l->retry_at = NEVER;
   teardown(l, now);
   set_state(l, LINK_IDLE, "disconnected", NEVER, now);
+}
+
+void link_kick(link_t *l, int64_t now) {
+  if (l->on && l->state == LINK_RETRYING && l->retry_at != NEVER) attempt_connect(l, now);   // Panda.kick: a retry pending
 }
 
 bool link_trying(const link_t *l) { return l->state == LINK_IDLE || l->state == LINK_HELLO; }

@@ -54,6 +54,20 @@ static int shot(lv_display_t *d, const char *out, const char *name, const dash_s
 	return diff != 0;
 }
 
+/* Taps the button whose label reads [text] (as a finger would): 1 found. */
+static int tap_label(lv_obj_t *o, const char *text)
+{
+	for (uint32_t i = 0; i < lv_obj_get_child_count(o); i++) {
+		lv_obj_t *c = lv_obj_get_child(o, i);
+		if (lv_obj_check_type(c, &lv_label_class) && !strcmp(lv_label_get_text(c), text)) {
+			lv_obj_send_event(o, LV_EVENT_SHORT_CLICKED, NULL);
+			return 1;
+		}
+		if (tap_label(c, text)) return 1;
+	}
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	const char *out = argc > 1 ? argv[1] : "build/shots";
@@ -90,13 +104,49 @@ int main(int argc, char **argv)
 		scenes[6].fill(&s);
 		snprintf(s.toast, sizeof s.toast, "Unlock sent: unlocks with the driver inside");
 		bad |= shot(d, out, "touch-car-panel", &s, DASH_VIEW_CAR_PANEL);
-		dash_settings_t st = {.minor_figures = true, .hour12 = true, .brightness_pct = 70, .follow_car = true, .net_count = 2,
-				      .net = {{"Home WiFi", ""}, {"Phone hotspot", ""}}};
+		dash_settings_t st = {.minor_figures = true, .hour12 = true, .brightness_pct = 70, .follow_car = true, .car = 4, .sparse = true, .wifi_first = true, .net_count = 3,
+				      .net = {{"S3XY_OBD", ""}, {"Home WiFi", ""}, {"Phone hotspot", ""}},
+				      .tz = "CET-1CEST,M3.5.0,M10.5.0/3", .panda_host = "192.168.4.1", .panda_port = 1338};
 		dash_ui_settings(&st);
 		scenes[6].fill(&s);
 		s.bt = BT_LEAN, s.backlight_pct = 45; /* following the car: the live 45 % */
+		snprintf(s.wifi_line, sizeof s.wifi_line, "WiFi: live, 48 speed frames/s, 612 frames/s in all, from 192.168.4.1:1338");
+		snprintf(s.bt_line, sizeof s.bt_line, "Bluetooth: connected. Car data: subscribed to the route and recirculation only, "
+			 "1284 pushes. Car link: connected to the car, Tesla API ready.");
 		bad |= shot(d, out, "touch-settings", &s, DASH_VIEW_SETTINGS);
+		scenes[1].fill(&s); /* highway: a live drive, shown in the strip beside the map */
+		bad |= shot(d, out, "project", &s, DASH_VIEW_PROJECT);
+		{
+			dash_state_t off; /* no car data: the strip's dim / placeholder state */
+			dash_state_blank(&off);
+			bad |= shot(d, out, "project-offline", &off, DASH_VIEW_PROJECT);
+		}
+		static const char *const tabs[] = {"touch-settings-car", "touch-settings-display", "touch-settings-network",
+						   "touch-settings-advanced"};
+		for (int t = 1; t <= 4; t++) {
+			dash_ui_settings_tab(t);
+			bad |= shot(d, out, tabs[t - 1], &s, DASH_VIEW_SETTINGS);
+		}
+		dash_ui_settings_tab(0);
+		s.bt = BT_APPROVING; /* the approval's turn: the step said, the wheel lit */
+		bad |= shot(d, out, "touch-settings-approving", &s, DASH_VIEW_SETTINGS);
+		s.bt = BT_IDLE;
+		snprintf(s.bt_line, sizeof s.bt_line, "Bluetooth: this car's Commander not advertising (car asleep? phone app on it?)");
+		bad |= shot(d, out, "touch-settings-unlinked", &s, DASH_VIEW_SETTINGS);
+		s.wifi = WIFI_SCANNING; /* the join, with the wrong-passphrase hint */
+		snprintf(s.wifi_line, sizeof s.wifi_line, "WiFi: wrong password? the network keeps refusing the passphrase");
+		dash_ui_settings_tab(3);
+		bad |= shot(d, out, "touch-settings-network-join", &s, DASH_VIEW_SETTINGS);
+		dash_ui_settings_tab(0);
+		s.bt = BT_LEAN;
 		bad |= shot(d, out, "touch-network", &s, DASH_VIEW_NETWORK);
+		dash_ui_show(DASH_VIEW_SETTINGS); /* the Panda's address: the same editor, one field */
+		dash_ui_settings_tab(4);
+		bad |= shot(d, out, "touch-settings-advanced-host", &s, DASH_VIEW_SETTINGS);
+		tap_label(lv_layer_top(), "Panda host");
+		bad |= shot(d, out, "touch-network-host", &s, -1);
+		dash_ui_show(DASH_VIEW_SETTINGS);
+		dash_ui_settings_tab(0);
 		scenes[6].fill(&s); /* pairing: a dummy window */
 		s.pair_open = true, s.pair_secs = 287;
 		snprintf(s.pair_url, sizeof s.pair_url, "http://192.168.1.50:8022/pair?code=482913");
@@ -106,6 +156,19 @@ int main(int argc, char **argv)
 		snprintf(s.pair_result, sizeof s.pair_result, "Key added: dev@laptop");
 		bad |= shot(d, out, "touch-pair-done", &s, DASH_VIEW_PAIR);
 		dash_ui_show(DASH_VIEW_DASH);
+		/* the first boot: which car */
+		scenes[0].fill(&s);
+		dash_ui_ask_car();
+		bad |= shot(d, out, "touch-settings-ask-car", &s, -1);
+		dash_ui_show(DASH_VIEW_DASH);
+		/* a WiFi retry's countdown and Bluetooth's back-off: rings round the icons, the seconds beside */
+		scenes[0].fill(&s);
+		s.wifi = WIFI_RETRYING, s.wifi_secs = 4, s.wifi_span = 6, s.bt = BT_AWAY, s.bt_secs = 18, s.bt_span = 20;
+		bad |= shot(d, out, "links-countdown", &s, DASH_VIEW_DASH);
+		/* the gear unknown: a dim dash */
+		scenes[1].fill(&s);
+		s.gear = 0;
+		bad |= shot(d, out, "gear-unknown", &s, DASH_VIEW_DASH);
 	}
 	/* Every link state in its corner, on one sheet (links.png): WiFi state i beside Bluetooth state i (and i + 9). */
 	enum { CW = 300, CH = 170 };

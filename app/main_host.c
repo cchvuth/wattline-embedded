@@ -1,6 +1,7 @@
 // The dash's loop on the Mac, for the bench tests: the real UI drawn headless (LVGL, no panel), and every
 // -i ms a JSON line of what it was given (the test reads these). -p DIR: a PNG of the screen every 5 s.
-// usage: dash-host [-c dash.conf] [-t seconds] [-i ms] [-p dir]
+// -s DIR: DIR stands in for /data (settings.conf, rec/).
+// usage: dash-host [-c dash.conf] [-t seconds] [-i ms] [-p dir] [-s dir]
 #include "app.h"
 #include "record.h"
 #include "settings.h"

@@ -29,6 +29,7 @@ typedef struct {
   bool (*open)(void *ctx);      // before a hello: step Bluetooth aside, (re)open the socket. false: retry. May be NULL
   void (*close)(void *ctx);     // teardown. May be NULL
   void *ctx;
+  int (*settle)(void *ctx, int64_t now);   // ms to wait before the open (Bluetooth stepping aside); 0 go. May be NULL
 } link_port_t;
 
 typedef enum { LINK_IDLE, LINK_HELLO, LINK_LIVE, LINK_QUIET, LINK_RETRYING } link_state_t;
@@ -61,6 +62,7 @@ void link_init(link_t *l, car_t *car, link_port_t port, int64_t now);
 void link_connect(link_t *l, int64_t now);       // start, and keep retrying until link_disconnect
 void link_disconnect(link_t *l, int64_t now);
 void link_poll(link_t *l, int64_t now);          // run what is due: keep-alive tick, second slot, retry
+void link_kick(link_t *l, int64_t now);          // a retry pending: try now (Bluetooth came ready, main.dart 774)
 void link_on_datagram(link_t *l, const uint8_t *d, size_t n, int64_t now);   // Panda._onEvent
 void link_on_packet(link_t *l, const uint8_t *d, size_t n, int64_t now);     // Panda._onPacket
 void link_on_frame(link_t *l, uint16_t id, uint8_t bus, const uint8_t *d, uint8_t len, int64_t now);
