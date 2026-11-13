@@ -1,0 +1,16 @@
+#!/bin/sh
+# R4: system time from the PCF8563 (i2c0 0x51) at boot, only if the RTC holds a valid time past 2025 (the driver
+# refuses a time it flags as unreliable after a power loss; a reset chip reads 2000 or so).
+case "$1" in start|"") ;; *) exit 0;; esac
+# the name is at device/name (the rtcN/name attribute is empty on this kernel), as in spike-rtc
+for d in /sys/class/rtc/rtc*; do case "$(cat $d/device/name 2>/dev/null)" in *pcf8563*) R=$d;; esac; done
+[ -n "$R" ] || { echo "hwclock: no PCF8563"; exit 0; }
+D=/dev/${R##*/}
+# read via hwclock (the rtcN/date sysfs attribute is empty here; and the driver returns EINVAL while the
+# chip's voltage-low flag is set, so an unreliable time is simply skipped and the car/NTP clock stands)
+if T=$(hwclock -r -u -f $D 2>/dev/null) && Y=$(echo "$T" | grep -oE '20[0-9]{2}' | head -1) && [ -n "$Y" ] && [ "$Y" -gt 2025 ] 2>/dev/null; then
+	hwclock -s -u -f $D && echo "hwclock: system time from $D: $(date -u)"
+else
+	echo "hwclock: $D holds no valid time (${T:-unreadable}): system time left as is"
+fi
+exit 0

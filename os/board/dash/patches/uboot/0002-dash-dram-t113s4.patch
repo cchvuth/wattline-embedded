@@ -1,0 +1,116 @@
+--- a/drivers/ram/sunxi/dram_sun20i_d1.c	2026-11-13 07:49:15
++++ b/drivers/ram/sunxi/dram_sun20i_d1.c	2026-11-13 07:49:15
+@@ -54,6 +54,14 @@
+ 	clrsetbits_le32(0x3000150, 0xff00, reg << 8);
+ }
+ 
++static uint32_t sid_read_soc_chipid(void)
++{
++	return readl(SUNXI_SID_BASE + 0x00) & 0xffff;
++}
++
++/* dash: set by sunxi_dram_init for each try; 0 skips the AC remapping */
++static int dash_remap = 1;
++
+ static void dram_voltage_set(const dram_para_t *para)
+ {
+ 	int vol;
+@@ -663,6 +671,10 @@
+ 
+ 	fuse = (readl(SUNXI_SID_BASE + 0x28) & 0xf00) >> 8;
+ 	debug("DDR efuse: 0x%x\n", fuse);
++
++	/* U-Boot 2026.10 skips this on T113-S4 (chip id 0x7200, 256 MB co-packaged) */
++	if (!dash_remap)
++		return;
+ 
+ 	if (para->dram_type == SUNXI_DRAM_TYPE_DDR2) {
+ 		if (fuse == 15)
+@@ -1357,33 +1369,63 @@
+ 	return mem_size_mb;
+ }
+ 
+-static const dram_para_t para = {
+-	.dram_clk	= CONFIG_DRAM_CLK,
+-	.dram_type	= CONFIG_SUNXI_DRAM_TYPE,
+-	.dram_zq	= CONFIG_DRAM_ZQ,
+-	.dram_odt_en	= CONFIG_DRAM_SUNXI_ODT_EN,
+-	.dram_mr0	= 0x1c70,
+-	.dram_mr1	= 0x42,
+-	.dram_mr2	= 0x18,
+-	.dram_mr3	= 0,
+-	.dram_tpr0	= 0x004a2195,
+-	.dram_tpr1	= 0x02423190,
+-	.dram_tpr2	= 0x0008b061,
+-	.dram_tpr3	= 0xb4787896, // unused
+-	.dram_tpr4	= 0,
+-	.dram_tpr5	= 0x48484848,
+-	.dram_tpr6	= 0x00000048,
+-	.dram_tpr7	= 0x1620121e, // unused
+-	.dram_tpr8	= 0,
+-	.dram_tpr9	= 0, // clock?
+-	.dram_tpr10	= 0,
+-	.dram_tpr11	= CONFIG_DRAM_SUNXI_TPR11,
+-	.dram_tpr12	= CONFIG_DRAM_SUNXI_TPR12,
+-};
++#define DASH_PARA(odt) {\
++	.dram_clk	= CONFIG_DRAM_CLK,\
++	.dram_type	= CONFIG_SUNXI_DRAM_TYPE,\
++	.dram_zq	= CONFIG_DRAM_ZQ,\
++	.dram_odt_en	= (odt),\
++	.dram_mr0	= 0x1c70,\
++	.dram_mr1	= 0x42,\
++	.dram_mr2	= 0x18,\
++	.dram_mr3	= 0,\
++	.dram_tpr0	= 0x004a2195,\
++	.dram_tpr1	= 0x02423190,\
++	.dram_tpr2	= 0x0008b061,\
++	.dram_tpr3	= 0xb4787896, /* unused */\
++	.dram_tpr4	= 0,\
++	.dram_tpr5	= 0x48484848,\
++	.dram_tpr6	= 0x00000048,\
++	.dram_tpr7	= 0x1620121e, /* unused */\
++	.dram_tpr8	= 0,\
++	.dram_tpr9	= 0, /* clock? */\
++	.dram_tpr10	= 0,\
++	.dram_tpr11	= CONFIG_DRAM_SUNXI_TPR11,\
++	.dram_tpr12	= CONFIG_DRAM_SUNXI_TPR12,\
++}
+ 
++static const dram_para_t dash_para_odt1 = DASH_PARA(1);
++static const dram_para_t dash_para_odt0 = DASH_PARA(0);
++
++/*
++ * dash: one card for what could not be read before the first boot. Tries the
++ * AC remapping as the chip id suggests (2026.10: none on T113-S4), then the
++ * other way, each with read ODT on (stock boot0 prints its ODT-on lines) and
++ * then off. Every try runs in RAM only; mctl_core_init resets the controller.
++ */
+ unsigned long sunxi_dram_init(void)
+ {
+-	return init_DRAM(0, &para) * 1024UL * 1024;
++	static const struct { int remap_s4, odt; } tries[] = {
++		{ 0, 1 }, { 1, 1 }, { 0, 0 }, { 1, 0 },
++	};
++	uint32_t id = sid_read_soc_chipid();
++	int s4 = id == 0x7200;
++	unsigned int i;
++
++	printf("DASH: chipid 0x%04x ddr-fuse 0x%x\n", id,
++	       (readl(SUNXI_SID_BASE + 0x28) & 0xf00) >> 8);
++	for (i = 0; i < ARRAY_SIZE(tries); i++) {
++		unsigned long mb;
++
++		dash_remap = s4 ? tries[i].remap_s4 : !tries[i].remap_s4;
++		printf("DASH: try %u remap %d odt %d\n", i, dash_remap,
++		       tries[i].odt);
++		mb = init_DRAM(0, tries[i].odt ? &dash_para_odt1 : &dash_para_odt0);
++		if (mb) {
++			printf("DASH: DRAM ok on try %u\n", i);
++			return mb * 1024UL * 1024;
++		}
++	}
++	return 0;
+ };
+ 
+ #ifdef CONFIG_RAM		/* using the driver model */

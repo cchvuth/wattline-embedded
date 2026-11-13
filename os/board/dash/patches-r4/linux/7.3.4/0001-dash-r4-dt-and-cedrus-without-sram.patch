@@ -1,0 +1,86 @@
+diff -ruN a/arch/arm/boot/dts/allwinner/sun8i-t113s-dash-r4.dts b/arch/arm/boot/dts/allwinner/sun8i-t113s-dash-r4.dts
+--- a/arch/arm/boot/dts/allwinner/sun8i-t113s-dash-r4.dts	1970-01-01 00:00:00.000000000 +0000
++++ b/arch/arm/boot/dts/allwinner/sun8i-t113s-dash-r4.dts	2026-11-13 16:59:06.660029080 +0000
+@@ -0,0 +1,68 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++// R4 (hardware spike): R2 (display, touch, radio: unchanged, included as is) plus
++// - I2C1 (PE0/PE1) and I2C2 (PG6/PG7), enabled with no devices, as the stock device tree has them (the auth-chip probe scans them);
++// - the PCF8563 RTC at I2C0 0x51 (stock device tree, and a read-only i2cdetect on the unit);
++// - the video engine (cedrus), as proposed upstream for the D1 ("riscv: dts: allwinner: d1: Add video engine node"),
++//   plus its power domain. reg/irq/reset agree with the stock ve node (0x1c0e000, SPI 66, reset 5; stock maps 0x1000).
++//   No allwinner,sram: the D1 family has no switchable VE SRAM section; R4's kernel patch lets cedrus probe without one.
++//   No iommus: no mainline IOMMU driver for this SoC in our kernel, so cedrus allocates from CMA.
++// None of PE0, PE1, PG6, PG7 is used by R0-R2 (WiFi PG0-PG5/PG9, panel PG10/PG11, touch PG12-PG15, BT PB6/PB7/PE13).
++
++#include <dt-bindings/power/allwinner,sun20i-d1-ppu.h>
++#include "sun8i-t113s-dash-r2.dts"
++
++/ {
++	model = "S3XY Dash R4 spike";
++	compatible = "dash,s3xy-dash-r4", "allwinner,sun8i-t113s";
++
++	aliases {
++		i2c0 = &i2c0;	/* fixed bus numbers for the spike scripts */
++		i2c1 = &i2c1;
++		i2c2 = &i2c2;
++	};
++
++	soc {
++		ve: video-codec@1c0e000 {
++			compatible = "allwinner,sun20i-d1-video-engine";
++			reg = <0x01c0e000 0x2000>;
++			interrupts = <SOC_PERIPHERAL_IRQ(66) IRQ_TYPE_LEVEL_HIGH>;
++			clocks = <&ccu CLK_BUS_VE>, <&ccu CLK_VE>, <&ccu CLK_MBUS_VE>;
++			clock-names = "ahb", "mod", "ram";
++			resets = <&ccu RST_BUS_VE>;
++			power-domains = <&ppu PD_VE>;
++		};
++	};
++};
++
++&pio {
++	i2c1_pe_pins: i2c1-pe-pins {	/* stock twi1: PE0 SCK, PE1 SDA */
++		pins = "PE0", "PE1";
++		function = "i2c1";
++	};
++
++	i2c2_pg_pins: i2c2-pg-pins {	/* stock twi2: PG6 SCK, PG7 SDA */
++		pins = "PG6", "PG7";
++		function = "i2c2";
++	};
++};
++
++&i2c0 {
++	rtc@51 {
++		compatible = "nxp,pcf8563";
++		reg = <0x51>;
++	};
++};
++
++&i2c1 {
++	pinctrl-0 = <&i2c1_pe_pins>;
++	pinctrl-names = "default";
++	clock-frequency = <400000>;	/* stock: 400 kHz */
++	status = "okay";
++};
++
++&i2c2 {
++	pinctrl-0 = <&i2c2_pg_pins>;
++	pinctrl-names = "default";
++	clock-frequency = <400000>;	/* stock: 400 kHz */
++	status = "okay";
++};
+diff -ruN a/drivers/staging/media/sunxi/cedrus/cedrus_hw.c b/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_hw.c	2026-11-13 16:59:06.660029080 +0000
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_hw.c	2026-11-13 16:59:06.670029080 +0000
+@@ -274,6 +274,10 @@
+ 	}
+ 
+ 	ret = sunxi_sram_claim(dev->dev);
++	/* D1/T113: no switchable VE SRAM section, so no allwinner,sram (as proposed upstream:
++	 * "media: cedrus: Make SRAM section claiming optional"). sunxi_sram_release() is a no-op then. */
++	if (ret == -ENOENT)
++		ret = 0;
+ 	if (ret) {
+ 		dev_err(dev->dev, "Failed to claim SRAM\n");
+ 

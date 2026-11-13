@@ -1,0 +1,7 @@
+config BR2_PACKAGE_SPIKE_VDEC
+	bool "spike-vdec"
+	help
+	  R4 spike only: /usr/sbin/spike-vdec, H.264 decode on the video engine through the V4L2 stateless (request)
+	  API (cedrus) with fps, CPU use and a bit-exact check, plus a CPU rotate estimate for the projection.
+	  Plain C (the toolchain has no C++, so GStreamer's v4l2codecs and v4l-utils are out). The test clips are
+	  made at build time (br-r4.sh) and copied in by post-build-r4.sh.

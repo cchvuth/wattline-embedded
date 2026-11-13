@@ -1,0 +1,13 @@
+CONFIG_DEFAULT_DEVICE_TREE="allwinner/sun8i-t113s-dash-r0"
+CONFIG_CONS_INDEX=5
+CONFIG_MMC_SUNXI_SLOT_EXTRA=2
+CONFIG_ENV_IS_NOWHERE=y
+# CONFIG_ENV_IS_IN_FAT is not set
+# CONFIG_ENV_IS_IN_EXT4 is not set
+# CONFIG_ENV_IS_IN_MMC is not set
+# CONFIG_USB_MUSB_GADGET is not set
+# CONFIG_CMD_USB_MASS_STORAGE is not set
+# CONFIG_DISTRO_DEFAULTS is not set
+CONFIG_BOOTDELAY=1
+CONFIG_USE_BOOTCOMMAND=y
+CONFIG_BOOTCOMMAND="if test -n \"${fel_booted}\" && test -n \"${fel_scriptaddr}\"; then source ${fel_scriptaddr}; fi; setenv initrd_high 0xffffffff; load mmc 0:1 ${kernel_addr_r} zImage && load mmc 0:1 ${fdt_addr_r} dash-r0.dtb && load mmc 0:1 ${ramdisk_addr_r} rootfs.cpio.uboot && setenv bootargs console=ttyS0,115200 earlycon && bootz ${kernel_addr_r} ${ramdisk_addr_r} ${fdt_addr_r}"

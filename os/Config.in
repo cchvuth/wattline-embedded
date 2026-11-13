@@ -1,0 +1,6 @@
+source "$BR2_EXTERNAL_DASH_PATH/package/rtl8733bs/Config.in"
+source "$BR2_EXTERNAL_DASH_PATH/package/dashapp/Config.in"
+source "$BR2_EXTERNAL_DASH_PATH/package/bt-fwcutter/Config.in"
+source "$BR2_EXTERNAL_DASH_PATH/package/rtl8733bs-cc/Config.in"
+source "$BR2_EXTERNAL_DASH_PATH/package/spike-vdec/Config.in"
+source "$BR2_EXTERNAL_DASH_PATH/package/wattline-aa/Config.in"

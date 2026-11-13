@@ -1,0 +1,48 @@
+#!/bin/sh
+# dash-mkdata: run ONCE. Adds the writable partition p3 (Linux type, 1 GiB, ext4 labelled DASHDATA2) right after p2 on
+# the SD card (found by device type, never by name), leaving p1 (BOOT) and p2 (DASHDATA: backup/) as they
+# are. Refuses unless the card has an MBR with exactly p1 and p2 and free space after p2. p1/p2 (start, size, type) and
+# the disk id are compared before and after the table is written: any change, it stops before mkfs.
+die() { echo "dash-mkdata: $*" >&2; exit 1; }
+D=; for d in /sys/block/mmcblk[0-9]; do [ "$(cat $d/device/type 2>/dev/null)" = SD ] && D=/dev/${d##*/}; done
+[ -n "$D" ] && [ -b $D ] || die "no SD card"
+N=${D##*/}
+[ -e ${D}p3 ] && die "${D}p3 exists already: nothing to do"
+[ "$(blockdev --getro $D)" = 0 ] || die "$D is read-only"
+[ "$(blockdev --getss $D)" = 512 ] || die "sector size not 512"
+echo "== $D before:"; sfdisk -l $D || die "sfdisk cannot read $D"
+B=$(sfdisk -d $D) || die "sfdisk -d failed"
+echo "$B"
+echo "$B" | grep -qx 'label: dos' || die "not an MBR card"
+[ "$(echo "$B" | grep -c "^/dev/")" = 2 ] && echo "$B" | grep -q "^${D}p1 :" && echo "$B" | grep -q "^${D}p2 :" \
+	|| die "expected exactly ${D}p1 and ${D}p2"
+keep() { echo "$1" | grep -E "^(label-id:|${D}p[12] :)"; }
+K0=$(keep "$B")
+# the kernel's view of p1/p2 must match the table
+for i in 1 2; do
+	t=$(echo "$B" | sed -n "s|^${D}p$i : start= *\([0-9]*\), size= *\([0-9]*\),.*|\1 \2|p")
+	[ "$t" = "$(cat /sys/block/$N/${N}p$i/start) $(cat /sys/block/$N/${N}p$i/size)" ] || die "${D}p$i: table and kernel differ"
+done
+set -- $(echo "$B" | sed -n "s|^${D}p2 : start= *\([0-9]*\), size= *\([0-9]*\),.*|\1 \2|p")
+S=$(( ($1 + $2 + 2047) / 2048 * 2048 )); Z=2097152   # 1 MiB aligned, 1 GiB
+T=$(blockdev --getsz $D)
+[ $((S + Z)) -le $T ] || die "no room: p3 would end at sector $((S + Z)), the card has $T"
+echo "== p3: start=$S size=$Z type=83 (card $T sectors)"
+# nothing of the card may be mounted while the table is re-read: p2 comes off /run/dashdata, back on at the end
+M=$(sed -n "s|^${D}p2 \([^ ]*\) .*|\1|p" /proc/mounts)
+[ -n "$M" ] && { umount $M || die "cannot unmount ${D}p2 from $M"; }
+grep -q "^$D" /proc/mounts && die "something on $D is still mounted"
+remount() { [ -n "$M" ] && mount -t vfat -o ro ${D}p2 $M; }
+echo "start=$S, size=$Z, type=83" | sfdisk --append $D || { remount; die "sfdisk --append failed"; }
+[ -b ${D}p3 ] || blockdev --rereadpt $D
+i=0; until [ -b ${D}p3 ] || [ $i -ge 10 ]; do sleep 1; i=$((i+1)); done
+K1=$(keep "$(sfdisk -d $D)")
+[ "$K0" = "$K1" ] || { remount; echo "before:"; echo "$K0"; echo "after:"; echo "$K1"; die "p1/p2 or the disk id changed: STOP, no mkfs"; }
+[ -b ${D}p3 ] || { remount; die "${D}p3 did not appear: the table is written; reboot, then: mkfs.ext4 -L DASHDATA2 ${D}p3"; }
+[ "$(cat /sys/block/$N/${N}p3/start) $(cat /sys/block/$N/${N}p3/size)" = "$S $Z" ] || { remount; die "${D}p3 is not where it was put"; }
+mkfs.ext4 -q -L DASHDATA2 ${D}p3 || { remount; die "mkfs.ext4 failed"; }
+e2fsck -fn ${D}p3 >/dev/null || { remount; die "e2fsck after mkfs failed"; }
+remount
+echo "== $D after:"; sfdisk -l $D
+[ "$K0" = "$(keep "$(sfdisk -d $D)")" ] || die "p1/p2 changed"
+echo "dash-mkdata: done, p1/p2 unchanged; reboot to mount ${D}p3 on /data"

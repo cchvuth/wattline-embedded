@@ -1,0 +1,31 @@
+#!/bin/sh
+# bt-pan AA:BB:CC:DD:EE:FF : join the phone's Bluetooth tether as a PAN user (PANU ->
+# the phone's NAP), then DHCP on the interface BlueZ creates. This is the maps route's
+# only internet path (WiFi is on the car's CAN). The phone must already be paired and
+# trusted (bluetoothctl) and have "Bluetooth tethering" turned on.
+#
+# Needs CONFIG_BT_BNEP in the kernel (board/dash/linux-maps.fragment) and dbus-send.
+# bluetoothctl has no PAN verb, so we call org.bluez.Network1.Connect over D-Bus; it
+# returns the interface name (bnep0, or bnep1 on a second link) -- we DHCP whatever it
+# names rather than assuming bnep0 (udev can rename, and a second link bumps the number).
+set -e
+
+[ "$1" = "--selftest" ] && {
+	got=$(printf aa:BB:cc:11:22:33 | tr 'a-z:' 'A-Z_')
+	[ "$got" = "AA_BB_CC_11_22_33" ] || { echo "selftest FAIL: $got"; exit 1; }
+	echo "selftest OK"; exit 0
+}
+
+MAC=${1:?usage: bt-pan AA:BB:CC:DD:EE:FF  (phone must be paired+trusted, tethering on)}
+DEV=/org/bluez/hci0/dev_$(printf %s "$MAC" | tr 'a-z:' 'A-Z_')
+
+IF=$(dbus-send --system --print-reply --dest=org.bluez "$DEV" \
+		org.bluez.Network1.Connect string:nap 2>/dev/null \
+	| sed -n 's/.*string "\([^"]*\)".*/\1/p')
+[ -n "$IF" ] || { echo "bt-pan: NAP connect failed on $MAC (paired+trusted? tethering on? BNEP in kernel?)" >&2; exit 1; }
+echo "bt-pan: PAN up on $IF, requesting DHCP"
+
+# -i iface, -n give up if no lease, -q exit once we have one. The busybox default.script
+# installs the address, the phone's gateway as the default route, and its DNS.
+udhcpc -i "$IF" -n -q >/dev/null 2>&1 || { echo "bt-pan: no DHCP on $IF" >&2; exit 1; }
+echo "bt-pan: internet up on $IF"

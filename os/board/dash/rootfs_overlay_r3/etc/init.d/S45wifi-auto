@@ -1,0 +1,41 @@
+#!/bin/sh
+# R3 WiFi at boot, station only, whichever network is in range (the first listed wins when several are): the networks
+# the dash's settings saved in /data/wifi/networks.conf (the car's adapter among them, editable there), with the
+# Commander's S3XY_OBD and its factory passphrase first unless that list holds it or it was deleted (car-removed).
+# That list is the one source of networks (the settings' Network tab edits it): two lines per network, SSID then
+# passphrase (empty: open). It is the owner's: read only, nothing from it is printed or copied.
+case "$1" in start|"") ;; *) exit 0;; esac
+JOIN=$2   # start SSID: join that network now (the settings' Connect): it goes first, the rest stay as fallback
+(
+	# one at a time: two quick saves in the settings must not race (the later list wins, as saved)
+	i=0; until mkdir /run/wifi-auto.lock 2>/dev/null || [ $i -ge 30 ]; do sleep 1; i=$((i+1)); done
+	trap 'rmdir /run/wifi-auto.lock 2>/dev/null' EXIT
+	for i in $(seq 1 20); do [ -e /sys/class/net/wlan0 ] && break; sleep 1; done
+	[ -e /sys/class/net/wlan0 ] || exit 0
+	set --   # the car's default unless the saved list has it or it was deleted there on purpose (settings.c, the same rule)
+	C=/data/wifi/networks.conf
+	# SSID lines only (a passphrase may read S3XY_OBD), and a full list (4, the settings' limit) left as it is
+	if [ ! -f $C ] || { ! tr -d '\r' < $C | awk 'NR % 2 == 1' | grep -qx S3XY_OBD && [ ! -e /data/wifi/car-removed ] &&
+		[ $(tr -d '\r' < $C | awk 'NR % 2 == 1 && $0 != ""' | wc -l) -lt 4 ]; }; then
+		set -- S3XY_OBD 12345678
+	fi
+	for f in /data/wifi/networks.conf; do
+		[ -f $f ] || continue
+		while IFS= read -r S || [ -n "$S" ]; do
+			K=; IFS= read -r K
+			S=$(printf %s "$S" | tr -d '\r'); K=$(printf %s "$K" | tr -d '\r')
+			[ -n "$S" ] && set -- "$@" "$S" "$K"
+		done < $f
+	done
+	if [ -n "$JOIN" ]; then   # rotate the SSID/passphrase pairs once, holding the chosen one back, then put it first
+		n=$(($# / 2)); i=0; JS=; JK=; found=
+		while [ $i -lt $n ]; do
+			S=$1; K=$2; shift 2
+			if [ -z "$found" ] && [ "$S" = "$JOIN" ]; then JS=$S; JK=$K; found=1; else set -- "$@" "$S" "$K"; fi
+			i=$((i+1))
+		done
+		[ -n "$found" ] && set -- "$JS" "$JK" "$@"
+	fi
+	wifi-connect "$@" > /run/wifi-auto.log 2>&1
+) &
+exit 0

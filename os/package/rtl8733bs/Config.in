@@ -1,0 +1,6 @@
+config BR2_PACKAGE_RTL8733BS
+	bool "rtl8733bs"
+	depends on BR2_LINUX_KERNEL
+	help
+	  Realtek RTL8733BS SDIO WiFi vendor driver (8733bs.ko), station only, built against the image kernel.
+	  The source is private and not in this tree: it is read from /radio/src/work (a Docker mount).

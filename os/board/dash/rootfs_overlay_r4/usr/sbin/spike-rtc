@@ -1,0 +1,15 @@
+#!/bin/sh
+# spike-rtc: read the PCF8563 RTC (i2c0 0x51). spike-rtc --set: write the system time to it, only when the
+# system time is past 2025 (a 1970 clock never overwrites a good RTC).
+# the PCF8563's name is exposed at device/name (the rtcN/name attribute is empty on this kernel)
+for d in /sys/class/rtc/rtc*; do case "$(cat $d/device/name 2>/dev/null)" in *pcf8563*) R=$d;; esac; done
+[ -n "$R" ] || { echo "RTC=none (no PCF8563 registered: dmesg | grep -i pcf8563)"; exit 1; }
+D=/dev/${R##*/}
+echo "RTC_DEV=$D ($(cat $R/device/name))"
+echo "SYSTEM=$(date -u '+%Y-%m-%d %H:%M:%S') UTC"
+if [ "$1" = --set ]; then
+	Y=$(date -u +%Y)
+	[ "$Y" -gt 2025 ] || { echo "RTC_SET=refused (system time $Y is not past 2025)"; exit 1; }
+	hwclock -w -u -f $D && echo "RTC_SET=ok" || { echo "RTC_SET=failed"; exit 1; }
+fi
+if T=$(hwclock -r -u -f $D 2>&1); then echo "RTC=$T"; else echo "RTC=unreadable ($T)"; exit 1; fi

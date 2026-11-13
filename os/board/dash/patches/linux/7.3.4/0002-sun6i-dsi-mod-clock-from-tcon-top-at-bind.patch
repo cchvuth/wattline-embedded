@@ -1,0 +1,31 @@
+diff --color -ruN a/drivers/gpu/drm/sun4i/sun6i_mipi_dsi.c b/drivers/gpu/drm/sun4i/sun6i_mipi_dsi.c
+--- a/drivers/gpu/drm/sun4i/sun6i_mipi_dsi.c	2026-11-13 10:10:39
++++ b/drivers/gpu/drm/sun4i/sun6i_mipi_dsi.c	2026-11-13 10:10:39
+@@ -1062,6 +1062,16 @@
+ 	struct sun6i_dsi *dsi = dev_get_drvdata(dev);
+ 	int ret;
+ 
++	/* tcon-top is bound before us in the pipeline, so its DSI gate clock exists now */
++	if (dsi->variant->has_mod_clk && !dsi->mod_clk) {
++		dsi->mod_clk = devm_clk_get(dev, "mod");
++		if (IS_ERR(dsi->mod_clk)) {
++			ret = PTR_ERR(dsi->mod_clk);
++			dsi->mod_clk = NULL;
++			return dev_err_probe(dev, ret, "Couldn't get the DSI mod clock\n");
++		}
++	}
++
+ 	drm_encoder_helper_add(&dsi->encoder,
+ 			       &sun6i_dsi_enc_helper_funcs);
+ 	ret = drm_encoder_init(drm, &dsi->encoder, &sun6i_dsi_enc_funcs,
+@@ -1162,7 +1172,9 @@
+ 
+ 	if (variant->has_mod_clk) {
+ 		dsi->mod_clk = devm_clk_get(dev, "mod");
+-		if (IS_ERR(dsi->mod_clk)) {
++		if (PTR_ERR(dsi->mod_clk) == -EPROBE_DEFER && !variant->set_mod_clk) {
++			dsi->mod_clk = NULL;	/* tcon-top's clock: taken in sun6i_dsi_bind() */
++		} else if (IS_ERR(dsi->mod_clk)) {
+ 			dev_err(dev, "Couldn't get the DSI mod clock\n");
+ 			ret = PTR_ERR(dsi->mod_clk);
+ 			goto err_attach_clk;

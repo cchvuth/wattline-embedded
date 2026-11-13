@@ -1,0 +1,2 @@
+# R4 spike: the DHCP server for the test access point (wlan1)
+CONFIG_UDHCPD=y
