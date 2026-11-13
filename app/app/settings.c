@@ -1,0 +1,266 @@
+// See settings.h.
+#include "settings.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <math.h>
+#include <signal.h>
+#include <spawn.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+
+extern char **environ;
+
+const char *settings_root = "/data";
+const char *settings_wifi_cmd = "/etc/init.d/S45wifi-auto";   // run with "start": joins from the new list
+const char *settings_ssh_on_cmd = "/usr/sbin/dash-ssh-enable";
+const char *settings_ssh_off_cmd = "/usr/sbin/dash-ssh-disable";
+const char *settings_aa_cmd = "/usr/sbin/dash-aa";   // run with "start"/"stop": wireless Android Auto on demand
+const char *settings_ssh_pid = "/var/run/dropbear.pid";
+
+bool settings_car_saved;
+static dash_settings_t saved;                 // as last loaded or saved (passes "")
+static char pass[DASH_NETS][64];              // saved.net[i]'s passphrase
+static pid_t kids[4];
+
+static bool writable(void) { return settings_root && access(settings_root, W_OK) == 0; }
+
+static void run(const char *cmd, const char *arg, const char *arg2) {
+  for (int i = 0; i < 4; i++)   // reap what finished (ponytail: reaped at the next save, a zombie at most until then)
+    if (kids[i] > 0 && waitpid(kids[i], NULL, WNOHANG) == kids[i]) kids[i] = 0;
+  if (!cmd) return;
+  char *argv[] = {(char *)cmd, (char *)arg, (char *)(arg ? arg2 : NULL), NULL};
+  pid_t pid;
+  if (posix_spawn(&pid, cmd, NULL, NULL, argv, environ)) { log_msg("settings: %s: %s", cmd, strerror(errno)); return; }
+  log_msg("settings: ran %s%s%s%s", cmd, arg ? " " : "", arg ? arg : "", arg && arg2 ? " <network>" : "");   // no SSID in the log
+  for (int i = 0; i < 4; i++) if (kids[i] <= 0) { kids[i] = pid; break; }
+}
+
+void settings_aa(bool start) { run(settings_aa_cmd, start ? "start" : "stop", NULL); }
+
+// Whole file, atomically: <path>.tmp written and synced, renamed over, the folder synced.
+static int put(const char *dir, const char *name, const char *text, mode_t mode) {
+  char path[256], tmp[264];
+  snprintf(path, sizeof path, "%s/%s", dir, name);
+  snprintf(tmp, sizeof tmp, "%s.tmp", path);
+  int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
+  size_t n = strlen(text);
+  bool ok = fd >= 0 && fchmod(fd, mode) == 0 && write(fd, text, n) == (ssize_t)n && fsync(fd) == 0;
+  if (fd >= 0) ok = close(fd) == 0 && ok;
+  if (ok) ok = rename(tmp, path) == 0;
+  if (!ok) { log_msg("settings: write %s: %s", path, strerror(errno)); unlink(tmp); return -1; }
+  int d = open(dir, O_RDONLY | O_CLOEXEC);
+  if (d >= 0) fsync(d), close(d);
+  return 0;
+}
+
+// Dropbear running: its pid file names a live process. (The card's development key starts it whatever settings.conf says.)
+static bool ssh_running(void) {
+  FILE *f = settings_ssh_pid ? fopen(settings_ssh_pid, "r") : NULL;
+  int pid = 0;
+  if (f) { if (fscanf(f, "%d", &pid) != 1) pid = 0; fclose(f); }
+  return pid > 0 && kill(pid, 0) == 0;
+}
+
+static char *trim(char *s) {
+  while (*s == ' ' || *s == '\t') s++;
+  char *e = s + strlen(s);
+  while (e > s && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
+  return s;
+}
+
+void settings_refresh(dash_settings_t *st) {   // SSH turned on elsewhere (the pairing): the switch shows it, off works
+  if (ssh_running()) st->dev_ssh = saved.dev_ssh = true;
+}
+
+void settings_load(dash_settings_t *st, const conf_t *cf) {
+  memset(st, 0, sizeof *st);
+  memset(pass, 0, sizeof pass);
+  st->minor_figures = cf->minor_figures, st->hour12 = cf->hour12;
+  st->brightness_pct = 80, st->follow_car = cf->bright_follow_car;
+  st->follow_offset = 0;   // a user bias on top of dash.conf's bright_follow_offset
+  st->car = cf->car, st->sparse = cf->sparse, st->wifi_first = true;   // dash.conf's, the phone app's defaults
+  snprintf(st->tz, sizeof st->tz, "%s", cf->tz);
+  snprintf(st->panda_host, sizeof st->panda_host, "%s", cf->panda_host);
+  st->panda_port = cf->panda_port;
+  settings_car_saved = false;
+  char path[256], line[160];
+  FILE *f;
+  if (settings_root) {
+    snprintf(path, sizeof path, "%s/settings.conf", settings_root);
+    if ((f = fopen(path, "r"))) {
+      while (fgets(line, sizeof line, f)) {
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = 0;
+        char *k = trim(line);
+        char *val = trim(eq + 1);
+        int v = atoi(val);
+        if (!strcmp(k, "minor_figures")) st->minor_figures = v;
+        else if (!strcmp(k, "clock_24h")) st->hour12 = !v;
+        else if (!strcmp(k, "brightness_pct")) st->brightness_pct = v < 5 ? 5 : v > 100 ? 100 : v;
+        else if (!strcmp(k, "follow_car")) st->follow_car = v;
+        else if (!strcmp(k, "follow_offset")) st->follow_offset = v < -50 ? -50 : v > 50 ? 50 : v;
+        else if (!strcmp(k, "ssh")) st->dev_ssh = v;
+        else if (!strcmp(k, "sparse")) st->sparse = v;
+        else if (!strcmp(k, "wifi_first")) st->wifi_first = v;
+        else if (!strcmp(k, "car")) {   // by its id (modelY7 ...), as dash.conf names it
+          for (int i = 0; i < CAR_COUNT; i++)
+            if (!strcmp(val, kCars[i].id)) st->car = i, settings_car_saved = true;
+        }
+        else if (!strcmp(k, "tz") && *val && strlen(val) < sizeof st->tz) strcpy(st->tz, val);
+        else if (!strcmp(k, "panda_host") && *val && strlen(val) < sizeof st->panda_host) strcpy(st->panda_host, val);
+        else if (!strcmp(k, "panda_port") && v > 0 && v < 65536) st->panda_port = v;
+        else if (!strcmp(k, "record")) st->record = v;
+      }
+      fclose(f);
+      log_msg("settings: %s", path);
+    }
+    snprintf(path, sizeof path, "%s/wifi/networks.conf", settings_root);
+    if (!(f = fopen(path, "r"))) {   // nothing saved yet: the Commander's own WiFi with its default passphrase
+      snprintf(st->net[0].ssid, sizeof st->net[0].ssid, "%s", SETTINGS_CAR_SSID);
+      snprintf(pass[0], sizeof pass[0], "%s", SETTINGS_CAR_PASS);
+      st->net_count = 1;
+    } else {
+      char ssid[160];
+      while (st->net_count < DASH_NETS && fgets(ssid, sizeof ssid, f)) {
+        if (!fgets(line, sizeof line, f)) line[0] = 0;
+        char *s = trim(ssid), *p = line + strcspn(line, "\r\n");
+        *p = 0;   // a passphrase keeps its spaces
+        if (!*s || strlen(s) >= sizeof st->net[0].ssid || strlen(line) >= sizeof pass[0]) continue;
+        snprintf(st->net[st->net_count].ssid, sizeof st->net[0].ssid, "%s", s);
+        snprintf(pass[st->net_count++], sizeof pass[0], "%s", line);
+      }
+      fclose(f);
+      snprintf(path, sizeof path, "%s/wifi/car-removed", settings_root);
+      bool has_car = false;
+      for (int i = 0; i < st->net_count; i++) has_car |= !strcmp(st->net[i].ssid, SETTINGS_CAR_SSID);
+      if (!has_car && access(path, F_OK) && st->net_count < DASH_NETS) {   // a list from before: it never held the car's
+        memmove(&st->net[1], &st->net[0], sizeof st->net[0] * st->net_count);
+        memmove(&pass[1], &pass[0], sizeof pass[0] * st->net_count);
+        memset(&st->net[0], 0, sizeof st->net[0]);
+        snprintf(st->net[0].ssid, sizeof st->net[0].ssid, "%s", SETTINGS_CAR_SSID);
+        snprintf(pass[0], sizeof pass[0], "%s", SETTINGS_CAR_PASS);
+        st->net_count++;
+      }
+    }
+  }
+  if (ssh_running()) st->dev_ssh = true;   // the switch shows SSH as it is; turning it off then runs dash-ssh-disable
+  saved = *st;
+}
+
+int settings_save(dash_settings_t *st) {
+  // The list as it will be: a typed pass, else the one on file for that SSID ("" for a new one: open).
+  dash_settings_t now = *st;
+  char np[DASH_NETS][64] = {{0}};
+  int n = 0;
+  for (int i = 0; i < st->net_count && i < DASH_NETS; i++) {
+    const dash_net_t *e = &st->net[i];
+    if (!e->ssid[0] || strchr(e->ssid, '\n') || strchr(e->pass, '\n')) continue;
+    now.net[n] = *e;
+    memset(now.net[n].pass, 0, sizeof now.net[n].pass);
+    if (e->pass[0]) snprintf(np[n], sizeof np[n], "%s", e->pass);
+    else
+      for (int k = 0; k < saved.net_count; k++)
+        if (!strcmp(saved.net[k].ssid, e->ssid)) snprintf(np[n], sizeof np[n], "%s", pass[k]);
+    n++;
+  }
+  now.net_count = n;
+  for (int i = 1; i < n; i++)   // the car's adapter first: wifi-connect prefers the first, and a re-added one lands last
+    if (!strcmp(now.net[i].ssid, SETTINGS_CAR_SSID)) {
+      dash_net_t e = now.net[i];
+      char ep[64];
+      memcpy(ep, np[i], sizeof ep);
+      memmove(&now.net[1], &now.net[0], sizeof now.net[0] * i);
+      memmove(&np[1], &np[0], sizeof np[0] * i);
+      now.net[0] = e;
+      memcpy(np[0], ep, sizeof ep);
+      break;
+    }
+  bool wifi = n != saved.net_count, ssh = now.dev_ssh != saved.dev_ssh;
+  for (int i = 0; i < n && !wifi; i++) wifi = strcmp(now.net[i].ssid, saved.net[i].ssid) || strcmp(np[i], pass[i]);
+  for (int i = 0; i < DASH_NETS; i++) memset(st->net[i].pass, 0, sizeof st->net[i].pass);   // typed once, gone
+  const char *join = now.join[0] && !strchr(now.join, '\n') ? now.join : NULL;   // S45wifi-auto puts it first
+  st->join[0] = 0;
+  saved = now;
+  memcpy(pass, np, sizeof pass);
+  if (!writable()) return 0;   // the Mac: memory only
+
+  int rc = 0;
+  char text[1024];
+  snprintf(text, sizeof text,
+           "minor_figures = %d\nclock_24h = %d\nbrightness_pct = %d\nfollow_car = %d\nfollow_offset = %d\nssh = %d\nrecord = %d\n"
+           "car = %s\nsparse = %d\nwifi_first = %d\ntz = %s\npanda_host = %s\npanda_port = %d\n",
+           now.minor_figures, !now.hour12, now.brightness_pct, now.follow_car, now.follow_offset, now.dev_ssh, now.record,
+           kCars[now.car >= 0 && now.car < CAR_COUNT ? now.car : CAR_FALLBACK].id, now.sparse, now.wifi_first,
+           strchr(now.tz, '\n') ? "UTC0" : now.tz, strchr(now.panda_host, '\n') ? "192.168.4.1" : now.panda_host,
+           now.panda_port);
+  if (!(rc |= put(settings_root, "settings.conf", text, 0644))) settings_car_saved = true;
+  if (wifi) {
+    char dir[256];
+    snprintf(dir, sizeof dir, "%s/wifi", settings_root);
+    if (mkdir(dir, 0700) && errno != EEXIST) log_msg("settings: %s: %s", dir, strerror(errno));
+    chmod(dir, 0700);
+    size_t k = 0;
+    text[0] = 0;
+    for (int i = 0; i < n; i++) k += snprintf(text + k, sizeof text - k, "%s\n%s\n", now.net[i].ssid, np[i]);
+    char mark[300];
+    snprintf(mark, sizeof mark, "%s/car-removed", dir);
+    bool has_car = false;
+    for (int i = 0; i < n; i++) has_car |= !strcmp(now.net[i].ssid, SETTINGS_CAR_SSID);
+    if (has_car) unlink(mark);
+    else put(dir, "car-removed", "", 0600);   // deleted on purpose: not added back at boot (S45wifi-auto reads it too)
+    if (put(dir, "networks.conf", text, 0600)) rc = -1;
+    else {
+      log_msg("settings: %d networks saved", n);   // names and passphrases stay out of the log
+      run(settings_wifi_cmd, "start", join);
+    }
+  } else if (join) run(settings_wifi_cmd, "start", join);
+  if (ssh) run(now.dev_ssh ? settings_ssh_on_cmd : settings_ssh_off_cmd, NULL, NULL);
+  return rc;
+}
+
+bool settings_apply_tz(const char *tz) {
+  const char *was = getenv("TZ");
+  if (!*tz || (was && !strcmp(was, tz))) return false;
+  setenv("TZ", tz, 1);   // ponytail: setenv beside the Bluetooth thread; only on a change, which is a tap
+  tzset();
+  log_msg("tz %s", tz);
+  return true;
+}
+
+// <root>/tyres: "FL FR RL RR" in bar, "nan" for none (main.dart _saveTyres keeps '' for a null).
+static double kept[4] = {NAN, NAN, NAN, NAN};
+static int64_t keep_at;   // the next write may happen from here (once a minute at most)
+
+void settings_tyres_load(double tp[4]) {
+  char path[256];
+  snprintf(path, sizeof path, "%s/tyres", settings_root ? settings_root : "");
+  FILE *f = settings_root ? fopen(path, "r") : NULL;
+  for (int i = 0; i < 4; i++) tp[i] = NAN;
+  if (f) {
+    double v[4];
+    if (fscanf(f, "%lf %lf %lf %lf", &v[0], &v[1], &v[2], &v[3]) == 4)
+      for (int i = 0; i < 4; i++) tp[i] = v[i] > 0 && v[i] <= 6.3 ? v[i] : NAN;   // the decoder's own bounds
+    fclose(f);
+  }
+  memcpy(kept, tp, sizeof kept);
+}
+
+static bool same(double a, double b) { return isnan(a) ? isnan(b) : a == b; }
+
+void settings_tyres_keep(const double tp[4], int64_t now, bool stop) {
+  bool changed = false;
+  for (int i = 0; i < 4; i++) changed |= !same(tp[i], kept[i]);
+  if (!changed || (!stop && now < keep_at)) return;
+  keep_at = now + 60000;
+  memcpy(kept, tp, sizeof kept);
+  if (!writable()) return;
+  char text[96];
+  snprintf(text, sizeof text, "%.4f %.4f %.4f %.4f\n", tp[0], tp[1], tp[2], tp[3]);
+  put(settings_root, "tyres", text, 0644);
+}

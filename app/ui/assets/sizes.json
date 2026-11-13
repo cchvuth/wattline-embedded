@@ -1,0 +1,13 @@
+{
+  "_": "The Dash's sizes over the app's (1 = the app's dp at 1.25 px/dp). Read by export_test.dart (icons baked at these sizes) and gen.py (UI_S_* in assets.h for dash_ui.c). Change, then rerun export.sh.",
+  "chip": 1.2,
+  "link": 1.2,
+  "lights": 1.25,
+  "car_h": 378,
+  "nav": 1.3,
+  "ring": 1.28,
+  "dial": 1.2044,
+  "fig": 1.25,
+  "g": 2.1,
+  "panel": 1.5
+}
