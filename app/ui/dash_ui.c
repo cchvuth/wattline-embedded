@@ -5,6 +5,9 @@
 #include "dash_ui.h"
 #include "gen/assets.h"
 #include "../core/cmdr_msg.h" /* cmdr_action: what a tap asks for */
+#include "project_region.h"    /* the phone picture's rectangle, shared with the AA receiver */
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <arpa/inet.h>
 #include <math.h>
 #include <stdarg.h>
@@ -878,8 +881,12 @@ static void set_link(typeof(link_w) *l, int slot, const lv_image_dsc_t *big, con
 	int32_t scale = timer ? 256 * 16 / 22 : 256; /* the icon at 16 dp inside the ring, 22 without */
 	if (lv_image_get_scale(l->icon) != scale) lv_image_set_scale(l->icon, scale);
 	float cy = G.link_top + PL(22), x0 = G.ml + inset(cy); /* the left column's last row, from its stepped edge */
-	float x = x0 + (slot == 0 ? 0 : (S.wifi == WIFI_LIVE ? PL(36) : PL(60))), w = settled ? PL(36) : PL(60);
-	place(l->box, x, G.link_top, w, PL(44));
+	float x = x0 + (slot == 0 ? 0 : (S.wifi == WIFI_LIVE ? PL(36) : PL(60))), w = settled ? PL(36) : PL(60), y = G.link_top;
+	if (view == DASH_VIEW_PROJECT) { /* the split: the slanted strip left of the picture, stacked, right edge on it */
+		y = G.H - G.mb - (2 - slot) * PL(44) - (1 - slot) * PL(6);
+		x = PJ_RGN_X - px(4) - w;
+	}
+	place(l->box, x, y, w, PL(44));
 	if (settled) { /* a small icon on the big buttons' icon line (Alignment(0, -0.5)), its stat under it */
 		img_src(l->icon, small);
 		icon_color(l->icon, c);
@@ -935,6 +942,10 @@ static const char *bt_word(dash_bt_t b, uint32_t *c, const lv_image_dsc_t **i)
 static dash_settings_t ST; /* the settings as shown (defined with the settings screen below) */
 static bool projecting;    /* an Android Auto session is up (/run/dash-project, raised by aa serve) */
 static bool aa_pending;    /* tapped start, waiting for /run/dash-aa to appear — immediate amber feedback */
+static bool pj_left;       /* Exit tapped in the split: stay on the dash until this session's marker is gone */
+/* After leaving the split, repaint everything once more a moment later: the decoder is stopped in the background
+ * (dash-aa stop) and may draw a last picture after the first repaint. */
+static void pj_repaint_cb(lv_timer_t *t) { lv_obj_invalidate(lv_screen_active()); lv_obj_invalidate(lv_layer_top()); lv_timer_delete(t); }
 static void set_links(const dash_state_t *s)
 {
 	const lv_image_dsc_t *wi = &ic_wifi_l;
@@ -1693,17 +1704,44 @@ static void ap_hold(lv_event_t *e) /* the assist disc's words (widgets.dart _ApI
 static void close_tap(lv_event_t *e) { (void)e, dash_ui_show(DASH_VIEW_DASH); }
 static void panel_tap(lv_event_t *e) { press((intptr_t)lv_event_get_user_data(e)); }
 static void open_tap(lv_event_t *e) { dash_ui_show((intptr_t)lv_event_get_user_data(e)); }
+/* the split's Exit: end the Android Auto session (the marker would pull the view straight back otherwise) */
+static void pj_exit_tap(lv_event_t *e) { (void)e; pj_left = true; aa_pending = false; save(DASH_AA_STOP); dash_ui_show(DASH_VIEW_DASH); }
 /* the dash's Android Auto button (beside the car-panel icon): toggle the on-demand bring-up by its live state */
 static void aa_tap(lv_event_t *e) { (void)e; bool up = access("/run/dash-aa", F_OK) == 0; save(up ? DASH_AA_STOP : DASH_AA_START); aa_pending = !up; }
 
-/* ---- the phone-map split screen: the video on the left 2/3, a compact dash on the right 1/3 ---- */
-static float pj_vw(void) { return G.W * 2.0f / 3.0f; } /* the video region's width */
+/* ---- the phone-map split screen: the picture a rectangle up to the 2/3 line, clear of the left slant (which keeps
+ * the Wi-Fi / Bluetooth status), a compact dash on the right 1/3 ---- */
+static float pj_vw(void) { return PJ_RGN_X + PJ_RGN_W; } /* where the strip starts: the 2/3 line */
 void dash_ui_project_region(int *x, int *y, int *w, int *h)
 {
-	if (x) *x = 0;
+	if (x) *x = PJ_RGN_X;
 	if (y) *y = 0;
-	if (w) *w = (int)pj_vw();
-	if (h) *h = (int)G.H;
+	if (w) *w = PJ_RGN_W;
+	if (h) *h = PJ_RGN_H;
+}
+/* Touches on the picture go to the AA receiver (it owns the session), in picture pixels (project_region.h).
+ * ponytail: one finger, as LVGL's pointer reads it; pinch needs the multi-touch slots read from evdev. */
+static void pj_touch_cb(lv_event_t *e)
+{
+	static int sock = -1;
+	lv_event_code_t c = lv_event_get_code(e);
+	int act = c == LV_EVENT_PRESSED ? PJ_TOUCH_PRESS : c == LV_EVENT_PRESSING ? PJ_TOUCH_DRAG
+		: c == LV_EVENT_RELEASED || c == LV_EVENT_PRESS_LOST ? PJ_TOUCH_RELEASE : -1;
+	lv_indev_t *in = lv_indev_active();
+	if (act < 0 || !in) return;
+	lv_point_t pt; lv_indev_get_point(in, &pt);
+	int x = pt.x - PJ_RGN_X, y = pt.y;
+	x = x < 0 ? 0 : x >= PJ_RGN_W ? PJ_RGN_W - 1 : x; /* a drag that slides off the edge stays on it */
+	y = y < 0 ? 0 : y >= PJ_RGN_H ? PJ_RGN_H - 1 : y;
+	static int lx = -1, ly = -1; /* LVGL repeats PRESSING while a finger rests: forward a drag only when it moved */
+	if (act == PJ_TOUCH_DRAG && x == lx && y == ly) return;
+	lx = x, ly = y;
+	if (sock < 0) sock = socket(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+	if (sock < 0) return;
+	struct sockaddr_un a = { .sun_family = AF_UNIX };
+	snprintf(a.sun_path, sizeof a.sun_path, "%s", PJ_TOUCH_SOCK);
+	pj_touch_t t = { (uint8_t)act, 0, (uint16_t)x, (uint16_t)y };
+	sendto(sock, &t, sizeof t, 0, (struct sockaddr *)&a, sizeof a); /* no receiver (no session): dropped, fine */
 }
 static void project_build(void)
 {
@@ -1713,8 +1751,13 @@ static void project_build(void)
 	fill(project, BLACK);
 	/* the video region: black until frames arrive; a hint sits in it meanwhile */
 	project_video = box(project);
-	place(project_video, 0, 0, vw, G.H);
+	place(project_video, PJ_RGN_X, 0, PJ_RGN_W, PJ_RGN_H);
 	fill(project_video, 0xFF0A0A0Au);
+	lv_obj_set_clickable(project_video, true);
+	lv_obj_set_scrollable(project_video, false);
+	lv_obj_set_gesture_bubble(project_video, false);
+	lv_obj_set_scroll_chain(project_video, false);
+	lv_obj_add_event_cb(project_video, pj_touch_cb, LV_EVENT_ALL, NULL);
 	pj_hint = label(project_video, F(REGULAR, 20), W54);
 	lv_label_set_text(pj_hint, "Connect the phone for maps");
 	lv_obj_center(pj_hint);
@@ -1759,7 +1802,7 @@ static void project_build(void)
 	icon(pj_exit, &ic_p_close, WHITE);
 	lv_obj_t *xl = label(pj_exit, FS(MEDIUM, 15, UI_S_RING), WHITE);
 	lv_label_set_text(xl, "EXIT");
-	tappable(pj_exit, close_tap, 0, px(10));
+	tappable(pj_exit, pj_exit_tap, 0, px(10));
 	lv_obj_update_layout(pj_exit);
 	lv_obj_set_pos(pj_exit, ri(sx + sw - pad - lv_obj_get_width(pj_exit)), ri(G.H - px(44) - px(6)));
 
@@ -2642,6 +2685,12 @@ void dash_ui_show(int v)
 		lv_obj_set_parent(ring, to);
 		lv_obj_set_parent(ap_disc, to);
 		lv_obj_set_parent(outside_l, to);
+		lv_obj_set_parent(link_w.box, to); /* the Wi-Fi / Bluetooth status: kept in the split, in the left strip */
+		lv_obj_set_parent(link_b.box, to);
+		/* the decoder draws straight to the framebuffer: LVGL would leave its last picture on screen, so repaint all */
+		lv_obj_invalidate(lv_screen_active());
+		lv_obj_invalidate(lv_layer_top());
+		if (!now_pj) lv_timer_create(pj_repaint_cb, 600, NULL);
 	}
 	show(panel, v == DASH_VIEW_CAR_PANEL);
 	show(settings, v == DASH_VIEW_SETTINGS);
@@ -2955,13 +3004,15 @@ void dash_ui_set(const dash_state_t *s)
 	/* The AA/projection layer raises /run/dash-project when a phone's video is ready and drops it to leave. Toggle
 	 * only between the dash and the strip, so it never yanks the user out of settings/pairing. */
 	bool want_pj = projecting = access("/run/dash-project", F_OK) == 0;
-	if (want_pj && view == DASH_VIEW_DASH) dash_ui_show(DASH_VIEW_PROJECT);
+	if (!want_pj) pj_left = false;
+	if (want_pj && !pj_left && view == DASH_VIEW_DASH) dash_ui_show(DASH_VIEW_PROJECT);
 	else if (!want_pj && view == DASH_VIEW_PROJECT) dash_ui_show(DASH_VIEW_DASH);
 	if (view == DASH_VIEW_PROJECT) { /* the phone-map split: only the compact strip (the ring reused in it) */
 		ring_geom_compact();
 		set_ring(s);
 		ring_dirty(s);
 		set_project(s);
+		set_links(s);
 		P = *s;
 		first = false;
 		return;
