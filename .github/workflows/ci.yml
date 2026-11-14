@@ -1,0 +1,49 @@
+name: CI
+
+# Builds + tests the head-unit app (app/) and the firmware's C tools on every push/PR.
+# The full firmware IMAGE (os/) is a Buildroot build (toolchain + kernel + packages, ~1-2 h);
+# it is not built here yet — see "Firmware image" in the notes below.
+#
+# The app's signal tables are generated from the Flutter app repo (cchvuth/wattline:
+# lib/signals.dart, test/obd_test.dart). CI checks that out next to the repo so app/'s
+# `../tesla-dash` path resolves. If that repo is private, add a repo secret WATTLINE_TOKEN
+# (a PAT with read access); if it is public the default token is enough.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  app-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (os/ + app/)
+        uses: actions/checkout@v4
+      - name: Checkout signal source (cchvuth/wattline)
+        uses: actions/checkout@v4
+        with:
+          repository: cchvuth/wattline
+          path: tesla-dash            # app/ Makefile reads ../tesla-dash/lib/signals.dart
+          token: ${{ secrets.WATTLINE_TOKEN || github.token }}
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential python3
+      - name: Unit tests (decode, derive, bright, settings, wifi, actions, sec1)
+        run: make -C app test
+      - name: Headless app builds
+        run: make -C app -f app.mk host
+
+  firmware-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev libglib2.0-dev
+      - name: Build + self-test the Android Auto receiver (aa)
+        run: |
+          cc -O2 -Wall -DAA_BT $(pkg-config --cflags gio-2.0 gio-unix-2.0) \
+            -o /tmp/aa app/aa/aa.c app/core/pb.c -lssl -lcrypto $(pkg-config --libs gio-2.0 gio-unix-2.0)
+          /tmp/aa --selftest
+      - name: Host-compile the H.264 decoder (spike-vdec)
+        run: cc -O2 -Wall -Werror -o /tmp/spike-vdec os/package/spike-vdec/src/spike-vdec.c
