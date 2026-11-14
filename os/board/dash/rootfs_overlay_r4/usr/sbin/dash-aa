@@ -18,8 +18,8 @@ stop() {
 	killall aa hostapd udhcpd 2>/dev/null
 	rm -f "$MARK" /run/dash-project   # drop the projection marker too, in case aa serve was killed mid-session
 	bluetoothctl -- discoverable off >/dev/null 2>&1 || true
-	# the AP held wlan0: if there is no second radio, hand it back to the station so home Wi-Fi (SSH/OTA) returns
-	ip link show wlan1 >/dev/null 2>&1 || /etc/init.d/S45wifi-auto restart >/dev/null 2>&1 &
+	# Reconnect the Wi-Fi link to the Commander/home that start dropped (SSH/OTA/WiFi-CAN return).
+	wpa_cli -i wlan0 reconnect >/dev/null 2>&1 || /etc/init.d/S45wifi-auto restart >/dev/null 2>&1 &
 }
 
 case "$1" in
@@ -28,6 +28,10 @@ start)
 	[ -f "$MARK" ] && exit 0   # already up
 	IFACE=wlan1; ip link show wlan1 >/dev/null 2>&1 || IFACE=wlan0
 	BSSID=$(cat /sys/class/net/"$IFACE"/address)
+	# Prepare for AA: drop the Wi-Fi link to the Commander/home so the radio is free for the AP's own channel (single
+	# radio can't host the AP on the station's channel, esp. a DFS one). During AA the car link rides the Commander's
+	# Bluetooth; dash-aa stop reconnects this. wpa_cli disconnect holds until reconnect (no auto-rejoin fighting the AP).
+	wpa_cli -i wlan0 disconnect >/dev/null 2>&1 || true
 	echo "dash-aa: AP on $IFACE ($BSSID) ssid=$SSID ip=$IP"
 	aa ap "$IFACE" "$SSID" "$PSK" "$IP"
 	bluetoothctl -- system-alias Wattline >/dev/null 2>&1 || true   # the name the phone sees (not the default BlueZ x.y)
