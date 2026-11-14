@@ -30,7 +30,7 @@ jobs:
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential python3
       - name: Unit tests (decode, derive, bright, settings, wifi, actions, sec1)
-        run: make -C app test
+        run: mkdir -p app/build && make -C app test
       - name: Headless app builds
         run: make -C app -f app.mk host
 
