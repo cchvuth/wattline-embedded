@@ -719,12 +719,10 @@ void dash_ui_init(lv_obj_t *scr)
 		float cy = G.link_top + PL(22);
 		int car_x = ri(G.W - G.ml - inset(cy) - PL(20) - PL(12)), car_y = ri(cy - PL(12));
 		lv_obj_set_pos(car_panel, car_x, car_y);
-		/* Android Auto on demand, a gap to the car panel's left. ic_route (25) is smaller than ic_car_panel (36), so
-		 * scale it to the car icon's size and share its top edge (both square): level, and the same size. Cert-gated. */
+		/* Android Auto on demand, a gap to the car panel's left. ic_route is baked at ic_car_panel's size and scale
+		 * (export_test.dart), so it sits at the car icon's y unscaled: level, same size, crisp. Cert-gated. */
 		aa_btn = icon(root, &ic_route, WHITE);
-		lv_image_set_pivot(aa_btn, 0, 0);
-		lv_image_set_scale(aa_btn, 256 * (int)ic_car_panel.header.h / (int)ic_route.header.h);
-		lv_obj_set_pos(aa_btn, car_x - ri(PL(16)) - (int)ic_car_panel.header.w, car_y);
+		lv_obj_set_pos(aa_btn, car_x - ri(PL(16)) - (int)ic_route.header.w, car_y);
 		show(aa_btn, false);
 	}
 
@@ -936,6 +934,7 @@ static const char *bt_word(dash_bt_t b, uint32_t *c, const lv_image_dsc_t **i)
 
 static dash_settings_t ST; /* the settings as shown (defined with the settings screen below) */
 static bool projecting;    /* an Android Auto session is up (/run/dash-project, raised by aa serve) */
+static bool aa_pending;    /* tapped start, waiting for /run/dash-aa to appear — immediate amber feedback */
 static void set_links(const dash_state_t *s)
 {
 	const lv_image_dsc_t *wi = &ic_wifi_l;
@@ -1695,7 +1694,7 @@ static void close_tap(lv_event_t *e) { (void)e, dash_ui_show(DASH_VIEW_DASH); }
 static void panel_tap(lv_event_t *e) { press((intptr_t)lv_event_get_user_data(e)); }
 static void open_tap(lv_event_t *e) { dash_ui_show((intptr_t)lv_event_get_user_data(e)); }
 /* the dash's Android Auto button (beside the car-panel icon): toggle the on-demand bring-up by its live state */
-static void aa_tap(lv_event_t *e) { (void)e; save(access("/run/dash-aa", F_OK) == 0 ? DASH_AA_STOP : DASH_AA_START); }
+static void aa_tap(lv_event_t *e) { (void)e; bool up = access("/run/dash-aa", F_OK) == 0; save(up ? DASH_AA_STOP : DASH_AA_START); aa_pending = !up; }
 
 /* ---- the phone-map split screen: the video on the left 2/3, a compact dash on the right 1/3 ---- */
 static float pj_vw(void) { return G.W * 2.0f / 3.0f; } /* the video region's width */
@@ -2979,7 +2978,11 @@ void dash_ui_set(const dash_state_t *s)
 	 * on-demand bring-up is up, so a tap tears it down rather than leaving the Dash advertising all the time. */
 	bool aa_cert = access("/etc/wattline/aa.crt", F_OK) == 0;
 	show(aa_btn, aa_cert);
-	if (aa_cert) icon_color(aa_btn, access("/run/dash-aa", F_OK) == 0 ? REGEN : WHITE);
+	if (aa_cert) {   /* idle = white, connecting = amber (AP up / tap pending), projecting = green */
+		bool up = access("/run/dash-aa", F_OK) == 0;
+		if (up) aa_pending = false;
+		icon_color(aa_btn, projecting ? REGEN : (up || aa_pending) ? WARN : WHITE);
+	}
 
 	/* The blocks: the car and the route (only with one) left of the ring, the energy figures and the g-meter right of
 	 * it. Widths are fixed per block (the widest it gets), so nothing moves as the figures change. A route coming or
