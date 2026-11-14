@@ -7,3 +7,5 @@ mkdir -p "$TARGET_DIR/usr/share/spike"
 cp "$M"/vdec-*.h264 "$M"/vdec-*.crc "$TARGET_DIR/usr/share/spike/"
 # hostapd ships an example /etc/hostapd.conf; the spike writes its own AP config at runtime, so drop the stock one
 rm -f "$TARGET_DIR/etc/hostapd.conf"
+# the image's identity, for S05overlay: a /data/overlay made on another image is dropped at boot
+date -u +%Y%m%d-%H%M%S > "$TARGET_DIR/etc/image-id"

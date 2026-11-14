@@ -1,0 +1,17 @@
+#!/bin/sh
+# The root filesystem is an initramfs: it runs from RAM and is read back from the card at every boot, so a file
+# changed on a running Dash is gone after a power cycle. /data/overlay/root is the fix for that: whatever is put
+# there (same paths as on /) is copied over the root at boot, right after /data is mounted (S05data) and before
+# anything else starts. dash-push.sh writes a file to both places, so a pushed fix is live now and stays.
+# An overlay belongs to the image it was made on (/data/overlay/image-id = /etc/image-id): after a new image is
+# burned or updated, an old overlay is dropped rather than left to shadow newer firmware.
+case "$1" in start|"") ;; *) exit 0;; esac
+O=/data/overlay
+[ -d $O/root ] || exit 0
+if [ "$(cat $O/image-id 2>/dev/null)" != "$(cat /etc/image-id 2>/dev/null)" ]; then
+	echo "S05overlay: overlay is from another image, dropped"
+	rm -rf $O
+	exit 0
+fi
+cp -a $O/root/. / && echo "S05overlay: $(find $O/root -type f | wc -l) file(s) applied"
+exit 0
