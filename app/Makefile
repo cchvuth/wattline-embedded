@@ -1,5 +1,5 @@
 CC ?= cc
-HOSTFLAGS = -std=c11 -Wall -Wextra -fsanitize=address,undefined
+HOSTFLAGS = -std=gnu11 -Wall -Wextra -fsanitize=address,undefined
 
 test:
 	python3 -I tools/gen_signals.py ../tesla-dash build
