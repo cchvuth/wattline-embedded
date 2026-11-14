@@ -46,6 +46,10 @@ enum {
 };
 /* input-channel message ids (InputChannelMessageIdsEnum.proto) */
 enum { AA_IN_EVENT = 0x8001, AA_IN_BINDING_REQUEST = 0x8002, AA_IN_BINDING_RESPONSE = 0x8003 };
+/* sensor-channel message ids (SensorChannelMessageIdsEnum.proto) */
+enum { AA_SEN_START_REQUEST = 0x8001, AA_SEN_START_RESPONSE = 0x8002, AA_SEN_EVENT = 0x8003 };
+/* SensorType (SensorType.proto): the phone tears down with "No sensors" unless the HU advertises a sensor source */
+enum { AA_SENSOR_NIGHT_DATA = 10, AA_SENSOR_DRIVING_STATUS = 13 };
 
 /* enums */
 enum { AA_VER_MATCH = 0, AA_VER_MISMATCH = 0xFFFF };          /* VersionResponseStatus */
@@ -75,8 +79,21 @@ enum { AA_TOUCH_PRESS = 0, AA_TOUCH_RELEASE = 1, AA_TOUCH_DRAG = 2 };
 #define AA_SDRESP_HIDE_CLOCK 12
 /* ChannelDescriptor */
 #define AA_CHD_CHANNEL_ID 1
+#define AA_CHD_SENSOR_CHANNEL 2
 #define AA_CHD_AV_CHANNEL 3
 #define AA_CHD_INPUT_CHANNEL 4
+/* SensorChannel descriptor { repeated Sensor sensors = 1 }, Sensor { type = 1 } */
+#define AA_SENCH_SENSORS 1
+#define AA_SEN_TYPE 1
+/* SensorRequest { sensor_type = 1 } / SensorResponse { status = 1 } */
+#define AA_SENREQ_TYPE 1
+#define AA_SENRESP_STATUS 1
+/* SensorBatch (SensorEventIndication): repeated NightMode night_mode = 10, repeated DrivingStatus driving_status = 13 */
+#define AA_SENEV_NIGHT_MODE 10
+#define AA_SENEV_DRIVING_STATUS 13
+/* DrivingStatus { status = 1 } (0 = unrestricted), NightMode { is_night = 1 } */
+#define AA_DRV_STATUS 1
+#define AA_NIGHT_IS_NIGHT 1
 /* ChannelOpenRequest / Response */
 #define AA_COREQ_PRIORITY 1
 #define AA_COREQ_CHANNEL_ID 2
@@ -86,6 +103,34 @@ enum { AA_TOUCH_PRESS = 0, AA_TOUCH_RELEASE = 1, AA_TOUCH_DRAG = 2 };
 #define AA_AVCH_AUDIO_TYPE 2
 #define AA_AVCH_VIDEO_CONFIGS 4
 #define AA_AVCH_AVAILABLE_IN_CALL 5
+/* AudioConfig { sample_rate = 1, bit_depth = 2, channel_count = 3 }, in AVChannel.audio_configs = 3.
+ * The phone tears down with "No audio playback service" unless the HU advertises audio sinks. */
+#define AA_AVCH_AUDIO_CONFIGS 3
+#define AA_ACFG_SAMPLE_RATE 1
+#define AA_ACFG_BIT_DEPTH 2
+#define AA_ACFG_CHANNELS 3
+enum { AA_AUDIO_SPEECH = 1, AA_AUDIO_SYSTEM = 2, AA_AUDIO_MEDIA = 3 };   /* AudioType */
+/* AVInputChannel (ChannelDescriptor.av_input_channel = 5): the microphone; AA refuses without it ("No audio/mic").
+ * { stream_type = 1, audio_config = 2 } (no audio_type here, unlike AVChannel); AVInputOpenResponse { session = 1, value = 2 } */
+#define AA_CHD_AV_INPUT_CHANNEL 5
+#define AA_AVIN_STREAM_TYPE 1
+#define AA_AVIN_AUDIO_CONFIG 2
+#define AA_AVINRESP_SESSION 1
+#define AA_AVINRESP_VALUE 2
+/* TouchConfig { width = 1, height = 2 } (in InputChannel.touch_screen_config) */
+#define AA_TC_WIDTH 1
+#define AA_TC_HEIGHT 2
+/* AudioFocusRequest { audio_focus_type = 1 } / AudioFocusResponse { audio_focus_state = 1 } */
+#define AA_AFREQ_TYPE 1
+#define AA_AFRESP_STATE 1
+enum { AA_AF_RELEASE = 4 };                /* AudioFocusType */
+enum { AA_AF_GAIN = 1, AA_AF_LOSS = 3 };   /* AudioFocusState */
+/* NavigationFocusRequest / Response { type = 1 } (2 = projected) */
+#define AA_NAVF_TYPE 1
+/* PingRequest / PingResponse { timestamp = 1 } */
+#define AA_PING_TS 1
+/* BindingResponse { status = 1 } */
+#define AA_BINDRESP_STATUS 1
 /* VideoConfig */
 #define AA_VC_RESOLUTION 1
 #define AA_VC_FPS 2
