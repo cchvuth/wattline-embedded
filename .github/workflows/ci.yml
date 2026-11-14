@@ -29,6 +29,8 @@ jobs:
           token: ${{ secrets.WATTLINE_TOKEN || github.token }}
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential python3
+      - name: Fetch vendored LVGL (gitignored in the repo)
+        run: git clone --depth 1 -b v9.6.0 https://github.com/lvgl/lvgl app/third_party/lvgl-9.6.0
       - name: Unit tests (decode, derive, bright, settings, wifi, actions, sec1)
         run: mkdir -p app/build && make -C app test
       - name: Headless app builds
