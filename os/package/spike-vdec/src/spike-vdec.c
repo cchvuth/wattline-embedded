@@ -13,7 +13,10 @@
 //   spike-vdec --parse FILE      parse only (no device): per-slice header facts; runs on a build host too
 //   spike-vdec --rotate          the rotate estimate only (from malloc'd memory)
 //   spike-vdec --fb [FILE]       decode a clip straight to /dev/fb0 (the panel's projection region), looping
-//   spike-vdec --fb-stream       decode a live Annex-B H.264 stream from stdin to the panel (the AA video sink)
+//   spike-vdec --fb-stream [--region X W]
+//                                decode a live Annex-B H.264 stream from stdin to the panel (the AA video sink). With
+//                                --region, the frame's middle W x 480 window is shown unscaled at landscape x = X..X+W-1
+//                                (the AA receiver asks the phone for a frame whose margins leave exactly that window).
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -429,6 +432,7 @@ static void rotate_bench(const char *what, const uint8_t *src, int stride, int w
  * The left-2/3 video region is landscape x 0..w-1 -> physical rows 0..w-1, each row = h pixels (= panel width). */
 #define RGN_W 1280   /* the projection region: left 2/3 of the 1920-wide landscape canvas */
 #define RGN_H 480
+static int rgn_x = 0, rgn_w = RGN_W;   /* --region: where on the canvas, and how wide (height is always RGN_H) */
 static int fb_fd = -1; static uint8_t *fb_mem = NULL; static long fb_line = 0, fb_len = 0;
 static uint32_t *fb_bgra = NULL;
 static void fb_open(void)
@@ -446,7 +450,7 @@ static void fb_open(void)
 static void fb_blit(int w, int h)	/* w = frame width (= physical rows), h = frame height (= physical cols) */
 {
 	for (int r = 0; r < w; r++) {
-		long off = (long)r * fb_line;
+		long off = (long)(rgn_x + r) * fb_line;
 		if (off + (long)h * 4 > fb_len) break;
 		memcpy(fb_mem + off, fb_bgra + (size_t)r * h, (size_t)h * 4);
 	}
@@ -501,7 +505,7 @@ static void dec_setup(dec_t *D)
 	if (ioctl(D->vfd, VIDIOC_STREAMON, &ty[0]) || ioctl(D->vfd, VIDIOC_STREAMON, &ty[1])) die("STREAMON: %s", strerror(errno));
 	if (ioctl(D->mfd, MEDIA_IOC_REQUEST_ALLOC, &D->rq)) die("MEDIA_IOC_REQUEST_ALLOC: %s", strerror(errno));
 	if (fb_fd >= 0) {
-		fb_bgra = realloc(fb_bgra, (size_t)RGN_W * RGN_H * 4);   /* the region, not the source size */
+		fb_bgra = realloc(fb_bgra, (size_t)rgn_w * RGN_H * 4);   /* the region, not the source size */
 		D->fb_cram = malloc((size_t)D->stride * D->ah * 3 / 2);
 		if (!fb_bgra || !D->fb_cram) die("out of memory (fb buffers)");
 	}
@@ -543,11 +547,12 @@ static int dec_one(dec_t *D, pic_t *p, nal_t *s)
 		size_t sz = (size_t)D->stride * D->ah * 3 / 2;
 		memcpy(D->fb_cram, D->cap[ci].p, sz);
 		const uint8_t *yy = D->fb_cram, *uv = D->fb_cram + (size_t)D->stride * D->ah;
-		if (crop_w == RGN_W && crop_h == RGN_H)   /* exact region size: the fast tiled rotate */
-			rotate_nv12_bgra(yy, uv, D->stride, crop_w, crop_h, fb_bgra);
-		else                                      /* scale the source up/down into the region */
-			rotate_scale_nv12_bgra(yy, uv, D->stride, crop_w, crop_h, RGN_W, RGN_H, fb_bgra);
-		fb_blit(RGN_W, RGN_H);
+		if (crop_w >= rgn_w && crop_h >= RGN_H) {   /* the region's window from the frame's middle, unscaled */
+			int sx = ((crop_w - rgn_w) / 2 + crop_x) & ~1, sy = ((crop_h - RGN_H) / 2 + crop_y) & ~1;   /* even: NV12 */
+			rotate_nv12_bgra(yy + (size_t)sy * D->stride + sx, uv + (size_t)(sy / 2) * D->stride + sx, D->stride, rgn_w, RGN_H, fb_bgra);
+		} else                                      /* a smaller frame than asked for: scale it into the region */
+			rotate_scale_nv12_bgra(yy, uv, D->stride, crop_w, crop_h, rgn_w, RGN_H, fb_bgra);
+		fb_blit(rgn_w, RGN_H);
 	}
 	D->frames++;
 	return ci;
@@ -679,6 +684,10 @@ int main(int argc, char **argv)
 		for (;;) decode(f, 0, 0);	/* loops the clip until killed */
 	}
 	if (argc > 1 && !strcmp(argv[1], "--fb-stream")) {	/* decode a live Annex-B H.264 stream from stdin to the panel */
+		if (argc > 4 && !strcmp(argv[2], "--region")) {
+			rgn_x = atoi(argv[3]), rgn_w = atoi(argv[4]);
+			if (rgn_x < 0 || rgn_w < 16 || rgn_w % 2 || rgn_x + rgn_w > 1920) die("--region %d %d: off the 1920-wide canvas", rgn_x, rgn_w);
+		}
 		fb_open();
 		return decode_stream(0);	/* the AA video channel pipes H.264 in; EOF ends it */
 	}
