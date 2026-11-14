@@ -1,7 +1,7 @@
 ################################################################################
 #
 # rtl8733bs: Realtek vendor WiFi driver v5.15.17 (20250521) patched for Linux 7.3.4.
-# Source kept outside this repo (private), mounted at /radio in the build container.
+# Source in radio/src/work (GPL-2.0, see radio/README.md); mount radio/ at /radio in the build container.
 #
 ################################################################################
 

@@ -1,0 +1,497 @@
+diff -ruN a/Makefile b/Makefile
+--- a/Makefile
++++ b/Makefile
+@@ -2634,6 +2634,9 @@
+ 
+ $(MODULE_NAME)-$(CONFIG_MP_INCLUDED) += core/rtw_mp.o
+ 
++# kbuild dropped EXTRA_CFLAGS (Linux 6.x); hand the flags over
++ccflags-y += $(EXTRA_CFLAGS)
++
+ ifeq ($(CONFIG_RTL8723B), y)
+ $(MODULE_NAME)-$(CONFIG_MP_INCLUDED)+= core/rtw_bt_mp.o
+ endif
+diff -ruN a/core/crypto/sha256-prf.c b/core/crypto/sha256-prf.c
+--- a/core/crypto/sha256-prf.c
++++ b/core/crypto/sha256-prf.c
+@@ -15,7 +15,7 @@
+ 
+ 
+ /**
+- * sha256_prf - SHA256-based Pseudo-Random Function (IEEE 802.11r, 8.5.1.5.2)
++ * rtw_sha256_prf - SHA256-based Pseudo-Random Function (IEEE 802.11r, 8.5.1.5.2)
+  * @key: Key for PRF
+  * @key_len: Length of the key in bytes
+  * @label: A unique label for each purpose of the PRF
+@@ -28,16 +28,16 @@
+  * This function is used to derive new, cryptographically separate keys from a
+  * given key.
+  */
+-int sha256_prf(const u8 *key, size_t key_len, const char *label,
++int rtw_sha256_prf(const u8 *key, size_t key_len, const char *label,
+ 		const u8 *data, size_t data_len, u8 *buf, size_t buf_len)
+ {
+-	return sha256_prf_bits(key, key_len, label, data, data_len, buf,
++	return rtw_sha256_prf_bits(key, key_len, label, data, data_len, buf,
+ 			       buf_len * 8);
+ }
+ 
+ 
+ /**
+- * sha256_prf_bits - IEEE Std 802.11-2012, 11.6.1.7.2 Key derivation function
++ * rtw_sha256_prf_bits - IEEE Std 802.11-2012, 11.6.1.7.2 Key derivation function
+  * @key: Key for KDF
+  * @key_len: Length of the key in bytes
+  * @label: A unique label for each purpose of the PRF
+@@ -52,7 +52,7 @@
+  * significant 1-7 bits of the last octet in the output are not part of the
+  * requested output.
+  */
+-int sha256_prf_bits(const u8 *key, size_t key_len, const char *label,
++int rtw_sha256_prf_bits(const u8 *key, size_t key_len, const char *label,
+ 		    const u8 *data, size_t data_len, u8 *buf,
+ 		    size_t buf_len_bits)
+ {
+@@ -79,12 +79,12 @@
+ 		plen = buf_len - pos;
+ 		WPA_PUT_LE16(counter_le, counter);
+ 		if (plen >= SHA256_MAC_LEN) {
+-			if (hmac_sha256_vector(key, key_len, 4, addr, len,
++			if (rtw_hmac_sha256_vector(key, key_len, 4, addr, len,
+ 					       &buf[pos]) < 0)
+ 				return -1;
+ 			pos += SHA256_MAC_LEN;
+ 		} else {
+-			if (hmac_sha256_vector(key, key_len, 4, addr, len,
++			if (rtw_hmac_sha256_vector(key, key_len, 4, addr, len,
+ 					       hash) < 0)
+ 				return -1;
+ 			os_memcpy(&buf[pos], hash, plen);
+diff -ruN a/core/crypto/sha256.c b/core/crypto/sha256.c
+--- a/core/crypto/sha256.c
++++ b/core/crypto/sha256.c
+@@ -14,7 +14,7 @@
+ 
+ 
+ /**
+- * hmac_sha256_vector - HMAC-SHA256 over data vector (RFC 2104)
++ * rtw_hmac_sha256_vector - HMAC-SHA256 over data vector (RFC 2104)
+  * @key: Key for HMAC operations
+  * @key_len: Length of the key in bytes
+  * @num_elem: Number of elements in the data vector
+@@ -23,7 +23,7 @@
+  * @mac: Buffer for the hash (32 bytes)
+  * Returns: 0 on success, -1 on failure
+  */
+-int hmac_sha256_vector(const u8 *key, size_t key_len, size_t num_elem,
++int rtw_hmac_sha256_vector(const u8 *key, size_t key_len, size_t num_elem,
+ 		       const u8 *addr[], const size_t *len, u8 *mac)
+ {
+ 	unsigned char k_pad[64]; /* padding - key XORd with ipad/opad */
+@@ -89,7 +89,7 @@
+ 
+ 
+ /**
+- * hmac_sha256 - HMAC-SHA256 over data buffer (RFC 2104)
++ * rtw_hmac_sha256 - HMAC-SHA256 over data buffer (RFC 2104)
+  * @key: Key for HMAC operations
+  * @key_len: Length of the key in bytes
+  * @data: Pointers to the data area
+@@ -97,8 +97,8 @@
+  * @mac: Buffer for the hash (32 bytes)
+  * Returns: 0 on success, -1 on failure
+  */
+-int hmac_sha256(const u8 *key, size_t key_len, const u8 *data,
++int rtw_hmac_sha256(const u8 *key, size_t key_len, const u8 *data,
+ 		size_t data_len, u8 *mac)
+ {
+-	return hmac_sha256_vector(key, key_len, 1, &data, &data_len, mac);
++	return rtw_hmac_sha256_vector(key, key_len, 1, &data, &data_len, mac);
+ }
+diff -ruN a/core/crypto/sha256.h b/core/crypto/sha256.h
+--- a/core/crypto/sha256.h
++++ b/core/crypto/sha256.h
+@@ -11,19 +11,19 @@
+ 
+ #define SHA256_MAC_LEN 32
+ 
+-int hmac_sha256_vector(const u8 *key, size_t key_len, size_t num_elem,
++int rtw_hmac_sha256_vector(const u8 *key, size_t key_len, size_t num_elem,
+ 		       const u8 *addr[], const size_t *len, u8 *mac);
+-int hmac_sha256(const u8 *key, size_t key_len, const u8 *data,
++int rtw_hmac_sha256(const u8 *key, size_t key_len, const u8 *data,
+ 		size_t data_len, u8 *mac);
+-int sha256_prf(const u8 *key, size_t key_len, const char *label,
++int rtw_sha256_prf(const u8 *key, size_t key_len, const char *label,
+ 	       const u8 *data, size_t data_len, u8 *buf, size_t buf_len);
+-int sha256_prf_bits(const u8 *key, size_t key_len, const char *label,
++int rtw_sha256_prf_bits(const u8 *key, size_t key_len, const char *label,
+ 		    const u8 *data, size_t data_len, u8 *buf,
+ 		    size_t buf_len_bits);
+-void tls_prf_sha256(const u8 *secret, size_t secret_len,
++void rtw_tls_prf_sha256(const u8 *secret, size_t secret_len,
+ 		    const char *label, const u8 *seed, size_t seed_len,
+ 		    u8 *out, size_t outlen);
+-int hmac_sha256_kdf(const u8 *secret, size_t secret_len,
++int rtw_hmac_sha256_kdf(const u8 *secret, size_t secret_len,
+ 		    const char *label, const u8 *seed, size_t seed_len,
+ 		    u8 *out, size_t outlen);
+ 
+diff -ruN a/core/rtw_swcrypto.c b/core/rtw_swcrypto.c
+--- a/core/rtw_swcrypto.c
++++ b/core/rtw_swcrypto.c
+@@ -291,6 +291,6 @@
+ 
+ 	_rtw_memcpy(data + 2 * ETH_ALEN, bssid, ETH_ALEN);
+ 
+-	sha256_prf(key_input, SHA256_MAC_LEN, "TDLS PMK", data, sizeof(data), (u8 *)&psta->tpk, sizeof(psta->tpk));
++	rtw_sha256_prf(key_input, SHA256_MAC_LEN, "TDLS PMK", data, sizeof(data), (u8 *)&psta->tpk, sizeof(psta->tpk));
+ }
+ #endif /* CONFIG_TDLS */
+diff -ruN a/include/osdep_service_linux.h b/include/osdep_service_linux.h
+--- a/include/osdep_service_linux.h
++++ b/include/osdep_service_linux.h
+@@ -177,6 +177,27 @@
+ };
+ 
+ typedef struct rtw_timer_list _timer;
++
++/* cfg80211 in Linux 7.x: key/station ops take a wireless_dev, cfg80211 hands out ROC/mgmt_tx cookies */
++#define RTW_CFG80211_WDEV_OPS (LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0))
++
++/* Linux 7.x dropped strncpy(); keep its exact semantics (copy up to n, zero-pad) for this driver */
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0))
++#include <linux/string.h>
++static inline char *rtw_strncpy(char *dst, const char *src, size_t n)
++{
++	size_t i = 0;
++
++	for (; i < n && src[i]; i++)
++		dst[i] = src[i];
++	for (; i < n; i++)
++		dst[i] = '\0';
++	return dst;
++}
++#undef strncpy
++#define strncpy rtw_strncpy
++#endif
++
+ typedef struct completion _completion;
+ 
+ struct	__queue	{
+@@ -371,7 +392,9 @@
+ static inline void timer_hdl(unsigned long cntx)
+ #endif
+ {
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0))
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 16, 0))
++	_timer *ptimer = timer_container_of(ptimer, in_timer, timer);
++#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0))
+ 	_timer *ptimer = from_timer(ptimer, in_timer, timer);
+ #else
+ 	_timer *ptimer = (_timer *)cntx;
+@@ -406,12 +429,20 @@
+ 
+ __inline static void _cancel_timer(_timer *ptimer, u8 *bcancelled)
+ {
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0))
++	*bcancelled = timer_delete_sync(&ptimer->timer) == 1 ? 1 : 0;
++#else
+ 	*bcancelled = del_timer_sync(&ptimer->timer) == 1 ? 1 : 0;
++#endif
+ }
+ 
+ __inline static void _cancel_timer_async(_timer *ptimer)
+ {
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0))
++	timer_delete(&ptimer->timer);
++#else
+ 	del_timer(&ptimer->timer);
++#endif
+ }
+ 
+ static inline void _init_workitem(_workitem *pwork, void *pfunc, void *cntx)
+diff -ruN a/os_dep/linux/ioctl_cfg80211.c b/os_dep/linux/ioctl_cfg80211.c
+--- a/os_dep/linux/ioctl_cfg80211.c
++++ b/os_dep/linux/ioctl_cfg80211.c
+@@ -3517,7 +3517,11 @@
+ }
+ #endif
+ 
+-static int cfg80211_rtw_set_wiphy_params(struct wiphy *wiphy, u32 changed)
++static int cfg80211_rtw_set_wiphy_params(struct wiphy *wiphy,
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0))
++	int radio_idx,
++#endif
++	u32 changed)
+ {
+ #if 0
+ 	struct iwm_priv *iwm = wiphy_to_iwm(wiphy);
+@@ -4563,6 +4567,9 @@
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0))
+ 	struct wireless_dev *wdev,
+ #endif
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0))
++	int radio_idx,
++#endif
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36)) || defined(COMPAT_KERNEL_RELEASE)
+ 	enum nl80211_tx_power_setting type, int mbm)
+ #else
+@@ -4625,6 +4632,12 @@
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0))
+ 	struct wireless_dev *wdev,
+ #endif
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0))
++	int radio_idx,
++#endif
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 14, 0))
++	unsigned int link_id,
++#endif
+ 	int *dbm)
+ {
+ 	struct dvobj_priv *dvobj = wiphy_to_dvobj(wiphy);
+@@ -5092,7 +5105,11 @@
+ 		sinfo->filled = STATION_INFO_ASSOC_REQ_IES;
+ 		sinfo->assoc_req_ies = pmgmt_frame + WLAN_HDR_A3_LEN + ie_offset;
+ 		sinfo->assoc_req_ies_len = frame_len - WLAN_HDR_A3_LEN - ie_offset;
++#if RTW_CFG80211_WDEV_OPS
++		cfg80211_new_sta(ndev->ieee80211_ptr, get_addr2_ptr(pmgmt_frame), sinfo, GFP_ATOMIC);
++#else
+ 		cfg80211_new_sta(ndev, get_addr2_ptr(pmgmt_frame), sinfo, GFP_ATOMIC);
++#endif
+ 		rtw_mfree(sinfo, sizeof(struct station_info));
+ 	}
+ #else /* defined(RTW_USE_CFG80211_STA_EVENT) */
+@@ -5139,7 +5156,11 @@
+ 	RTW_INFO(FUNC_ADPT_FMT"\n", FUNC_ADPT_ARG(padapter));
+ 
+ #if defined(RTW_USE_CFG80211_STA_EVENT) || defined(COMPAT_KERNEL_RELEASE)
++#if RTW_CFG80211_WDEV_OPS
++	cfg80211_del_sta(ndev->ieee80211_ptr, da, GFP_ATOMIC);
++#else
+ 	cfg80211_del_sta(ndev, da, GFP_ATOMIC);
++#endif
+ #else /* defined(RTW_USE_CFG80211_STA_EVENT) */
+ 	channel = pmlmeext->cur_channel;
+ 	freq = rtw_ch2freq(channel);
+@@ -5837,7 +5858,11 @@
+ 				goto exit;
+ 			}
+ 			/* indicate new sta */
++#if RTW_CFG80211_WDEV_OPS
++			cfg80211_new_sta(ndev->ieee80211_ptr, mac, sinfo, GFP_ATOMIC);
++#else
+ 			cfg80211_new_sta(ndev, mac, sinfo, GFP_ATOMIC);
++#endif
+ 			rtw_mfree(sinfo, sizeof(struct station_info));
+ 		}
+ 		goto exit;
+@@ -6941,7 +6966,9 @@
+ #endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0)) */
+ 
+ static int cfg80211_rtw_set_monitor_channel(struct wiphy *wiphy
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0))
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0))
++	, struct net_device *dev, struct cfg80211_chan_def *chandef
++#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0))
+ 	, struct cfg80211_chan_def *chandef
+ #else
+ 	, struct ieee80211_channel *chan
+@@ -7580,8 +7607,15 @@
+ #if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 8, 0))
+ 	enum nl80211_channel_type channel_type,
+ #endif
++#if RTW_CFG80211_WDEV_OPS
++	unsigned int duration, u64 cookie_in, const u8 *rx_addr)
++#else
+ 	unsigned int duration, u64 *cookie)
++#endif
+ {
++#if RTW_CFG80211_WDEV_OPS
++	u64 cookie_val = cookie_in, *cookie = &cookie_val;
++#endif
+ 	s32 err = 0;
+ 	u8 remain_ch = (u8) ieee80211_frequency_to_channel(channel->center_freq);
+ 	_adapter *padapter = NULL;
+@@ -7626,7 +7660,9 @@
+ #endif
+ #endif
+ 
++#if !RTW_CFG80211_WDEV_OPS
+ 	*cookie = ATOMIC_INC_RETURN(&prochinfo->ro_ch_cookie_gen);
++#endif
+ 
+ 	RTW_INFO(FUNC_ADPT_FMT"%s ch:%u duration:%d, cookie:0x%llx\n"
+ 		, FUNC_ADPT_ARG(padapter), wdev == wiphy_to_pd_wdev(wiphy) ? " PD" : ""
+@@ -8175,8 +8211,15 @@
+ #else
+ 	struct cfg80211_mgmt_tx_params *params,
+ #endif
++#if RTW_CFG80211_WDEV_OPS
++	u64 cookie_in)
++#else
+ 	u64 *cookie)
++#endif
+ {
++#if RTW_CFG80211_WDEV_OPS
++	u64 cookie_val = cookie_in, *cookie = &cookie_val;
++#endif
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0)) || defined(COMPAT_KERNEL_RELEASE)
+ 	struct ieee80211_channel *chan = params->chan;
+ 	const u8 *buf = params->buf;
+@@ -8254,7 +8297,9 @@
+ 	pwdev_priv = adapter_wdev_data(padapter);
+ 
+ 	/* cookie generation */
++#if !RTW_CFG80211_WDEV_OPS
+ 	*cookie = pwdev_priv->mgmt_tx_cookie++;
++#endif
+ 
+ #ifdef CONFIG_DEBUG_CFG80211
+ 	RTW_INFO(FUNC_ADPT_FMT"%s len=%zu, ch=%d"
+@@ -10153,7 +10198,8 @@
+ 	wiphy->max_ap_assoc_sta = adapter->stapriv.max_num_sta;
+ #endif
+ 
+-#if CONFIG_RTW_MACADDR_ACL && (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 9, 0))
++/* dash: station only. An ACL list without AP SME/set_mac_acl makes wiphy_register() refuse the wiphy (cfg80211 core.c) */
++#if 0	/* dash: never in a station-only build */
+ 	wiphy->max_acl_mac_addrs = NUM_ACL;
+ #endif
+ 
+@@ -10162,7 +10208,7 @@
+ #endif
+ 
+ 	wiphy->interface_modes =	BIT(NL80211_IFTYPE_STATION)
+-								#ifdef CONFIG_AP_MODE
++								#if 0 /* Dash: station only; cfg80211 refuses AP and ad-hoc */
+ 								| BIT(NL80211_IFTYPE_ADHOC) /* todo : AD-HOC task group will refine it */
+ 								| BIT(NL80211_IFTYPE_AP)
+ 								#endif
+@@ -10658,6 +10704,45 @@
+ #endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 12, 0)) */
+ #endif /* CONFIG_AP_MODE */
+ 
++#if RTW_CFG80211_WDEV_OPS
++static int cfg80211_rtw_add_key_wdev(struct wiphy *wiphy, struct wireless_dev *wdev, int link_id,
++	u8 key_index, bool pairwise, const u8 *mac_addr, struct key_params *params)
++{
++	return cfg80211_rtw_add_key(wiphy, wdev->netdev, link_id, key_index, pairwise, mac_addr, params);
++}
++
++static int cfg80211_rtw_get_key_wdev(struct wiphy *wiphy, struct wireless_dev *wdev, int link_id,
++	u8 key_index, bool pairwise, const u8 *mac_addr, void *cookie,
++	void (*callback)(void *cookie, struct key_params *))
++{
++	return cfg80211_rtw_get_key(wiphy, wdev->netdev, link_id, key_index, pairwise, mac_addr, cookie, callback);
++}
++
++static int cfg80211_rtw_del_key_wdev(struct wiphy *wiphy, struct wireless_dev *wdev, int link_id,
++	u8 key_index, bool pairwise, const u8 *mac_addr)
++{
++	return cfg80211_rtw_del_key(wiphy, wdev->netdev, link_id, key_index, pairwise, mac_addr);
++}
++
++static int cfg80211_rtw_set_default_mgmt_key_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++	int link_id, u8 key_index)
++{
++	return cfg80211_rtw_set_default_mgmt_key(wiphy, wdev->netdev, link_id, key_index);
++}
++
++static int cfg80211_rtw_get_station_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++	const u8 *mac, struct station_info *sinfo)
++{
++	return cfg80211_rtw_get_station(wiphy, wdev->netdev, mac, sinfo);
++}
++
++#define cfg80211_rtw_add_key cfg80211_rtw_add_key_wdev
++#define cfg80211_rtw_get_key cfg80211_rtw_get_key_wdev
++#define cfg80211_rtw_del_key cfg80211_rtw_del_key_wdev
++#define cfg80211_rtw_set_default_mgmt_key cfg80211_rtw_set_default_mgmt_key_wdev
++#define cfg80211_rtw_get_station cfg80211_rtw_get_station_wdev
++#endif /* RTW_CFG80211_WDEV_OPS */
++
+ static struct cfg80211_ops rtw_cfg80211_ops = {
+ 	.change_virtual_intf = cfg80211_rtw_change_iface,
+ 	.add_key = cfg80211_rtw_add_key,
+@@ -10692,7 +10777,7 @@
+ 	.add_virtual_intf = cfg80211_rtw_add_virtual_intf,
+ 	.del_virtual_intf = cfg80211_rtw_del_virtual_intf,
+ 
+-#ifdef CONFIG_AP_MODE
++#if 0 /* Dash: station only, no AP ops (was CONFIG_AP_MODE) */
+ #if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 4, 0)) && !defined(COMPAT_KERNEL_RELEASE)
+ 	.add_beacon = cfg80211_rtw_add_beacon,
+ 	.set_beacon = cfg80211_rtw_set_beacon,
+diff -ruN a/os_dep/linux/wifi_regd.c b/os_dep/linux/wifi_regd.c
+--- a/os_dep/linux/wifi_regd.c
++++ b/os_dep/linux/wifi_regd.c
+@@ -15,6 +15,12 @@
+ 
+ #include <drv_types.h>
+ 
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0))
++#define RTW_WDEV_CAC_STARTED links[0].cac_started
++#else
++#define RTW_WDEV_CAC_STARTED cac_started
++#endif
++
+ #ifdef CONFIG_IOCTL_CFG80211
+ #if !RTW_PER_ADAPTER_WIPHY
+ void rtw_chset_hook_os_channels(struct rtw_chset *chset, void *os_ref)
+@@ -999,7 +1005,11 @@
+ 		evt = LIST_CONTAINOR(list, struct async_cac_change_evt, list);
+ 
+ 		rtnl_lock();
+-		cfg80211_cac_event(evt->netdev, &evt->chandef, evt->event, GFP_KERNEL);
++		cfg80211_cac_event(evt->netdev, &evt->chandef, evt->event, GFP_KERNEL
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0))
++			, 0
++#endif
++			);
+ 		rtnl_unlock();
+ 
+ 		rtw_mfree(evt, sizeof(*evt));
+@@ -1090,7 +1100,11 @@
+ 		if (async)
+ 			cfg80211_cac_event_async(iface->pnetdev, &chdef, event);
+ 		else
+-			cfg80211_cac_event(iface->pnetdev, &chdef, event, GFP_KERNEL);
++			cfg80211_cac_event(iface->pnetdev, &chdef, event, GFP_KERNEL
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0))
++				, 0
++#endif
++				);
+ 	}
+ }
+ 
+@@ -1128,7 +1142,7 @@
+ 		if (!iface || !(ifbmp & BIT(iface->iface_id)))
+ 			continue;
+ 		/* finish only for wdev with cac_started */
+-		if (!iface->rtw_wdev || !iface->rtw_wdev->cac_started)
++		if (!iface->rtw_wdev || !iface->rtw_wdev->RTW_WDEV_CAC_STARTED)
+ 			ifbmp &= ~BIT(iface->iface_id);
+ 	}
+ 
+@@ -1151,7 +1165,7 @@
+ 		if (!iface || !(ifbmp & BIT(iface->iface_id)))
+ 			continue;
+ 		/* abort only for wdev with cac_started */
+-		if (!iface->rtw_wdev || !iface->rtw_wdev->cac_started)
++		if (!iface->rtw_wdev || !iface->rtw_wdev->RTW_WDEV_CAC_STARTED)
+ 			ifbmp &= ~BIT(iface->iface_id);
+ 	}
+ 
+@@ -1238,9 +1252,9 @@
+ 			started_ifbmp &= ~BIT(iface->iface_id);
+ 			continue;
+ 		}
+-		if (need_start && iface->rtw_wdev->cac_started)
++		if (need_start && iface->rtw_wdev->RTW_WDEV_CAC_STARTED)
+ 			started_ifbmp &= ~BIT(iface->iface_id);
+-		else if (!need_start && !iface->rtw_wdev->cac_started)
++		else if (!need_start && !iface->rtw_wdev->RTW_WDEV_CAC_STARTED)
+ 			finished_ifbmp &= ~BIT(iface->iface_id);
+ 	}
+ 
