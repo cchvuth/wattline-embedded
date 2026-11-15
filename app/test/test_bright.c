@@ -71,8 +71,19 @@ int main(void) {
   CHECK(step(1000) == 80 && B.src == BRIGHT_CAR); // ...held, not dimmed to idle
   C.wifi_live = true;                             // live again, its 0x273 not in yet: still held, not the day level
   CHECK(step(1000) == 80 && B.src == BRIGHT_CAR);
+  C.p.bright_at = now;                            // Bluetooth re-stamping its pushed level: not a 0x273, still held
+  CHECK(step(0) == 80 && B.src == BRIGHT_CAR);
   step(cf.bright_stale_ms - 2000 + 1);
   CHECK(B.src != BRIGHT_CAR);                     // never longer than bright_stale_ms
+  brightness(255);                                // the lamps' level (the car's says "not available"), then a takeover:
+  lamps(4);                                       // the night level held over the settle, not idle
+  step(0), step(300);
+  CHECK(B.src == BRIGHT_LAMPS && step(0) == 30);
+  C.wifi_live = false, car_from_bt(&C, NULL, now);
+  CHECK(step(2000) == 30 && B.src == BRIGHT_LAMPS);
+  step(cf.bright_stale_ms);
+  CHECK(B.src == BRIGHT_IDLE);                    // a loss that lasts: idle
+  C.wifi_live = true;
   lamps(4);
   step(0), step(300);
 

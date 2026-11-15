@@ -180,6 +180,16 @@ static const char *wpa_look(void) {
   return wpa_state[0] ? wpa_state : NULL;
 }
 
+// wlan0 has an IPv4 address now (not the 1.5 s look's)
+bool wifi_has_addr(void) {
+  struct ifaddrs *ifs, *i;
+  bool ipv4 = false;
+  if (getifaddrs(&ifs)) return false;
+  for (i = ifs; i; i = i->ifa_next) ipv4 |= i->ifa_addr && i->ifa_addr->sa_family == AF_INET && !strcmp(i->ifa_name, "wlan0");
+  freeifaddrs(ifs);
+  return ipv4;
+}
+
 int wifi_join(int64_t now, const char **why) {
   static int64_t next;
   static int state = -1;
@@ -189,13 +199,9 @@ int wifi_join(int64_t now, const char **why) {
     next = now + 1500;
     char oper[16] = "";
     FILE *f = fopen("/sys/class/net/wlan0/operstate", "r");
-    bool exists = f != NULL, ipv4 = false;
+    bool exists = f != NULL;
     if (f) { if (!fgets(oper, sizeof oper, f)) oper[0] = 0; fclose(f); oper[strcspn(oper, "\n")] = 0; }
-    struct ifaddrs *ifs, *i;
-    if (exists && !getifaddrs(&ifs)) {
-      for (i = ifs; i; i = i->ifa_next) ipv4 |= i->ifa_addr && i->ifa_addr->sa_family == AF_INET && !strcmp(i->ifa_name, "wlan0");
-      freeifaddrs(ifs);
-    }
+    bool ipv4 = exists && wifi_has_addr();
     const char *ws = exists ? wpa_look() : NULL;
     state = wifi_join_of(&t, exists, oper, ipv4, ws, &said);
     bool ssh_on; int ssh_open;
@@ -223,6 +229,7 @@ void wifi_scan(void) { scan_wanted = true; }
 int wifi_ssh(void) { return ssh_state; }
 #else
 int wifi_join(int64_t now, const char **why) { (void)now, *why = ""; return -1; }   // the Mac: the link says it all
+bool wifi_has_addr(void) { return true; }
 const char *wifi_net_line(void) { return ""; }
 const char *wifi_ssid(void) { return ""; }
 int wifi_nearby(const char (**list)[33]) { *list = NULL; return 0; }

@@ -25,21 +25,23 @@ void bright_follow(bright_t *b) { b->follow = 1; b->manual = -1; }
 int bright_step(bright_t *b, const conf_t *cf, const car_t *c, int64_t now, int64_t idle) {
   bool live = car_live(c);
   if (live) {
-    b->live_at = now;
+    b->live_at = now, b->seen_live = true;
     if (c->low_beam >= 0 || c->high_beam >= 0) b->night = c->low_beam == 1 || c->high_beam == 1, b->lamps = true;
   }
   double car = car_display_brightness(c, now), t;
   int src;
-  // The car's level held for bright_stale_ms when it vanished rather than went stale: WiFi taking over from Bluetooth
-  // forgets the car's values for the step-aside's settle, and 0x273 comes a moment after the hello. Else idle (10 %),
-  // then the day level, would flash in between.
-  if (live && !isnan(car)) b->car_level = car, b->car_at = now, b->car_frame_at = c->p.bright_at;
-  else if ((!live || isnan(c->display_brightness)) && c->p.bright_at == b->car_frame_at && b->car_at >= 0 &&
-           now - b->car_at <= cf->bright_stale_ms)   // not after a frame since (0x273 saying "not available")
-    car = b->car_level, live = true;
-  if (live && b->follow && !isnan(car)) t = car * cf->bright_follow_scale + cf->bright_follow_offset + b->offset, src = BRIGHT_CAR;
+  // WiFi taking over from Bluetooth forgets the car's values for the step-aside's settle, and 0x273 comes a moment
+  // after the hello (a short loss alike): what the car last gave is held that long, its level (when it vanished rather
+  // than went stale: no 0x273 since) or the lamps' — else idle (10 %), then the day level, would flash in between.
+  int64_t hold = cf->bright_stale_ms > cf->bt_settle_ms + 2000 ? cf->bright_stale_ms : cf->bt_settle_ms + 2000;
+  bool held = !live && b->seen_live && now - b->live_at <= hold;
+  if (live && !isnan(car)) b->car_level = car, b->car_at = now, b->car_frame_at = c->p.bright_can_at;
+  else if ((held || (live && isnan(c->display_brightness))) && c->p.bright_can_at == b->car_frame_at && b->car_at >= 0 &&
+           now - b->car_at <= hold)
+    car = b->car_level;
+  if ((live || held) && b->follow && !isnan(car)) t = car * cf->bright_follow_scale + cf->bright_follow_offset + b->offset, src = BRIGHT_CAR;
   else if (b->manual >= 0) t = b->manual, src = BRIGHT_MANUAL;   // a level set by hand: held with or without car data
-  else if (live) t = b->night ? cf->bright_night : cf->bright_day, src = BRIGHT_LAMPS;
+  else if (live || held) t = b->night ? cf->bright_night : cf->bright_day, src = BRIGHT_LAMPS;
   else t = cf->bright_idle, src = BRIGHT_IDLE;
   t = t < cf->bright_min ? cf->bright_min : t > cf->bright_max ? cf->bright_max : t;
   int64_t away = (int64_t)cf->away_min * 60000;

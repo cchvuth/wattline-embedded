@@ -79,6 +79,7 @@ typedef struct {
     double cruise_raw;
     bool bt_up;
     int64_t bright_at;          // display_brightness's last write
+    int64_t bright_can_at;      // the last 0x273 frame's (the car's own word on it over WiFi; Bluetooth never moves it)
     bool bright_bt;             // ... and it came from the Commander (pushed on a change: no age limit)
     int64_t bt_bright_bad;      // field 24 seen out of 0..100 (unit unverified): the raw value, for one log line; -1 none
     bt_map_t bt;                // the Commander's pushes merged

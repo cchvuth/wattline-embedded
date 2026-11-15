@@ -79,6 +79,7 @@ typedef struct { char last[24]; int fails; } wifi_track_t;   // the last wpa_sta
 // wpa_state, NULL unknown. Two handshakes falling back to DISCONNECTED/SCANNING say "wrong password?".
 int wifi_join_of(wifi_track_t *t, bool exists, const char *oper, bool ipv4, const char *wpa, const char **why);
 int wifi_join(int64_t now, const char **why);   // the system's, looked at every 1.5 s; -1 off Linux
+bool wifi_has_addr(void);   // wlan0 has an IPv4 address now (fresh, not the 1.5 s look)
 const char *wifi_net_line(void);                // refreshed by wifi_join(); "" off Linux
 const char *wifi_ssid(void);                    // the joined network's name, "" none
 int wifi_nearby(const char (**list)[33]);       // networks in range (latest SCAN_RESULTS), strongest first; the count
@@ -101,12 +102,12 @@ enum { BRIGHT_CAR, BRIGHT_LAMPS, BRIGHT_IDLE, BRIGHT_AWAY, BRIGHT_MANUAL };
 typedef struct {
   int follow, manual;           // follow the car (bright_follow_car); manual: settings' %, -1 none
   int offset;                   // follow-car bias (% points added), from the settings' "Follow offset"
-  bool night, lamps, bad_logged;   // lamps: night known (the car's lamps seen since the start)
+  bool night, lamps, bad_logged, seen_live;   // lamps: night known (the car's lamps seen since the start)
   int src;                      // BRIGHT_*, -1 none yet
   double shown, from, target, logged;
   int64_t live_at, ramp_at;
   double car_level;             // the car's own level as last in use, at car_at (-1: never): held over a takeover
-  int64_t car_at, car_frame_at; // car_frame_at: its frame's time (car.p.bright_at) then: a frame since ends the hold
+  int64_t car_at, car_frame_at; // car_frame_at: car.p.bright_can_at then: a 0x273 since ends the hold
 } bright_t;
 void bright_init(bright_t *b, const conf_t *cf, int64_t now);
 int bright_step(bright_t *b, const conf_t *cf, const car_t *c, int64_t now, int64_t idle);   // the % to set now

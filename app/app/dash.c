@@ -68,7 +68,8 @@ static int p_settle(void *x, int64_t now) {
   dash_t *d = x;
   const char *w;
   const char *ss = wifi_ssid();   // "" until wpa_supplicant answers (the first look, or just after a join): not a no
-  if (!d->aside_asked && (wifi_join(now, &w) >= 0 || (*ss && strcmp(ss, SETTINGS_CAR_SSID))))
+  // the join's look is up to 1.5 s old: an address that came since is a stream about to start (step aside for it)
+  if (!d->aside_asked && ((wifi_join(now, &w) >= 0 && !wifi_has_addr()) || (*ss && strcmp(ss, SETTINGS_CAR_SSID))))
     return 0;   // not joined, or joined to another network (home WiFi: no Panda there): no stream to make way for;
                 // stepping aside then only kept Bluetooth down (main.dart steps aside on the car's network alone)
   if (!d->aside_asked) {

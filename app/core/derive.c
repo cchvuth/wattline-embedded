@@ -117,7 +117,7 @@ void car_frame(car_t *c, uint16_t id, uint8_t bus, const uint8_t *d, uint8_t len
   }
   if (id == 0x129) { c->steer_deg = NUL; c->p.steer_at = now; }
   if (id == 0x273 && len >= 5)   // SNA (or a frame without it) is no level; any one is the car's latest word on it
-    c->display_brightness = NUL, c->p.bright_at = now, c->p.bright_bt = false;
+    c->display_brightness = NUL, c->p.bright_at = c->p.bright_can_at = now, c->p.bright_bt = false;
   int n = sub_index(id);
   if (n < 0) return;
   int utc[6], utc_n = 0;
