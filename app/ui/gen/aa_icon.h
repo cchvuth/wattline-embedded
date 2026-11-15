@@ -2,4 +2,3 @@
 #pragma once
 #include "lvgl.h"
 extern const lv_image_dsc_t ic_aa;
-extern const lv_image_dsc_t ic_aa_mono;

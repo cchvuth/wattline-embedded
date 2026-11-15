@@ -805,10 +805,10 @@ void dash_ui_init(lv_obj_t *scr)
 		float cy = G.link_top + PL(22);
 		int car_x = ri(G.W - G.ml - inset(cy) - PL(20) - PL(12)), car_y = ri(cy - PL(12));
 		lv_obj_set_pos(car_panel, car_x, car_y);
-		/* Android Auto on demand, a gap to the car panel's left: the Android Auto logo (gen/aa_icon.c, from
-		 * assets/android_auto.svg), 36 px as ic_car_panel, level with it. Cert-gated. */
-		aa_btn = icon(root, &ic_aa_mono, WHITE);
-		lv_obj_set_pos(aa_btn, car_x - ri(PL(16)) - (int)ic_aa_mono.header.w, car_y);
+		/* Android Auto on demand, a gap to the car panel's left: the Android Auto logo, outline (gen/aa_icon.c, from
+		 * assets/android_auto.svg), a 36 px button as ic_car_panel, level with it. Cert-gated. */
+		aa_btn = icon(root, &ic_aa, WHITE);
+		lv_obj_set_pos(aa_btn, car_x - ri(PL(16)) - (int)ic_aa.header.w, car_y);
 		show(aa_btn, false);
 	}
 
@@ -1024,7 +1024,10 @@ static dash_settings_t ST; /* the settings as shown (defined with the settings s
 static bool projecting;    /* an Android Auto session is up (/run/dash-project, raised by aa serve) */
 const char *dash_ui_pj_marker = "/run/dash-project"; /* the shots harness points these at files of its own */
 const char *dash_ui_aa_cert = "/etc/wattline/aa.crt", *dash_ui_aa_up = "/run/dash-aa";
-static bool aa_pending;    /* tapped start, waiting for /run/dash-aa to appear — immediate amber feedback */
+static bool aa_pending;    /* tapped start, waiting for /run/dash-aa to appear: shown on at once */
+static bool aa_stopping;   /* tapped stop (or Exit), waiting for /run/dash-aa to go: shown off at once */
+static uint32_t aa_stop_at;
+#define AA_BLUE 0xFF03A9F4u /* Android Auto's blue (its logo's): the button while AA is on */
 static bool pj_left;       /* Exit tapped in the split: stay on the dash until this session's marker is gone */
 /* After leaving the split, repaint everything once more a moment later: the decoder is stopped in the background
  * (dash-aa stop) and may draw a last picture after the first repaint. */
@@ -1826,15 +1829,18 @@ static void ap_hold(lv_event_t *e) /* the assist disc's words (widgets.dart _ApI
 }
 
 /* ---- the car panel (car_panel.dart): its own page, an app bar, the groups of outlined buttons, a message line ---- */
-static uint32_t set_back_at; /* back on the settings from the editor or pairing: that tap's bounce is not the X under it */
-static void close_tap(lv_event_t *e) { if (!FRESH(set_back_at, 500)) (void)e, dash_ui_show(DASH_VIEW_DASH); }
+/* back on the settings from the editor or pairing: for 500 ms a clear cover over them takes every touch, so the bounce
+ * of the tap that came back (Save, Close) does not land on what lies under it (the X, a switch, a button) */
+static uint32_t set_back_at;
+static lv_obj_t *set_guard;
+static void close_tap(lv_event_t *e) { (void)e, dash_ui_show(DASH_VIEW_DASH); }
 static void panel_tap(lv_event_t *e) { if (!FRESH(panel_at, 500)) press((intptr_t)lv_event_get_user_data(e)); }
 static void open_tap(lv_event_t *e) { if (!FRESH(dash_at, 700)) dash_ui_show((intptr_t)lv_event_get_user_data(e)); }
 /* the split's Exit: end the Android Auto session (the marker would pull the view straight back otherwise) */
 static void pj_exit_tap(lv_event_t *e)
 {
 	(void)e;
-	pj_left = true, aa_pending = false;
+	pj_left = true, aa_pending = false, aa_stopping = true, aa_stop_at = lv_tick_get();
 	save(DASH_AA_STOP);
 	dash_ui_show(DASH_VIEW_DASH);
 	dash_ui_set(&S); /* laid out at once: else one frame of the strip's ring on the dash */
@@ -1846,9 +1852,15 @@ static void aa_tap(lv_event_t *e)
 	(void)e;
 	if (FRESH(dash_at, 700)) return;
 	if (aa_pending && lv_tick_elaps(aa_pending_at) < 15000) return; /* still starting: a second start would race it */
+	if (aa_stopping && lv_tick_elaps(aa_stop_at) < 15000) return;   /* still stopping: a start now would find it up */
+	if (access(PJ_AA_SESSION, F_OK) == 0 && !projecting) {   /* a phone on it, its map put away by AA's own Exit: */
+		close(open(PJ_AA_FOCUS, O_CREAT | O_WRONLY | O_CLOEXEC, 0644));   /* back (the split's Exit stops AA) */
+		return;
+	}
 	bool up = access(dash_ui_aa_up, F_OK) == 0;
 	save(up ? DASH_AA_STOP : DASH_AA_START);
 	aa_pending = !up, aa_pending_at = lv_tick_get();
+	if (up) aa_stopping = true, aa_stop_at = lv_tick_get();
 }
 
 /* ---- the phone-map split screen: the picture a rectangle up to the 2/3 line, clear of the left slant (which keeps
@@ -2535,10 +2547,13 @@ static void nearby_row(lv_obj_t *parent, int k, float w, bool room)
 	align(l, LV_ALIGN_LEFT_MID, ri(PB(18) + PB(12)), 0);
 	if (room) { pressed_look(r, 0x1FFFFFFF); tappable(r, nearby_pick, k, PB(2)); }
 }
+#define SET_TABS 5
+static lv_obj_t *set_tab_btn[SET_TABS], *set_page[SET_TABS];
 static void settings_fill_nets(void)
 {
 	float w = lv_obj_get_style_width(net_list, 0);
 	net_delete_reset(true);
+	lv_obj_invalidate(set_page[3]); /* its scroll bar: longer when the content shrinks, outside the rows' areas */
 	lv_obj_clean(net_list);
 	set_wifi_line = label(net_list, FS(REGULAR, 12, UI_S_PANEL), W70); /* the link's state (main.dart's connection page) */
 	lv_obj_set_width(set_wifi_line, ri(w));
@@ -2568,8 +2583,6 @@ static void settings_fill_nets(void)
 	if (!shown) set_text(label(near_list, FS(REGULAR, 12, UI_S_PANEL), W54), "Nearby: no other network heard yet");
 }
 /* the settings' categories: the rail's buttons, their pages, the one shown (kept between openings) */
-#define SET_TABS 5
-static lv_obj_t *set_tab_btn[SET_TABS], *set_page[SET_TABS];
 static int set_tab;
 static void tab_select(int i)
 {
@@ -2997,7 +3010,10 @@ void dash_ui_show(int v)
 	if (v == DASH_VIEW_DASH && view != DASH_VIEW_DASH) dash_at = lv_tick_get();
 	if (v == DASH_VIEW_CAR_PANEL && view != DASH_VIEW_CAR_PANEL) panel_at = lv_tick_get();
 	if (v == DASH_VIEW_NETWORK && view != DASH_VIEW_NETWORK) edit_at = lv_tick_get(); /* the tap that opened it: no key */
-	if (v == DASH_VIEW_SETTINGS && (view == DASH_VIEW_NETWORK || view == DASH_VIEW_PAIR)) set_back_at = lv_tick_get();
+	if (v == DASH_VIEW_SETTINGS && (view == DASH_VIEW_NETWORK || view == DASH_VIEW_PAIR)) {
+		set_back_at = lv_tick_get();
+		if (set_guard) show(set_guard, true);
+	}
 	view = v;
 	/* The real ring (and the assist disc and the air outside it carries in the full dash) is reused in the strip:
 	 * it lives over the full-screen project overlay while projecting, and back on the dash otherwise. */
@@ -3310,6 +3326,10 @@ static void touch_init(void)
 	project_build();
 	panel_build();
 	settings_build();
+	set_guard = box(settings); /* over everything in the settings (their last child): see set_back_at */
+	place(set_guard, 0, 0, G.W, G.H);
+	lv_obj_set_clickable(set_guard, true);
+	show(set_guard, false);
 	net_edit_build();
 	pair_build();
 }
@@ -3367,14 +3387,12 @@ static void set_touch(const dash_state_t *s)
 		set_text(set_bt_line, "%s", s->bt_line);
 		if (set_wifi_line) set_text(set_wifi_line, "%s", s->wifi_line);
 		forget_reset(&fg_cmdr, false), forget_reset(&fg_aa, false); /* a second tap's window over: the label again */
+		if (set_guard && !lv_obj_is_hidden(set_guard) && !FRESH(set_back_at, 500)) show(set_guard, false);
 		net_delete_reset(false);
 		bool join_over = joining[0] && lv_tick_elaps(joining_at) >= 20000; /* a join that did not take: Connect again */
 		if (join_over) joining[0] = 0;
 		if (net_list && view == DASH_VIEW_SETTINGS && (join_over || CHANGED(nearby_n) || CHANGED(nearby) || CHANGED(net_ssid)))
-		{
 			settings_fill_nets(); /* a network came or went, or the joined one changed */
-			lv_obj_invalidate(set_page[3]); /* its scroll bar: longer when the content shrank, outside the rows' areas */
-		}
 		if (set_net_line) set_text(set_net_line, "%s", s->net_line);
 		set_approval(s->bt);
 	}
@@ -3418,14 +3436,10 @@ void dash_ui_set(const dash_state_t *s)
 	if (aa_cert) {   /* on: AP up, a tap pending, or projecting */
 		bool up = access(dash_ui_aa_up, F_OK) == 0;
 		if (up || (aa_pending && lv_tick_elaps(aa_pending_at) > 15000)) aa_pending = false;
-		static int aa_look = -1; /* off: the one-colour icon in white, as the other icons; on: the logo in its colours */
-		int look = projecting || up || aa_pending;
-		if (look != aa_look) {
-			aa_look = look;
-			lv_image_set_src(aa_btn, look ? &ic_aa : &ic_aa_mono);
-			lv_obj_set_style_image_recolor_opa(aa_btn, look ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
-			icon_color(aa_btn, WHITE);
-		}
+		if (aa_stopping && (!up || lv_tick_elaps(aa_stop_at) > 15000)) aa_stopping = false;
+		/* off: white, as the other icons; on: Android Auto's blue. Off at once on the tap that stops it (dash-aa stop
+		 * takes a few seconds to take the AP and its processes down) */
+		icon_color(aa_btn, !aa_stopping && (projecting || up || aa_pending) ? AA_BLUE : WHITE);
 	}
 
 	/* The blocks: the car and the route (only with one) left of the ring, the energy figures and the g-meter right of

@@ -262,6 +262,8 @@ int main(int argc, char **argv)
 		bad |= shot(d, out, "edge-project-wide", &s, DASH_VIEW_PROJECT);
 		dash_state_blank(&s);
 		bad |= shot(d, out, "edge-project-nothing", &s, DASH_VIEW_PROJECT);
+		scenes[8].fill(&s); /* Bluetooth only (no WiFi stream) beside the phone's map: what the Commander's pushes fill */
+		bad |= shot(d, out, "edge-project-bt-only", &s, DASH_VIEW_PROJECT);
 		remove(pjm);
 		dash_ui_set(&s);
 		/* the Network tab with the longest names an SSID can have */
