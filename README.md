@@ -57,6 +57,8 @@ make O=<output dir>
 
 Rebuild single packages in an existing output tree: `make BR2_EXTERNAL=/ext wattline-aa-rebuild spike-vdec-rebuild` (run in the output dir).
 
+After a change to the kernel's configuration (any `os/board/dash/linux-r*.fragment`), its patches (`os/board/dash/patches*/linux/`) or its version, run `make BR2_EXTERNAL=/ext linux-dirclean rtl8733bs-dirclean rtl8733bs-cc-dirclean` before `make`. Buildroot applies the patches only when it unpacks the kernel. The Wi-Fi modules are built outside the kernel, and one built for the old kernel still loads, after which Wi-Fi is gone.
+
 ### Private additions
 
 The author's own unit runs a few additions kept in a private repository, because they need files that can't be published. They aren't in this repository, its releases or its update bundles. Nothing here depends on them, and a build from this repository is complete without them.
