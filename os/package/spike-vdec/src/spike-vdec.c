@@ -12,7 +12,7 @@
 //   spike-vdec FILE.h264 ...     the same for these clips (FILE.crc next to it: per-frame CRC-32 reference)
 //   spike-vdec --info            the V4L2 video/media devices, their formats (stands in for v4l2-ctl/media-ctl)
 //   spike-vdec --parse FILE      parse only (no device): per-slice header facts; runs on a build host too
-//   spike-vdec --rotate          the rotate estimate only (from malloc'd memory)
+//   spike-vdec --rotate          the show path's rotate, checked against the plain C and timed (malloc'd memory)
 //   spike-vdec --fb [FILE]       decode a clip straight to /dev/fb0 (the panel's projection region), looping
 //   spike-vdec --fb-stream [--region X W]
 //                                decode a live Annex-B H.264 stream from stdin to the panel (the AA video sink). With
@@ -38,6 +38,9 @@
 #include <linux/fb.h>
 #include <linux/media.h>
 #include <linux/videodev2.h>
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
 
 #define die(...) do { fprintf(stderr, "spike-vdec: " __VA_ARGS__); fputc('\n', stderr); exit(1); } while (0)
 
@@ -541,11 +544,13 @@ static void cpu_sys(unsigned long long *busy, unsigned long long *all)
 
 /* ---- the rotate estimate: NV12 W x H landscape -> BGRA H x W portrait (the panel is scanned 480x1920) ---- */
 static uint8_t clip8(int v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
-static void rotate_nv12_bgra(const uint8_t *y, const uint8_t *uv, int stride, int w, int h, uint32_t *dst, int y0, int y1)
+static void rotate_nv12_bgra(const uint8_t *y, const uint8_t *uv, int stride, int w, int h, uint8_t *dst, long dst_stride,
+			     int y0, int y1)
 {
-	/* landscape (x, y) -> panel (h-1-y, x): dst row x, column h-1-y. 16x16 tiles keep the column writes cached.
-	 * Rows y0..y1-1 only (even bounds): two threads each take a band of rows, and their writes never overlap.
-	 * The coefficients in locals: a store through dst could alias the globals and reload them for every pixel. */
+	/* landscape (x, y) -> panel (h-1-y, x): dst row x (dst_stride bytes apart), column h-1-y. 16x16 tiles keep the
+	 * column writes cached. Rows y0..y1-1 only (even bounds): two threads each take a band of rows, and their writes
+	 * never overlap. The coefficients in locals: a store through dst could alias the globals and reload them for every
+	 * pixel. The reference for rotate_neon (spike-vdec --rotate checks they agree), and the show path without NEON. */
 	const int Cy = cy, Oy = oy, Crv = crv, Cgu = cgu, Cgv = cgv, Cbu = cbu;
 	for (int ty = y0; ty < y1; ty += 16)
 		for (int tx = 0; tx < w; tx += 16)
@@ -557,49 +562,116 @@ static void rotate_nv12_bgra(const uint8_t *y, const uint8_t *uv, int stride, in
 					for (int k = 0; k < 4; k++) {
 						int px = xx + (k & 1), py = yy + (k >> 1);
 						int l = Cy * (y[py * stride + px] - Oy);
-						dst[px * h + (h - 1 - py)] = 0xff000000u | clip8((l + r) >> 8) << 16 | clip8((l + g) >> 8) << 8 | clip8((l + b) >> 8);
+						uint32_t v = 0xff000000u | clip8((l + r) >> 8) << 16 | clip8((l + g) >> 8) << 8 | clip8((l + b) >> 8);
+						memcpy(dst + (size_t)px * dst_stride + (size_t)(h - 1 - py) * 4, &v, 4);
 					}
 				}
 }
-// rotate + scale NV12 (source sw x sh) into the panel region (w x h landscape) as panel-native BGRA, its columns
-// ox0..ox1-1. Nearest-neighbour; folds the 90-degree rotation in. Used for a frame smaller than the region (Android
-// Auto's lower setting, 480p): per-pixel (not tiled), only when a scale is actually needed.
-static void rotate_scale_nv12_bgra(const uint8_t *y, const uint8_t *uv, int stride, int sw, int sh, int w, int h, uint32_t *dst,
-				   int ox0, int ox1)
+#if defined(__ARM_NEON)
+/* rotate_nv12_bgra with NEON, the same bytes. The A7 is in-order with 32 64-bit registers, so: no block held, no
+ * transpose (both spilled): per pair of panel rows (landscape columns x, x+1), lane loads gather their 8 luma pairs
+ * (landscape rows ty+7 down to ty: the panel row's order) and the 4 chroma pairs under them, which are converted and
+ * stored. 16-bit arithmetic, exact: with off = the chroma term - Cy*Oy split as 256*oh + ol (0 <= ol < 256),
+ * (Cy*Y + off + 128) >> 8 = Y + oh + ((Cy-256)*Y + ol + 128) >> 8, for 256 <= Cy < 512. */
+static inline void split_off(int32x4_t off, int16x8_t *oh, uint16x8_t *ol)   /* off = 256*oh + ol; each lane twice */
 {
-	const int Cy = cy, Oy = oy, Crv = crv, Cgu = cgu, Cgv = cgv, Cbu = cbu;	/* (locals: as rotate_nv12_bgra) */
-	for (int ox = ox0; ox < ox1; ox++) {
-		int sx = sw == w ? ox : ox * sw / w;
-		const uint8_t *yr = y + sx, *uvc = uv + (sx & ~1);
-		for (int oy = 0; oy < h; oy++) {
-			int sy = sh == h ? oy : oy * sh / h;
-			const uint8_t *c = uvc + (sy / 2) * stride;
-			int d = c[0] - 128, e = c[1] - 128;
-			int l = Cy * (yr[sy * stride] - Oy);
-			int r = Crv * e + 128, g = -Cgu * d - Cgv * e + 128, b = Cbu * d + 128;
-			dst[ox * h + (h - 1 - oy)] = 0xff000000u | clip8((l + r) >> 8) << 16 | clip8((l + g) >> 8) << 8 | clip8((l + b) >> 8);
+	int16x4_t h4 = vshrn_n_s32(off, 8);
+	uint16x4_t l4 = vand_u16(vreinterpret_u16_s16(vmovn_s32(off)), vdup_n_u16(0xff));
+	int16x4x2_t hz = vzip_s16(h4, h4); uint16x4x2_t lz = vzip_u16(l4, l4);
+	*oh = vcombine_s16(hz.val[0], hz.val[1]), *ol = vcombine_u16(lz.val[0], lz.val[1]);
+}
+static inline uint8x8_t chan(uint8x8_t Y, uint16x8_t yc, int16x8_t oh, uint16x8_t ol)   /* Y + oh + (yc + ol + 128) >> 8, 0..255 */
+{
+	return vqmovun_s16(vreinterpretq_s16_u16(vaddw_u8(vaddw_u8(vreinterpretq_u16_s16(oh), Y), vraddhn_u16(yc, ol))));
+}
+static void rotate_neon(const uint8_t *y, const uint8_t *uv, int stride, int w, int h, uint8_t *dst, long dst_stride, int y0, int y1)
+{
+	const int16x4_t K = { (int16_t)cbu, (int16_t)cgu, (int16_t)cgv, (int16_t)crv };   /* one register, for vmlal_lane */
+	const int32x4_t ko = vdupq_n_s32(-cy * oy);
+	const uint8x8_t c8 = vdup_n_u8(cy - 256), alpha = vdup_n_u8(0xff);
+	const int s2 = stride / 2;
+	for (int ty = y0; ty < y1; ty += 8) {
+		const uint8_t *yr = y + (ty + 7) * stride, *cr = uv + (ty / 2 + 3) * stride;
+		uint8_t *q = dst + (size_t)(h - 8 - ty) * 4;
+		for (int x = 0; x < w; x += 2, q += 2 * dst_stride) {
+			const uint16_t *p = (const uint16_t *)(yr + x);   /* x, stride and the buffers even: 2-byte aligned */
+			uint16x8_t l = vdupq_n_u16(0);
+			l = vld1q_lane_u16(p, l, 0), p -= s2; l = vld1q_lane_u16(p, l, 1), p -= s2;
+			l = vld1q_lane_u16(p, l, 2), p -= s2; l = vld1q_lane_u16(p, l, 3), p -= s2;
+			l = vld1q_lane_u16(p, l, 4), p -= s2; l = vld1q_lane_u16(p, l, 5), p -= s2;
+			l = vld1q_lane_u16(p, l, 6), p -= s2; l = vld1q_lane_u16(p, l, 7);
+			uint8x8x2_t ab = vuzp_u8(vget_low_u8(vreinterpretq_u8_u16(l)), vget_high_u8(vreinterpretq_u8_u16(l)));   /* x, x+1 */
+			const uint16_t *pc = (const uint16_t *)(cr + x);
+			uint16x4_t c = vdup_n_u16(0);   /* U | V << 8, chroma rows ty/2+3 down to ty/2 */
+			c = vld1_lane_u16(pc, c, 0), pc -= s2; c = vld1_lane_u16(pc, c, 1), pc -= s2;
+			c = vld1_lane_u16(pc, c, 2), pc -= s2; c = vld1_lane_u16(pc, c, 3);
+			int16x4_t d = vsub_s16(vreinterpret_s16_u16(vand_u16(c, vdup_n_u16(0xff))), vdup_n_s16(128));
+			int16x4_t e = vsub_s16(vreinterpret_s16_u16(vshr_n_u16(c, 8)), vdup_n_s16(128));
+			uint8x8_t ya = ab.val[0], yb = ab.val[1];
+			uint16x8_t ca = vmull_u8(ya, c8), cb = vmull_u8(yb, c8);
+			uint8x8x4_t pa, pb; int16x8_t oh; uint16x8_t ol;
+			split_off(vmlal_lane_s16(ko, d, K, 0), &oh, &ol);   /* B */
+			pa.val[0] = chan(ya, ca, oh, ol), pb.val[0] = chan(yb, cb, oh, ol);
+			split_off(vmlsl_lane_s16(vmlsl_lane_s16(ko, d, K, 1), e, K, 2), &oh, &ol);   /* G */
+			pa.val[1] = chan(ya, ca, oh, ol), pb.val[1] = chan(yb, cb, oh, ol);
+			split_off(vmlal_lane_s16(ko, e, K, 3), &oh, &ol);   /* R */
+			pa.val[2] = chan(ya, ca, oh, ol), pb.val[2] = chan(yb, cb, oh, ol);
+			pa.val[3] = pb.val[3] = alpha;
+			vst4_u8(q, pa), vst4_u8(q + dst_stride, pb);   /* panel rows x, x+1: B, G, R, A interleaved */
 		}
 	}
 }
-static void rotate_bench(const char *what, const uint8_t *src, int stride, int w, int h)
+#endif
+/* the show path's rotate: NEON where the CPU has it (even sizes and bands in 8s, as every caller's are) */
+static void rotate_band(const uint8_t *y, const uint8_t *uv, int stride, int w, int h, uint8_t *dst, long dst_stride, int y0, int y1)
 {
-	uint32_t *dst = malloc((size_t)w * h * 4); if (!dst) die("out of memory");
+#if defined(__ARM_NEON)
+	if (w % 2 == 0 && stride % 2 == 0 && y0 % 8 == 0 && y1 % 8 == 0 && cy >= 256 && cy < 512) {
+		rotate_neon(y, uv, stride, w, h, dst, dst_stride, y0, y1);
+		return;
+	}
+#endif
+	rotate_nv12_bgra(y, uv, stride, w, h, dst, dst_stride, y0, y1);
+}
+/* A frame smaller than the region (Android Auto's 480p): its window (sw x sh) scaled up, nearest neighbour, into an NV12
+ * picture of the region's size (w x h, stride w), output rows y0..y1-1 (even); rotate_band then shows it as it shows a
+ * full-size frame. Source column xmap[ox] for output column ox, source row oy * sh / h. A chroma pair per 2x2 output
+ * pixels, the one under their top-left pixel. */
+static void scale_nv12(const uint8_t *y, const uint8_t *uv, int stride, const uint16_t *xmap, int sh, int w, int h, uint8_t *o,
+		       int y0, int y1)
+{
+	uint8_t *ouv = o + (size_t)w * h;
+	for (int oy = y0; oy < y1; oy++) {
+		int sy = oy * sh / h;
+		uint8_t *d = o + (size_t)oy * w;
+		if (oy > y0 && sy == (oy - 1) * sh / h) memcpy(d, d - w, w);   /* the same source row as the row above */
+		else for (int ox = 0; ox < w; ox++) d[ox] = y[(size_t)sy * stride + xmap[ox]];
+		if (oy & 1) continue;
+		const uint8_t *c = uv + (size_t)(sy / 2) * stride;
+		uint8_t *dc = ouv + (size_t)(oy / 2) * w;
+		for (int ox = 0; ox < w; ox += 2) { int sx = xmap[ox] & ~1; dc[ox] = c[sx], dc[ox + 1] = c[sx + 1]; }
+	}
+}
+static void rotate_bench(const char *what, const uint8_t *src, int stride, int w, int h, int plain)
+{
+	uint8_t *dst = malloc((size_t)w * h * 4); if (!dst) die("out of memory");
 	int n = 30; double t = now(), c = cpu_self();
-	for (int i = 0; i < n; i++) rotate_nv12_bgra(src, src + (size_t)stride * h, stride, w, h, dst, 0, h);
+	for (int i = 0; i < n; i++) (plain ? rotate_nv12_bgra : rotate_band)(src, src + (size_t)stride * h, stride, w, h, dst, h * 4L, 0, h);
 	t = now() - t; c = cpu_self() - c;
-	printf("ROTATE %s %dx%d NV12 -> %dx%d BGRA: %.1f ms/frame = %.1f fps on one core (CPU %.0f%% of one core)\n",
-	       what, w, h, h, w, t * 1000 / n, n / t, 100 * c / t);
+	printf("ROTATE %s%s %dx%d NV12 -> %dx%d BGRA: %.1f ms/frame = %.1f fps on one core (CPU %.0f%% of one core)\n",
+	       what, plain ? ", plain C" : "", w, h, h, w, t * 1000 / n, n / t, 100 * c / t);
 	free(dst);
 }
 
-/* ---- framebuffer output (spike --fb: blit decoded+rotated frames to the panel's projection region) ----
+/* ---- framebuffer output (spike --fb: decoded+rotated frames into the panel's projection region) ----
  * rotate_nv12_bgra gives a panel-native buffer: row = landscape x, col = 479 - landscape y (= LVGL's 270 rotation).
  * The left-2/3 video region is landscape x 0..w-1 -> physical rows 0..w-1, each row = h pixels (= panel width). */
 #define RGN_W 1280   /* the projection region: left 2/3 of the 1920-wide landscape canvas */
 #define RGN_H 480
 static int rgn_x = 0, rgn_w = RGN_W;   /* --region: where on the canvas, and how wide (height is always RGN_H) */
 static int fb_fd = -1; static uint8_t *fb_mem = NULL; static long fb_line = 0, fb_len = 0;
-static uint32_t *fb_bgra = NULL;
+static uint8_t *fb_scaled = NULL;   /* a smaller frame scaled up to the region's size (NV12), for the rotate */
+static uint16_t xmap[1920];         /* its source column for each of the region's columns (fb_show sets it) */
 static void fb_open(void)
 {
 	fb_fd = open("/dev/fb0", O_RDWR);
@@ -612,15 +684,6 @@ static void fb_open(void)
 	if (fb_mem == MAP_FAILED) die("mmap fb: %s", strerror(errno));
 	fprintf(stderr, "spike-vdec: /dev/fb0 %ux%u %ubpp line=%ld\n", v.xres, v.yres, v.bits_per_pixel, fb_line);
 }
-static void fb_blit(int w, int h)	/* w = frame width (= physical rows), h = frame height (= physical cols) */
-{
-	for (int r = 0; r < w; r++) {
-		long off = (long)(rgn_x + r) * fb_line;
-		if (off + (long)h * 4 > fb_len) break;
-		memcpy(fb_mem + off, fb_bgra + (size_t)r * h, (size_t)h * 4);
-	}
-}
-
 /* ---- decode ---- */
 #define NOUT 2
 #define MAXCAP 20
@@ -630,10 +693,12 @@ struct buf { void *p; size_t n; };
 typedef struct {
 	int vfd, mfd, rq, ncap, stride, ah, frames, errors;
 	struct buf out[NOUT], cap[MAXCAP];
-	uint8_t *fb_cram;	/* cached NV12 copy so the rotate reads fast (the V4L2 mmap is uncached) */
+	uint8_t *fb_cram;	/* an uncached picture's copy in cached RAM, for the rotate */
+	int cached;		/* the capture buffers are cached (the kernel took V4L2_MEMORY_FLAG_NON_COHERENT): shown from in place */
 	int show_each;		/* the file path: show every picture. The live stream shows only the newest (fb_show) */
 	int cw, ch;		/* the coded size the engine was set up for: a later SPS must not change it */
-	int last_ci;		/* the capture buffer of the newest picture not yet shown, or -1 */
+	int last_ci;		/* the capture buffer fb_show shows next, or -1 */
+	int pend[2], npend;	/* the live stream's pictures decoded and not shown yet, oldest first (decode_stream paces them) */
 	int newest_ci;		/* the newest picture's, shown or not (shown again when the UI brings the picture back) */
 	int shown; double show_s;	/* stats: pictures shown and the time spent showing them */
 } dec_t;
@@ -664,8 +729,11 @@ static void dec_setup(dec_t *D, int show_each)
 	struct v4l2_requestbuffers rb = { .count = NOUT, .type = V4L2_BUF_TYPE_VIDEO_OUTPUT, .memory = V4L2_MEMORY_MMAP };
 	if (ioctl(D->vfd, VIDIOC_REQBUFS, &rb) || rb.count < NOUT) die("REQBUFS output: %s", strerror(errno));
 	if (!(rb.capabilities & V4L2_BUF_CAP_SUPPORTS_REQUESTS)) die("the output queue has no request support");
-	rb = (struct v4l2_requestbuffers){ .count = D->ncap, .type = V4L2_BUF_TYPE_VIDEO_CAPTURE, .memory = V4L2_MEMORY_MMAP };
+	/* cached pictures where the kernel allows it (R4's cedrus patch): uncached, the CPU reads them at ~100 MB/s */
+	rb = (struct v4l2_requestbuffers){ .count = D->ncap, .type = V4L2_BUF_TYPE_VIDEO_CAPTURE, .memory = V4L2_MEMORY_MMAP,
+					   .flags = V4L2_MEMORY_FLAG_NON_COHERENT };
 	if (ioctl(D->vfd, VIDIOC_REQBUFS, &rb) || (int)rb.count < D->ncap) die("REQBUFS capture (%d buffers; CMA too small?): %s", D->ncap, strerror(errno));
+	D->cached = !!(rb.flags & V4L2_MEMORY_FLAG_NON_COHERENT);
 	for (int k = 0; k < NOUT + D->ncap; k++) {
 		int isout = k < NOUT, i = isout ? k : k - NOUT;
 		struct v4l2_buffer b = { .type = isout ? V4L2_BUF_TYPE_VIDEO_OUTPUT : V4L2_BUF_TYPE_VIDEO_CAPTURE, .memory = V4L2_MEMORY_MMAP, .index = i };
@@ -678,31 +746,41 @@ static void dec_setup(dec_t *D, int show_each)
 	if (ioctl(D->vfd, VIDIOC_STREAMON, &ty[0]) || ioctl(D->vfd, VIDIOC_STREAMON, &ty[1])) die("STREAMON: %s", strerror(errno));
 	if (ioctl(D->mfd, MEDIA_IOC_REQUEST_ALLOC, &D->rq)) die("MEDIA_IOC_REQUEST_ALLOC: %s", strerror(errno));
 	if (fb_fd >= 0) {
-		fb_bgra = realloc(fb_bgra, (size_t)rgn_w * RGN_H * 4);   /* the region, not the source size */
-		D->fb_cram = malloc((size_t)D->stride * D->ah * 3 / 2);
-		if (!fb_bgra || !D->fb_cram) die("out of memory (fb buffers)");
+		if ((long)(rgn_x + rgn_w) * fb_line > fb_len || RGN_H * 4L > fb_line) die("the region is off /dev/fb0");   /* band_show writes there */
+		fb_scaled = realloc(fb_scaled, (size_t)rgn_w * RGN_H * 3 / 2);   /* the region, not the source size */
+		if (!D->cached) D->fb_cram = malloc((size_t)D->stride * D->ah * 3 / 2);
+		if (!fb_scaled || (!D->cached && !D->fb_cram)) die("out of memory (fb buffers)");
 	}
+	fprintf(stderr, "spike-vdec: %d pictures, %s\n", D->ncap, D->cached ? "cached" : "uncached (copied out to show)");
 }
 
-/* show the newest decoded picture on the panel: copy the rows the region needs out of the (uncached) capture
- * buffer, rotate them into panel order, blit. This is the costly step (the decode itself is ~3 ms in hardware),
- * so the live stream runs it once per batch of input, on the newest picture only: when the source is faster than
- * this, older pictures are decoded (they are references) but not shown, and the screen never falls behind. */
-/* one band of the region's rows: copy them (and their chroma rows) out of the uncached capture buffer, rotate them */
+/* show a decoded picture (last_ci) on the panel: rotate the rows the region needs into panel order, straight into the
+ * framebuffer, from the capture buffer (copied out to cached RAM first when it is uncached). About 6 ms, with the
+ * decode itself ~3 ms in hardware: the live stream shows each picture, paced (show_next), and drops the oldest waiting
+ * only when it falls behind. */
+/* one band of the region's rows: rotate them from the picture; an uncached one's rows (and their chroma rows) copied
+ * out to cached RAM first */
 typedef struct { const dec_t *D; const uint8_t *cy, *cuv; uint8_t *yy, *uv; int sx, sy, y0, y1; } band_t;
 static void *band_show(void *arg)
 {
 	const band_t *b = arg; size_t st = (size_t)b->D->stride;
-	memcpy(b->yy + (b->sy + b->y0) * st, b->cy + (b->sy + b->y0) * st, (size_t)(b->y1 - b->y0) * st);
-	memcpy(b->uv + (b->sy + b->y0) / 2 * st, b->cuv + (b->sy + b->y0) / 2 * st, (size_t)(b->y1 - b->y0) / 2 * st);
-	rotate_nv12_bgra(b->yy + b->sy * st + b->sx, b->uv + b->sy / 2 * st + b->sx, (int)st, rgn_w, RGN_H, fb_bgra, b->y0, b->y1);
+	const uint8_t *y = b->cy, *uv = b->cuv;
+	if (!b->D->cached) {
+		memcpy(b->yy + (b->sy + b->y0) * st, b->cy + (b->sy + b->y0) * st, (size_t)(b->y1 - b->y0) * st);
+		memcpy(b->uv + (b->sy + b->y0) / 2 * st, b->cuv + (b->sy + b->y0) / 2 * st, (size_t)(b->y1 - b->y0) / 2 * st);
+		y = b->yy, uv = b->uv;
+	}
+	rotate_band(y + b->sy * st + b->sx, uv + b->sy / 2 * st + b->sx, (int)st, rgn_w, RGN_H, fb_mem + (size_t)rgn_x * fb_line,
+		    fb_line, b->y0, b->y1);   /* dec_setup checked the region fits */
 	return NULL;
 }
-typedef struct { const uint8_t *y, *uv; int stride, sw, sh, ox0, ox1; } scale_t;
-static void *scale_band(void *arg)
+typedef struct { const uint8_t *y, *uv; int stride, sh, y0, y1; } scale_t;
+static void *scale_band(void *arg)   /* one band of the region's rows: scaled up, then rotated as band_show does */
 {
 	const scale_t *s = arg;
-	rotate_scale_nv12_bgra(s->y, s->uv, s->stride, s->sw, s->sh, rgn_w, RGN_H, fb_bgra, s->ox0, s->ox1);
+	scale_nv12(s->y, s->uv, s->stride, xmap, s->sh, rgn_w, RGN_H, fb_scaled, s->y0, s->y1);
+	rotate_band(fb_scaled, fb_scaled + (size_t)rgn_w * RGN_H, rgn_w, rgn_w, RGN_H, fb_mem + (size_t)rgn_x * fb_line, fb_line,
+		    s->y0, s->y1);
 	return NULL;
 }
 static void fb_show(dec_t *D)
@@ -710,7 +788,7 @@ static void fb_show(dec_t *D)
 	if (D->last_ci < 0) return;
 	double t = now();
 	const uint8_t *cy = D->cap[D->last_ci].p, *cuv = cy + (size_t)D->stride * D->ah;
-	uint8_t *yy = D->fb_cram, *uv = D->fb_cram + (size_t)D->stride * D->ah;
+	uint8_t *yy = D->fb_cram, *uv = D->cached ? NULL : D->fb_cram + (size_t)D->stride * D->ah;
 	if (crop_w >= rgn_w && crop_h >= RGN_H) {   /* the region's window from the frame's middle, unscaled */
 		int sx = ((crop_w - rgn_w) / 2 + crop_x) & ~1, sy = ((crop_h - RGN_H) / 2 + crop_y) & ~1;   /* even: NV12 */
 		if (sx < 0 || sy < 0 || sx + rgn_w > D->stride || sy + RGN_H > D->ah) { D->last_ci = -1; return; }   /* parse_sps bounds it: belt and braces */
@@ -721,20 +799,21 @@ static void fb_show(dec_t *D)
 		band_show(&bot);
 		if (threaded) pthread_join(th, NULL); else band_show(&top);
 	} else {   /* a smaller frame (AA's lower setting: 480p): its middle window of the region's shape (where the phone
-	            * lays its UI out, aa.c), scaled up to fill the region without stretching; both cores, a half each */
+	            * lays its UI out, aa.c), scaled up to fill the region without stretching; both cores, a band each */
 		if (crop_w > D->stride || crop_h > D->ah) { D->last_ci = -1; return; }
 		int sw = crop_w, sh = (int)(((int64_t)crop_w * RGN_H + rgn_w - 1) / rgn_w + 1) & ~1;   /* up to even: 800 -> 332, aa.c's UI area */
 		if (sh > crop_h) sh = crop_h & ~1, sw = (int)((int64_t)crop_h * rgn_w / RGN_H) & ~1;   /* a wider frame: its middle columns */
 		if (sw < 2 || sh < 2) { D->last_ci = -1; return; }
 		int sx = (crop_x + (crop_w - sw) / 2) & ~1, sy = (crop_y + (crop_h - sh) / 2) & ~1;   /* even: 4:2:0 */
-		memcpy(D->fb_cram, D->cap[D->last_ci].p, (size_t)D->stride * D->ah * 3 / 2);
-		scale_t l = { yy + (size_t)sy * D->stride + sx, uv + (size_t)(sy / 2) * D->stride + sx, D->stride, sw, sh, 0, rgn_w / 2 }, r = l;
-		r.ox0 = rgn_w / 2, r.ox1 = rgn_w;
-		pthread_t th; int threaded = pthread_create(&th, NULL, scale_band, &l) == 0;
-		scale_band(&r);
-		if (threaded) pthread_join(th, NULL); else scale_band(&l);
+		const uint8_t *sy0 = cy, *suv = cuv;
+		if (!D->cached) memcpy(D->fb_cram, D->cap[D->last_ci].p, (size_t)D->stride * D->ah * 3 / 2), sy0 = yy, suv = uv;
+		for (int ox = 0; ox < rgn_w; ox++) xmap[ox] = ox * sw / rgn_w;
+		scale_t top = { sy0 + (size_t)sy * D->stride + sx, suv + (size_t)(sy / 2) * D->stride + sx, D->stride, sh, 0, RGN_H / 2 }, bot = top;
+		bot.y0 = RGN_H / 2, bot.y1 = RGN_H;
+		pthread_t th; int threaded = pthread_create(&th, NULL, scale_band, &top) == 0;
+		scale_band(&bot);
+		if (threaded) pthread_join(th, NULL); else scale_band(&top);
 	}
-	fb_blit(rgn_w, RGN_H);
 	D->last_ci = -1; D->shown++; D->show_s += now() - t;
 }
 
@@ -745,7 +824,11 @@ static int dec_one(dec_t *D, pic_t *p, nal_t *s)
 	p->dp.top_field_order_cnt = p->dp.bottom_field_order_cnt = poc;
 	fill_refs(p);
 	int ci = -1;	/* a capture buffer that holds no reference */
-	for (int k = 0; k < D->ncap && ci < 0; k++) { int used = 0; for (int r = 0; r < nrefs; r++) used |= refs[r].cap == k; if (!used) ci = k; }
+	for (int k = 0; k < D->ncap && ci < 0; k++) {   /* refs + 2 waiting to be shown + this one fit in ncap (refs + 3) */
+		int used = 0; for (int r = 0; r < nrefs; r++) used |= refs[r].cap == k;
+		for (int j = 0; j < D->npend; j++) used |= D->pend[j] == k;
+		if (!used) ci = k;
+	}
 	if (ci < 0) die("no free capture buffer");
 	if (s->n > D->out[D->frames % NOUT].n) die("slice of %zu bytes > output buffer", s->n);
 	memcpy(D->out[D->frames % NOUT].p, s->p, s->n);
@@ -771,8 +854,12 @@ static int dec_one(dec_t *D, pic_t *p, nal_t *s)
 	if (ioctl(D->rq, MEDIA_REQUEST_IOC_REINIT)) die("MEDIA_REQUEST_IOC_REINIT: %s", strerror(errno));
 	if (p->ref) add_ref(p, ts, poc, ci);
 	D->frames++;
-	D->last_ci = D->newest_ci = ci;	/* decode order, not POC order: fine for the display (AA sends IPPP, no reorder) */
-	if (fb_fd >= 0 && D->show_each) fb_show(D);
+	D->newest_ci = ci;	/* decode order, not POC order: fine for the display (AA sends IPPP, no reorder) */
+	if (fb_fd >= 0 && D->show_each) D->last_ci = ci, fb_show(D);
+	else if (fb_fd >= 0) {   /* the live stream: in the queue to show; when it is full (the screen behind), the oldest is dropped */
+		if (D->npend == 2) D->pend[0] = D->pend[1], D->npend = 1;
+		D->pend[D->npend++] = ci;
+	}
 	return ci;
 }
 
@@ -817,9 +904,9 @@ static int decode(const char *file, int verify, int do_rotate)
 	else
 		printf("VERIFY %s: no %s, skipped\n", file, crcname);
 	if (do_rotate && crop_w == 1280 && crop_h == 480) {
-		rotate_bench("from the decoded buffer (V4L2 mmap)", D.cap[last_cap].p, D.stride, crop_w, crop_h);
+		rotate_bench("from the decoded buffer (V4L2 mmap)", D.cap[last_cap].p, D.stride, crop_w, crop_h, 0);
 		size_t sz = (size_t)D.stride * D.ah * 3 / 2; uint8_t *m = malloc(sz); memcpy(m, D.cap[last_cap].p, sz);
-		rotate_bench("from a copy in cached RAM", m, D.stride, crop_w, crop_h); free(m);
+		rotate_bench("from a copy in cached RAM", m, D.stride, crop_w, crop_h, 0); free(m);
 	}
 	if (crc) fclose(crc);
 	int rc = D.errors || bad;
@@ -884,6 +971,19 @@ static size_t stream_nals(uint8_t *buf, size_t len, dec_t *D, int *set, int eof,
  * or a dash the user went back to, the decoder draws nothing (a tap there must not land on a "map" over other buttons). */
 #define PJ_VISIBLE "/run/dash-pj-visible"
 #define PJ_FPS "/run/dash-pj-fps"   /* the pictures shown each second, for the dash (ui/project_region.h: under the AA word) */
+/* The least time between two pictures shown. WiFi often delivers a clump of them together: shown this far apart, about a
+ * panel refresh (16.7 ms) each, rather than all but the newest dropped, while a 60 fps stream still keeps up. */
+#define SHOW_GAP 0.014
+static void show_next(dec_t *D, double *last_show_t, int *vis, double *reshow_at)   /* the oldest waiting, in its turn */
+{
+	if (!D->npend || now() - *last_show_t < SHOW_GAP) return;
+	int v = access(PJ_VISIBLE, F_OK) == 0;
+	if (v && !*vis) *reshow_at = now() + 0.25;   /* just shown again: drawn now, and again after the UI's repaint */
+	*vis = v;
+	if (!v) { D->npend = 0; return; }   /* not on screen: nothing to catch up on (newest_ci is shown when it comes back) */
+	D->last_ci = D->pend[0], D->pend[0] = D->pend[1], D->npend--;
+	*last_show_t = now(), fb_show(D);   /* the gap from this show's start: its own time counts in it */
+}
 static int decode_stream(int fd)
 {
 	have_sps = have_pps = 0; nrefs = 0; prev_ref_fn = -1; need_idr = 0;
@@ -905,35 +1005,30 @@ static int decode_stream(int fd)
 			cap *= 2; buf = realloc(buf, cap); if (!buf) die("out of memory");
 		}
 		struct pollfd in = { .fd = fd, .events = POLLIN };
-		if (set && poll(&in, 1, 100) == 0) {   /* no input now: the UI may have brought the picture back */
+		int tmo = 100;   /* the loop wakes at least every 100 ms, and in time for the next picture waiting to be shown */
+		if (set && D.npend) { double w = last_show_t + SHOW_GAP - now(); tmo = w <= 0 ? 0 : (int)(w * 1000) + 1; }
+		if (set && poll(&in, 1, tmo) == 0) {   /* no input now: a picture's turn, or the UI brought the picture back */
 			int v = access(PJ_VISIBLE, F_OK) == 0;
 			if (v && !vis) reshow_at = now() + 0.25;   /* after the UI's own repaint of the split, which would cover it */
 			if (!v) reshow_at = 0;
 			if (v && reshow_at && now() >= reshow_at && D.newest_ci >= 0) {
-				D.last_ci = D.newest_ci; fb_show(&D); last_show_t = now(); reshow_at = 0;
+				D.last_ci = D.newest_ci; last_show_t = now(); fb_show(&D); reshow_at = 0, D.npend = 0;
 			}
 			vis = v;
+			show_next(&D, &last_show_t, &vis, &reshow_at);
 			continue;
 		}
 		ssize_t r = read(fd, buf + len, cap - len);
 		if (r < 0) { if (errno == EINTR) continue; die("read: %s", strerror(errno)); }
 		if (r == 0) {	/* EOF: the last NAL; drawn only where the picture is shown */
 			stream_nals(buf, len, &D, &set, 1, &scan);
-			if (set && access(PJ_VISIBLE, F_OK) == 0) fb_show(&D);
+			if (set && D.npend && access(PJ_VISIBLE, F_OK) == 0) D.last_ci = D.pend[D.npend - 1], fb_show(&D);
 			break;
 		}
 		len += r;
 		size_t used = stream_nals(buf, len, &D, &set, 0, &scan);
 		if (used) { memmove(buf, buf + used, len - used); len -= used; scan -= used; }
-		/* show the newest picture once the input is drained: if more is already waiting, decode that first */
-		struct pollfd pf = { .fd = fd, .events = POLLIN };
-		/* ...but at least every 100 ms, so a burst of input cannot freeze the picture */
-		if (set && D.last_ci >= 0 && (poll(&pf, 1, 0) == 0 || now() - last_show_t >= 0.1)) {
-			int v = access(PJ_VISIBLE, F_OK) == 0;
-			if (v && !vis) reshow_at = now() + 0.25;   /* just shown again: drawn now, and again after the UI's repaint */
-			vis = v;
-			if (v) fb_show(&D), last_show_t = now();
-		}
+		if (set) show_next(&D, &last_show_t, &vis, &reshow_at);
 		if (set && now() >= next_stat) {	/* the live picture's health: decoded vs shown, cost of showing */
 			int sh = D.shown - last_shown;
 			fprintf(stderr, "spike-vdec: 5 s: %d decoded, %d shown, %.1f ms per show\n", D.frames - last_frames, sh,
@@ -951,10 +1046,35 @@ int main(int argc, char **argv)
 {
 	if (argc > 1 && !strcmp(argv[1], "--info")) return info();
 	if (argc > 2 && !strcmp(argv[1], "--parse")) return parse_only(argv[2]);
-	if (argc > 1 && !strcmp(argv[1], "--rotate")) {
-		int w = 1280, h = 480; uint8_t *m = malloc(w * h * 3 / 2);
-		for (int k = 0; k < w * h * 3 / 2; k++) m[k] = k * 7;
-		rotate_bench("from cached RAM (synthetic)", m, w, w, h); free(m); return 0;
+	if (argc > 1 && !strcmp(argv[1], "--rotate")) {	/* the show path's rotate: checked against the plain C, timed */
+		int st = 1280, h = 480, w = 1160, x = 60;   /* AA's window (--region 120 1160) out of a 1280-wide frame */
+		size_t n = (size_t)st * h * 3 / 2, o = (size_t)w * h * 4;
+		uint8_t *m = malloc(n), *a = malloc(o), *b = malloc(o);
+		if (!m || !a || !b) die("out of memory");
+		uint32_t r = 1; for (size_t k = 0; k < n; k++) r = r * 1103515245 + 12345, m[k] = r >> 24;   /* every Y, U, V */
+		for (int c = 0; c < 4; c++) {   /* BT.601/709, limited/full */
+			yuv_coef(c & 1, c >> 1);
+			memset(a, 0, o), memset(b, 1, o);
+			rotate_nv12_bgra(m + x, m + (size_t)st * h + x, st, w, h, a, h * 4L, 0, h);
+			rotate_band(m + x, m + (size_t)st * h + x, st, w, h, b, h * 4L, 0, h / 2);   /* in fb_show's two bands */
+			rotate_band(m + x, m + (size_t)st * h + x, st, w, h, b, h * 4L, h / 2, h);
+			if (memcmp(a, b, o)) die("--rotate: the show path's rotate differs from the plain C (coefficients %d)", c);
+		}
+		printf("ROTATE the show path's rotate = the plain C, bit for bit\n");
+		int sw = 800, sh = 332;   /* AA's 480p window, scaled up to the region (fb_show's smaller-frame path) */
+		for (int ox = 0; ox < w; ox++) xmap[ox] = ox * sw / w;
+		scale_nv12(m + x, m + (size_t)st * h + x, st, xmap, sh, w, h, a, 0, h / 2), scale_nv12(m + x, m + (size_t)st * h + x, st, xmap, sh, w, h, a, h / 2, h);
+		for (int oy = 0; oy < h; oy++)
+			for (int ox = 0; ox < w; ox++) {
+				int sx = ox * sw / w, sy = oy * sh / h, cx = (ox & ~1) * sw / w & ~1, cy2 = (oy & ~1) * sh / h / 2;
+				const uint8_t *c = m + (size_t)st * h + x + (size_t)cy2 * st + cx + (ox & 1), *o = a + (size_t)w * h + (size_t)(oy / 2) * w + ox;
+				if (a[(size_t)oy * w + ox] != m[x + (size_t)sy * st + sx] || *o != *c) die("--rotate: the scale-up picks the wrong pixel at %d,%d", ox, oy);
+			}
+		printf("ROTATE the scale-up picks its pixels\n");
+		yuv_coef(0, 0);
+		rotate_bench("from cached RAM (synthetic)", m + x, st, w, h, 1);
+		rotate_bench("from cached RAM (synthetic)", m + x, st, w, h, 0);
+		free(m), free(a), free(b); return 0;
 	}
 	if (argc > 1 && !strcmp(argv[1], "--fb")) {	/* decode a clip straight to the panel's projection region, looping */
 		const char *f = argc > 2 ? argv[2] : "/usr/share/spike/vdec-1280x480-baseline.h264";
