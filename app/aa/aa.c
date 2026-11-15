@@ -606,7 +606,9 @@ static pid_t sink_pid = -1;
 static int spawn_sink(void)
 {
 	int p[2]; if (pipe(p)) return -1;
-	fcntl(p[1], F_SETPIPE_SZ, 1 << 20);   /* a frame's write never waits on the decoder (its ACK, and so the phone, would) */
+	if (fcntl(p[1], F_SETPIPE_SZ, 512 << 10) < 0)   /* a frame's write never waits on the decoder (its ACK, and so the phone,
+	                                                * would): room for a key frame and a few more, not seconds of them */
+		fprintf(stderr, "aa: decoder pipe at its default size: %s\n", strerror(errno));
 	pid_t c = fork();
 	sink_pid = c;
 	if (c == 0) {
@@ -659,7 +661,8 @@ static int touch_open(void)
 {
 	int f = open(PJ_TOUCH_DEV, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	if (f < 0) { fprintf(stderr, "aa: touchscreen %s: %s\n", PJ_TOUCH_DEV, strerror(errno)); return -1; }
-	int clk = CLOCK_MONOTONIC; ioctl(f, EVIOCSCLOCKID, &clk);   /* the events' times on now_us's clock (see phone_off) */
+	int clk = CLOCK_MONOTONIC;   /* the events' times on now_us's clock (see phone_off) */
+	if (ioctl(f, EVIOCSCLOCKID, &clk)) fprintf(stderr, "aa: touchscreen clock: %s (touch times would be wrong)\n", strerror(errno));
 	struct input_absinfo a;
 	if (!ioctl(f, EVIOCGABS(ABS_MT_POSITION_X), &a) && a.maximum > 0) mt_max_x = a.maximum;
 	if (!ioctl(f, EVIOCGABS(ABS_MT_POSITION_Y), &a) && a.maximum > 0) mt_max_y = a.maximum;
@@ -699,14 +702,23 @@ static size_t build_mt(uint8_t *buf, size_t cap, uint64_t ts, const int *idx, in
 // screens, or for ever. Each ping updates it; a gesture keeps the one it started with (mt_frame).
 static int64_t phone_off;
 static int phone_off_seen;   // from a ping, which supersedes the video's estimate
+static int phone_off_ok;     // known (a ping or a timestamped frame): no gesture goes to the phone before
+// a ping's sample of it, less the ping's way here: the least-delayed (the highest) is the closest, kept and let sink
+// 1 ms a ping (the two clocks may drift); a ping held up behind a video burst does not drag it down
+static void phone_clock(int64_t smp)
+{
+	phone_off = !phone_off_seen || smp > phone_off - 1000000 ? smp : phone_off - 1000000;
+	phone_off_seen = phone_off_ok = 1;
+}
 static int mt_force_visible, mt_log[16][3], mt_nlog;   /* the self-test's view: no screen, events recorded */
+static uint64_t mt_log_ts[16];
 static void mt_send(int fd, aa_tls_t *tls, uint64_t ts, int ai, int action, int with)
 {
 	int idx[MT_MAX], n = 0, at = 0;   /* the list: every finger on, plus `with` (one going up) */
 	for (int k = 0; k < MT_MAX; k++) if (mt[k].on || k == with) { if (k == with) at = n; idx[n++] = k; }
 	if (fd >= 0 && !tls) return;   /* nothing goes to a phone in plain text */
 	if (fd < 0) {   /* the self-test records; --touch-test prints what would go to the phone */
-		if (mt_nlog < 16) { mt_log[mt_nlog][0] = action; mt_log[mt_nlog][1] = n; mt_log[mt_nlog][2] = with >= 0 ? at : ai; mt_nlog++; }
+		if (mt_nlog < 16) { mt_log[mt_nlog][0] = action; mt_log[mt_nlog][1] = n; mt_log[mt_nlog][2] = with >= 0 ? at : ai; mt_log_ts[mt_nlog++] = ts; }
 		if (fd == -2) {
 			printf("t=%llu.%06llu action %d index %d:", (unsigned long long)(ts / 1000000000), (unsigned long long)(ts % 1000000000 / 1000), action, with >= 0 ? at : ai);
 			for (int k = 0; k < n; k++) {
@@ -726,13 +738,15 @@ static void mt_frame(int fd, aa_tls_t *tls, uint64_t ts)
 {
 	static int64_t g_off;   /* phone_off for this gesture: a ping's update mid-stroke would bend its speed */
 	if (!mt_prev_any) g_off = phone_off;
-	ts += (uint64_t)g_off;
+	int64_t st = (int64_t)ts + g_off;   /* never below 0 (a sample off the phone's uptime would wrap it to the far future) */
+	ts = st > 0 ? (uint64_t)st : 0;
 	if (!mt_prev_any) {   /* a gesture starts: ours only if its first finger is on the picture, now */
 		int first = -1;
 		for (int i = 0; i < MT_MAX && first < 0; i++) if (mt[i].active) first = i;
 		if (first >= 0) {
 			int x = mt_panel_x(mt[first].x);
-			mt_gesture = tls && input_open && (mt_force_visible || access(PJ_VISIBLE, F_OK) == 0) && x >= PJ_RGN_X && x < PJ_RGN_X + PJ_RGN_W ? 1 : -1;
+			mt_gesture = tls && input_open && (mt_force_visible || (phone_off_ok && access(PJ_VISIBLE, F_OK) == 0)) &&
+				     x >= PJ_RGN_X && x < PJ_RGN_X + PJ_RGN_W ? 1 : -1;   /* (not before the phone's clock is known) */
 		}
 	}
 	if (mt_gesture == 1) {
@@ -888,12 +902,11 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 			uint8_t r[8]; pb_out o = { r, 0, sizeof r, 0 }; pb_u(&o, AA_NAVF_TYPE, 2);   // 2 = projected nav
 			send_msg(fd, tls, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_NAV_FOCUS_RESPONSE, r, o.n);
 		} else if (chan == AA_CH_CONTROL && id == AA_CTL_PING_REQUEST) {
-			uint64_t ts = 0; pb_get_u(body, blen, AA_PING_TS, &ts);
-			/* its clock now, less the ping's way here: the least-delayed ping (the highest) is the closest, kept and let
-			 * sink 1 ms a ping (the two clocks may drift); a ping held up behind a video burst does not drag it down */
-			int64_t smp = (int64_t)ts - now_us() * 1000;
-			phone_off = !phone_off_seen || smp > phone_off - 1000000 ? smp : phone_off - 1000000;
-			if (!phone_off_seen) phone_off_seen = 1, fprintf(stderr, "aa: the phone's clock: %llu ns (its pings)\n", (unsigned long long)ts);
+			uint64_t ts = 0;
+			if (pb_get_u(body, blen, AA_PING_TS, &ts) && ts && ts < (uint64_t)INT64_MAX / 2) {   /* its clock now */
+				if (!phone_off_seen) fprintf(stderr, "aa: the phone's clock: %llu ns (its pings)\n", (unsigned long long)ts);
+				phone_clock((int64_t)ts - now_us() * 1000);
+			}
 			uint8_t r[16]; pb_out o = { r, 0, sizeof r, 0 }; pb_u(&o, AA_PING_TS, ts);
 			send_msg(fd, tls, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_PING_RESPONSE, r, o.n);
 		} else if (chan == AA_CH_CONTROL && id == AA_CTL_SHUTDOWN_REQUEST) {
@@ -948,7 +961,7 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 					if (nl <= 8) goto acked;
 					if (!phone_off_seen && frames <= 3) {   /* the phone's clock until its first ping: microseconds */
 						uint64_t vt = 0; for (int i = 0; i < 8; i++) vt = vt << 8 | nal[i];
-						phone_off = (int64_t)vt * 1000 - now_us() * 1000;
+						if (vt && vt < 9000000000000000ULL) phone_off = (int64_t)vt * 1000 - now_us() * 1000, phone_off_ok = 1;
 					}
 					nal += 8; nl -= 8;
 				}
@@ -977,7 +990,6 @@ static int mt_selftest(void)
 	mt[1].active = 0; mt_frame(-1, fake, 5);                        /* finger 1 up */
 	F(0, 1, 1600, 200); mt_frame(-1, fake, 6);                      /* a stroke from the dash strip (x 1600) */
 	F(0, 1, 600, 200); mt_frame(-1, fake, 7); mt[0].active = 0; mt_frame(-1, fake, 8);   /* ...even onto the picture */
-	#undef F
 	static const int want[][3] = { { AA_TOUCH_PRESS, 1, 0 }, { AA_TOUCH_POINTER_DOWN, 2, 1 }, { AA_TOUCH_DRAG, 2, 0 },
 	                               { AA_TOUCH_POINTER_UP, 2, 0 }, { AA_TOUCH_RELEASE, 1, 0 } };
 	int ok = mt_nlog == 5;
@@ -986,13 +998,25 @@ static int mt_selftest(void)
 		for (int i = 0; i < mt_nlog; i++) fprintf(stderr, "  got action %d, %d fingers, index %d\n", mt_log[i][0], mt_log[i][1], mt_log[i][2]);
 		die("touch selftest: wrong event sequence (%d events)", mt_nlog);
 	}
+	/* the phone's clock (an hour behind ours): touches stamped on it, a gesture keeping its offset through a ping, the
+	 * least-delayed ping kept */
+	phone_off_seen = 0; phone_clock(-3600000000000LL); mt_nlog = 0;
+	F(0, 1, 500, 200); mt_frame(-1, fake, 5000000000000ULL);
+	phone_clock(-3500000000000LL);
+	F(0, 1, 520, 200); mt_frame(-1, fake, 5000020000000ULL);
+	mt[0].active = 0; mt_frame(-1, fake, 5000040000000ULL);
+	ok = mt_nlog == 3 && mt_log_ts[0] == 1400000000000ULL && mt_log_ts[1] == 1400020000000ULL && mt_log_ts[2] == 1400040000000ULL;
+	phone_off_seen = 0; phone_clock(7000000); phone_clock(2000000);   /* a ping 5 ms more delayed: 1 ms down only */
+	if (!ok || phone_off != 6000000) die("touch selftest: the phone's clock (%d events, offset %lld)", mt_nlog, (long long)phone_off);
+	phone_off = 0, phone_off_seen = phone_off_ok = 0;
+	#undef F
 	uint8_t b[400]; int idx[2] = { 0, 1 }; mt[0].x = 120; mt[1].x = 1279; mt[0].y = 0; mt[1].y = 479;   /* picture corners */
 	size_t n = build_mt(b, sizeof b, 9, idx, 2, 1, AA_TOUCH_POINTER_DOWN);
 	const uint8_t *te; size_t tl; uint64_t act, ai;
 	if (!n || !pb_get_b(b, n, AA_IEI_TOUCH_EVENT, &te, &tl) || !pb_get_u(te, tl, AA_TE_TOUCH_ACTION, &act) || act != AA_TOUCH_POINTER_DOWN ||
 	    !pb_get_u(te, tl, AA_TE_ACTION_INDEX, &ai) || ai != 1) die("touch selftest: event encoding");
 	input_open = 0; mt_force_visible = 0; memset(mt, 0, sizeof mt); mt_prev_any = 0; mt_gesture = 0;
-	printf("AA-TOUCH-SELFTEST OK: pinch = PRESS, POINTER_DOWN, DRAG, POINTER_UP, RELEASE; off-picture stroke ignored\n");
+	printf("AA-TOUCH-SELFTEST OK: pinch = PRESS, POINTER_DOWN, DRAG, POINTER_UP, RELEASE; off-picture stroke ignored; on the phone's clock\n");
 	return 0;
 }
 
@@ -1047,15 +1071,6 @@ static int aa_serve(const char *cert, const char *key)
 	for (;;) {
 		int fd = accept(ls, NULL, NULL); if (fd < 0) continue;
 		fcntl(fd, F_SETFD, FD_CLOEXEC);   /* nor the phone's socket */
-		// one phone at a time (PJ_SESSION): held from here to the session's end. aa opens the file nowhere else (closing
-		// another descriptor of it would drop this POSIX lock), and the decoder child does not inherit it
-		int lk = open(PJ_SESSION, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
-		struct flock fl = { .l_type = F_WRLCK, .l_whence = SEEK_SET };
-		if (lk >= 0 && fcntl(lk, F_SETLK, &fl)) {
-			fprintf(stderr, "aa: another phone's session is up: this phone refused\n");
-			close(lk), close(fd);
-			continue;
-		}
 		// as aasdk (TCPWrapper) and headunit (hu_tcp): small writes (media ACKs, touches, pings) go out at once,
 		// not held until the phone acknowledges the previous one -- with one frame in flight, that stalls video
 		setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
@@ -1069,9 +1084,17 @@ static int aa_serve(const char *cert, const char *key)
 		uint8_t chan; const uint8_t *m; size_t mn;
 		int ok = recv_msg(fd, NULL, &chan, &m, &mn) == 0 && msg_id(m, mn) == AA_CTL_VERSION_RESPONSE;
 		fprintf(stderr, "aa: version %s\n", ok ? "agreed" : "refused");
-		if (ok && do_ssl_handshake(fd, &t) == 0) {
+		int up = ok && do_ssl_handshake(fd, &t) == 0, lk = -1;
+		if (up) {   // one phone at a time (PJ_SESSION): taken once TLS is up (a dial that fails before holds nothing), held to
+			    // the session's end. aa opens the file nowhere else (closing another descriptor of it would drop this POSIX
+			    // lock), and the decoder child does not inherit it
+			struct flock fl = { .l_type = F_WRLCK, .l_whence = SEEK_SET };
+			if ((lk = open(PJ_SESSION, O_RDWR | O_CREAT | O_CLOEXEC, 0644)) >= 0 && fcntl(lk, F_SETLK, &fl))
+				fprintf(stderr, "aa: another phone's session is up: this phone refused\n"), close(lk), lk = -1, up = -1;
+		}
+		if (up == 1) {
 			fprintf(stderr, "aa: TLS up (%s, %s), session starting\n", SSL_get_version(t.ssl), SSL_get_cipher(t.ssl));
-			phone_off = 0, phone_off_seen = 0;   /* this phone's clock: learned from its video and pings */
+			phone_off = 0, phone_off_seen = phone_off_ok = 0;   /* this phone's clock: learned from its video and pings */
 			rd_deadline = 0;
 			setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &live, sizeof live);   // a frame stalled half-way ends the session
 			// AUTH_COMPLETE is the PLAINTEXT handshake-done signal: the phone activates its SSL context on
@@ -1092,7 +1115,7 @@ static int aa_serve(const char *cert, const char *key)
 			unlink("/run/dash-project");
 			unlink(PJ_AA_SESSION), unlink(PJ_AA_FOCUS), unlink(PJ_FPS);   // the decoder, killed, leaves its fps behind
 			fprintf(stderr, "aa: session ended\n");
-		} else if (ok) {
+		} else if (ok && !up) {
 			unsigned long err = ERR_get_error();
 			fprintf(stderr, "aa: TLS handshake failed: %s\n", err ? ERR_error_string(err, NULL) : "peer closed or timed out");
 		}
