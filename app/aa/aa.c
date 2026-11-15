@@ -1356,7 +1356,7 @@ int main(int argc, char **argv)
 		int r = cert_check(argv[2], argc == 4 ? argv[3] : NULL);
 		if (r) fprintf(stderr, "aa: %s: %s\n", argv[2], r == 1 ? "self-signed: phones reject it (a Google-signed head-unit certificate is needed)"
 						       : r == 2 ? "its key is missing, passphrase-protected, or another certificate's" : "no PEM certificate");
-		return r ? 1 : 0;
+		return r == 1 ? 1 : r == 2 ? 2 : r ? 3 : 0;   // 1 self-signed, 2 the key, 3 no readable certificate (S06wattline)
 	}
 	if (argc == 4 && !strcmp(argv[1], "gencert"))   // gencert <crt> <key>: a self-signed cert (tests; phones reject it)
 		return gen_cert(argv[2], argv[3], 10L * 365 * 86400) ? (fprintf(stderr, "aa: gencert failed\n"), 1) : 0;

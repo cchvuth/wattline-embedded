@@ -46,14 +46,16 @@ start)
 	aa certcheck "$CERT" "${CERT%.crt}.key" || exit 1   # self-signed, or its key missing/another's: no session (it says why)
 	[ ${#PSK} -ge 8 ] || { echo "dash-aa: could not make the AP passphrase" >&2; exit 1; }
 	[ -f "$MARK" ] && exit 0   # already up
-	# one start at a time (a second tap after the UI's 15 s, while this one still waits on the Wi-Fi lock); a start that
-	# died leaves the lock: taken over after 90 s
-	if ! mkdir /run/dash-aa.starting 2>/dev/null; then
-		t=$(stat -c %Y /run/dash-aa.starting 2>/dev/null)   # gone meanwhile (that start just ended): taken now, or busy
-		if [ -n "$t" ] && [ $(($(date +%s) - t)) -ge 90 ]; then rm -rf /run/dash-aa.starting; fi
-		mkdir /run/dash-aa.starting 2>/dev/null || { echo "dash-aa: already starting" >&2; exit 0; }
+	# one start at a time (a second tap after the UI's 15 s, while this one still waits on the Wi-Fi lock): the lock
+	# holds its start's pid; one whose start died (no such process) is taken over. Not by age: the clock jumps at boot.
+	L=/run/dash-aa.starting
+	if ! mkdir $L 2>/dev/null; then
+		p=$(cat $L/pid 2>/dev/null); [ -n "$p" ] || { sleep 1; p=$(cat $L/pid 2>/dev/null); }   # made, pid not written yet
+		[ -n "$p" ] && kill -0 "$p" 2>/dev/null && { echo "dash-aa: already starting" >&2; exit 0; }
+		rm -rf $L; mkdir $L 2>/dev/null || { echo "dash-aa: already starting" >&2; exit 0; }
 	fi
-	trap 'rmdir /run/dash-aa.starting 2>/dev/null' EXIT
+	echo $$ > $L/pid
+	trap 'rm -rf /run/dash-aa.starting' EXIT
 	[ -f "$MARK" ] && exit 0   # up by the start that held the lock
 	IFACE=wlan1; ip link show wlan1 >/dev/null 2>&1 || IFACE=wlan0
 	BSSID=$(cat /sys/class/net/"$IFACE"/address)

@@ -7,11 +7,17 @@
 case "$1" in start|"") ;; *) exit 0;; esac
 mkdir -p /data/wattline
 [ -L /etc/wattline ] || { rm -rf /etc/wattline; ln -s /data/wattline /etc/wattline; }
-# only on aa's own verdict (1): an aa that cannot run (127, a crash) proves nothing, and a rollback would not undo it
+# aa certcheck: 1 self-signed (a property of the certificate: set aside, renamed), 2 its key missing / another's /
+# passphrase-protected, 3 no readable certificate (perhaps a read error, or a version that cannot load it: files kept,
+# the button only hidden for this start); other codes (aa cannot run) prove nothing
+rm -f /run/dash-aa-unusable
 [ -f /data/wattline/aa.crt ] && { /usr/bin/aa certcheck /data/wattline/aa.crt /data/wattline/aa.key </dev/null 2>/dev/null; r=$?; }
 if [ -f /data/wattline/aa.crt ] && [ "$r" = 1 ]; then
 	mv /data/wattline/aa.crt /data/wattline/aa.crt.unusable; mv /data/wattline/aa.key /data/wattline/aa.key.unusable 2>/dev/null
-	echo "S06wattline: aa.crt is self-signed, or its key is missing, passphrase-protected or another's: set aside as *.unusable (no AA button)"
+	echo "S06wattline: aa.crt is self-signed (phones refuse it): set aside as *.unusable (no AA button)"
+elif [ -f /data/wattline/aa.crt ] && { [ "$r" = 2 ] || [ "$r" = 3 ]; }; then
+	: > /run/dash-aa-unusable
+	echo "S06wattline: aa.crt cannot be used (aa certcheck says why): no AA button this start"
 fi
 # Bluetooth bonds (the phones paired for Android Auto, their keys) on /data too, before bluetoothd starts (S40): in the
 # RAM root every power cycle forgot them, and a phone with an old key is then refused (aa takes bonded phones only)

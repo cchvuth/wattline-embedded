@@ -234,15 +234,13 @@ cmd_confirm() {
 # U-Boot rolls it back: a start still on trial this long after it began, its dash not running healthy, is restarted,
 # and U-Boot counts it. A healthy one that could not be confirmed (no /data, a card dropping writes) is left running:
 # U-Boot counts it at the next power-up. Its own mount point and no lock (a hung dash-update must not stop this).
-dash_starts() { grep -c " start$" /data/log/dash.out 2>/dev/null; }   # the supervisor logs each (re)start of the dash
 cmd_watch() {
 	P1MNT=$P1MNT.watch; B=$(booted_slot)
 	# S05data still repairing /data: not hung, let it finish (up to 15 min: a repair stuck on a dying card is), then give
 	# the rest of the boot its 4 min again
 	i=0; w=; while [ $i -lt 90 ] && pidof e2fsck fsck.ext4 >/dev/null; do w=1; i=$((i+1)); sleep 10; done; [ -n "$w" ] && sleep 240
 	[ -n "$B" ] && ota_read && [ -n "$trial" ] && [ "$slot" = "$B" ] || return 0
-	r=$(dash_starts); sleep 15
-	pidof dash >/dev/null && [ "$(dash_starts)" = "$r" ] && { log "slot $B on trial, unconfirmed, but its dash runs: left be"; return 0; }
+	p=$(pidof dash) && sleep 30 && [ "$(pidof dash)" = "$p" ] && { log "slot $B on trial, unconfirmed, but its dash runs: left be"; return 0; }   # the same dash 30 s
 	log "slot $B ($(current_version)) not confirmed 4 min after its start, its dash not running healthy: restarting (U-Boot counts the start)"
 	(sync &); sleep 2; reboot -nf   # -n: a sync stuck on a failing card must not hold the restart
 }

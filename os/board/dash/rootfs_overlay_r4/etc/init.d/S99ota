@@ -1,15 +1,16 @@
 #!/bin/sh
-# OTA, after the dash is up: once it has run healthy for 15 s (looked at from 15 s to 1.5 min), confirm this start (keeps a new version, which
+# OTA, after the dash is up: once the same dash process has run for 30 s (looked at from 15 s to ~2 min), confirm this start (keeps a new version, which
 # U-Boot would otherwise roll back after 3 unconfirmed starts). Then, if automatic updates are on
 # (ota_auto in /data/settings.conf, the dash's Advanced settings), look for a newer release while there is internet: download,
 # verify and arm it for the next power-up. Tried every 10 min for the first hour of a drive, quietly.
 case "$1" in start|"") ;; *) exit 0;; esac
-starts() { grep -c " start$" /data/log/dash.out 2>/dev/null; }   # the supervisor logs each (re)start of the dash
-healthy() { r=$(starts); sleep 15; pidof dash >/dev/null && [ "$(starts)" = "$r" ]; }   # runs, not restarted for 15 s
+# the same dash for 30 s: a restart is a new pid (a count of the supervisor's start lines missed restarts once dash.out
+# rotated, and one 15 s window let a dash crashing every 20 s through)
+healthy() { p=$(pidof dash) || return 1; sleep 30; [ "$(pidof dash)" = "$p" ]; }
 (
 	sleep 15
-	# looked at for up to 1.5 min (a dash that crashed once at the start may settle), well before S00trial's 4 min
-	for t in 1 2 3 4 5 6; do
+	# looked at for up to 2 min (a dash that crashed once at the start may settle), before S00trial's 4 min
+	for t in 1 2 3 4; do
 		healthy || continue
 		for i in 1 2 3 4 5 6; do   # until it says so: a Check the user tapped may hold the lock, a write may fail once
 			dash-update confirm && break
