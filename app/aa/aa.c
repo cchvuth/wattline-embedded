@@ -228,13 +228,28 @@ static uint16_t msg_id(const uint8_t *p, size_t n) { return n >= 2 ? (uint16_t)(
 // The decoder shows that middle window. Touches are NOT in frame coordinates: a current phone takes them in its UI
 // area (the frame minus the margins; a phone's AA displays there are e.g. an 80x480 rail + a 1080x480 app = 1160x480). Frame
 // coordinates (headunit's 2018 way, +half the margins) landed every tap that offset low-right on the unit.
-#define AA_FRAME_W 1280
-#define AA_FRAME_H 720
-#define AA_MARGIN_W (AA_FRAME_W - PJ_RGN_W)
-#define AA_MARGIN_H (AA_FRAME_H - PJ_RGN_H)
-_Static_assert(AA_MARGIN_W >= 0 && AA_MARGIN_H >= 0 && AA_MARGIN_W % 4 == 0 && AA_MARGIN_H % 4 == 0, "picture must fit a 720p frame, centred on even pixels");
-// ponytail: the phone scales its UI by this density; 160 is a first value for this panel, tune it on the unit.
-#define AA_DPI 160
+// The lower setting (the dash's settings.conf `aa_low_res = 1`, Settings > Advanced): a 480p frame whose UI area has
+// the picture's shape (800x332), which the decoder scales up 1.45x to fill the picture: less for the phone and the
+// WiFi, a softer picture. Read at each phone's service discovery, so a change counts from the next connection.
+// ponytail: the phone scales its UI by the density; 160 is a first value for this panel (110 keeps the 480p layout
+// alike), tune both on the unit.
+typedef struct { int res, fw, fh, uw, uh, dpi; } aa_video_t;   // frame w x h, the UI area in it, density
+static const aa_video_t AA_VIDEO_720 = {AA_RES_720p, 1280, 720, PJ_RGN_W, PJ_RGN_H, 160};
+static const aa_video_t AA_VIDEO_480 = {AA_RES_480p, 800, 480, 800, 332, 110};
+_Static_assert((1280 - PJ_RGN_W) % 4 == 0 && (720 - PJ_RGN_H) % 4 == 0 && PJ_RGN_W <= 1280 && PJ_RGN_H <= 720 &&
+	       (480 - 332) % 4 == 0, "the UI area must fit its frame, centred on even pixels");
+static aa_video_t vid = {AA_RES_720p, 1280, 720, PJ_RGN_W, PJ_RGN_H, 160};   // this session's (touches are in its UI area)
+#define AA_SETTINGS "/data/settings.conf"   // the dash's (app/settings.c)
+static int low_res_wanted(void)
+{
+	FILE *f = fopen(AA_SETTINGS, "r");
+	char l[128];
+	int on = 0, v;
+	if (!f) return 0;
+	while (fgets(l, sizeof l, f)) if (sscanf(l, " aa_low_res = %d", &v) == 1) on = v == 1;
+	fclose(f);
+	return on;
+}
 
 // one audio-sink ChannelDescriptor (PCM 16-bit at the given rate/channels)
 static size_t audio_chd(uint8_t *buf, size_t cap, int ch, int type, int rate, int chans)
@@ -249,14 +264,14 @@ static size_t audio_chd(uint8_t *buf, size_t cap, int ch, int type, int rate, in
 	return o.bad ? 0 : o.n;
 }
 
-// ServiceDiscoveryResponse: video (H.264 at res, 30 fps), sensors, touch, the three audio sinks and the mic — the
-// set OpenAuto advertises; AA refuses to start without sensors, audio playback or a mic ("No audio/mic").
-static size_t build_service_discovery_response(uint8_t *buf, size_t cap, int res)
+// ServiceDiscoveryResponse: video (H.264 at vm's frame, 30 fps), sensors, touch, the three audio sinks and the mic —
+// the set OpenAuto advertises; AA refuses to start without sensors, audio playback or a mic ("No audio/mic").
+static size_t build_service_discovery_response(uint8_t *buf, size_t cap, const aa_video_t *vm)
 {
 	uint8_t vc[16]; pb_out v = { vc, 0, sizeof vc, 0 };
-	pb_u(&v, AA_VC_RESOLUTION, res); pb_u(&v, AA_VC_FPS, AA_FPS_30);
+	pb_u(&v, AA_VC_RESOLUTION, vm->res); pb_u(&v, AA_VC_FPS, AA_FPS_30);
 	// margins + density are required too ("density missing" -> PROTOCOL_WRONG_CONFIGURATION)
-	pb_u(&v, AA_VC_MARGIN_W, AA_MARGIN_W); pb_u(&v, AA_VC_MARGIN_H, AA_MARGIN_H); pb_u(&v, AA_VC_DPI, AA_DPI);
+	pb_u(&v, AA_VC_MARGIN_W, vm->fw - vm->uw); pb_u(&v, AA_VC_MARGIN_H, vm->fh - vm->uh); pb_u(&v, AA_VC_DPI, vm->dpi);
 	uint8_t av[48]; pb_out a = { av, 0, sizeof av, 0 };
 	pb_u(&a, AA_AVCH_STREAM_TYPE, AA_AVSTREAM_VIDEO);
 	pb_b(&a, AA_AVCH_VIDEO_CONFIGS, vc, v.n);
@@ -272,8 +287,8 @@ static size_t build_service_discovery_response(uint8_t *buf, size_t cap, int res
 	uint8_t schd[48]; pb_out sc = { schd, 0, sizeof schd, 0 };
 	pb_u(&sc, AA_CHD_CHANNEL_ID, AA_CH_SENSOR);
 	pb_b(&sc, AA_CHD_SENSOR_CHANNEL, sens, s.n);
-	// the touch screen is the phone's UI area: the picture, in its own pixels (see AA_FRAME_W)
-	uint8_t tc[16]; pb_out t = { tc, 0, sizeof tc, 0 }; pb_u(&t, AA_TC_WIDTH, PJ_RGN_W); pb_u(&t, AA_TC_HEIGHT, PJ_RGN_H);
+	// the touch screen is the phone's UI area, in its own pixels (see aa_video_t)
+	uint8_t tc[16]; pb_out t = { tc, 0, sizeof tc, 0 }; pb_u(&t, AA_TC_WIDTH, vm->uw); pb_u(&t, AA_TC_HEIGHT, vm->uh);
 	uint8_t inp[24]; pb_out ip = { inp, 0, sizeof inp, 0 }; pb_b(&ip, AA_INCH_TOUCH_SCREEN, tc, t.n);
 	uint8_t ichd[40]; pb_out ic = { ichd, 0, sizeof ichd, 0 };
 	pb_u(&ic, AA_CHD_CHANNEL_ID, AA_CH_INPUT); pb_b(&ic, AA_CHD_INPUT_CHANNEL, inp, ip.n);
@@ -334,7 +349,9 @@ static size_t build_touch(uint8_t *buf, size_t cap, uint64_t ts, uint32_t x, uin
 // build/parse roundtrip over the real field numbers (no phone needed)
 static int msg_selftest(void)
 {
-	uint8_t sdr[512]; size_t sn = build_service_discovery_response(sdr, sizeof sdr, AA_RES_720p);
+	for (int mode = 0; mode < 2; mode++) {   // 720p, then the lower setting's 480p
+	const aa_video_t *vm = mode ? &AA_VIDEO_480 : &AA_VIDEO_720;
+	uint8_t sdr[512]; size_t sn = build_service_discovery_response(sdr, sizeof sdr, vm);
 	if (!sn || !pb_ok(sdr, sn)) die("msg: build SDR");
 	pb_in in = { sdr, sn, 0 }; pb_val f; int found = 0, nch = 0;
 	while (pb_next(&in, &f) == 1) {
@@ -346,7 +363,11 @@ static int msg_selftest(void)
 			const uint8_t *vcp; size_t vcl; uint64_t st, res;
 			if (pb_get_u(avp, avl, AA_AVCH_STREAM_TYPE, &st) && st == AA_AVSTREAM_VIDEO &&
 			    pb_get_b(avp, avl, AA_AVCH_VIDEO_CONFIGS, &vcp, &vcl) &&
-			    pb_get_u(vcp, vcl, AA_VC_RESOLUTION, &res) && res == AA_RES_720p) found = 1;
+			    pb_get_u(vcp, vcl, AA_VC_RESOLUTION, &res) && res == (uint64_t)vm->res) {
+				uint64_t mw = 99, mh = 99;
+				pb_get_u(vcp, vcl, AA_VC_MARGIN_W, &mw), pb_get_u(vcp, vcl, AA_VC_MARGIN_H, &mh);
+				found = mw == (uint64_t)(vm->fw - vm->uw) && mh == (uint64_t)(vm->fh - vm->uh);
+			}
 		}
 	}
 	if (!found) die("msg: SDR video config roundtrip");
@@ -359,7 +380,8 @@ static int msg_selftest(void)
 			    pb_get_b(f2.p, f2.len, AA_CHD_INPUT_CHANNEL, &ic, &icl) && pb_get_b(ic, icl, AA_INCH_TOUCH_SCREEN, &tcp, &tcl))
 				pb_get_u(tcp, tcl, AA_TC_WIDTH, &tw), pb_get_u(tcp, tcl, AA_TC_HEIGHT, &th);
 		}
-		if (tw != PJ_RGN_W || th != PJ_RGN_H) die("msg: touch screen %llux%llu, want the picture %dx%d", (unsigned long long)tw, (unsigned long long)th, PJ_RGN_W, PJ_RGN_H);
+		if (tw != (uint64_t)vm->uw || th != (uint64_t)vm->uh) die("msg: touch screen %llux%llu, want the UI area %dx%d", (unsigned long long)tw, (unsigned long long)th, vm->uw, vm->uh);
+	}
 	}
 
 	uint8_t co[16]; size_t con = build_channel_open_response(co, sizeof co, AA_STATUS_OK);
@@ -378,6 +400,7 @@ static int msg_selftest(void)
 
 	// frame-wrap a message and read the id + body back
 	uint8_t payload[600], frame[620];
+	uint8_t sdr[512]; size_t sn = build_service_discovery_response(sdr, sizeof sdr, &AA_VIDEO_720);
 	int pn = msg_wrap(payload, sizeof payload, AA_CTL_SERVICE_DISCOVERY_RESPONSE, sdr, sn);
 	int fn = frame_put(frame, sizeof frame, AA_CH_CONTROL, AA_ENC_ENCRYPTED, payload, pn);
 	uint8_t chan, flags; const uint8_t *fp; size_t fl;
@@ -577,13 +600,20 @@ static int touch_open(void)
 }
 static int mt_panel_x(int raw) { return (int)((int64_t)raw * PJ_PANEL_W / (mt_max_x + 1)); }
 static int mt_panel_y(int raw) { return (int)((int64_t)raw * PJ_RGN_H / (mt_max_y + 1)); }
+/* finger k in the phone's UI-area pixels: its place on the picture, scaled to this session's UI area */
+static void mt_ui(int k, int *x, int *y)
+{
+	int px = mt_panel_x(mt[k].x) - PJ_RGN_X, py = mt_panel_y(mt[k].y);
+	px = px < 0 ? 0 : px >= PJ_RGN_W ? PJ_RGN_W - 1 : px;
+	py = py < 0 ? 0 : py >= PJ_RGN_H ? PJ_RGN_H - 1 : py;
+	*x = px * vid.uw / PJ_RGN_W, *y = py * vid.uh / PJ_RGN_H;
+}
 static size_t build_mt(uint8_t *buf, size_t cap, uint64_t ts, const int *idx, int n, int action_index, int action)
 {
 	uint8_t te[320]; pb_out t = { te, 0, sizeof te, 0 };
 	for (int k = 0; k < n; k++) {
-		int px = mt_panel_x(mt[idx[k]].x) - PJ_RGN_X, py = mt_panel_y(mt[idx[k]].y);
-		px = px < 0 ? 0 : px >= PJ_RGN_W ? PJ_RGN_W - 1 : px;
-		py = py < 0 ? 0 : py >= PJ_RGN_H ? PJ_RGN_H - 1 : py;
+		int px, py;
+		mt_ui(idx[k], &px, &py);
 		uint8_t loc[24]; pb_out l = { loc, 0, sizeof loc, 0 };
 		pb_u(&l, AA_TL_X, (uint64_t)px); pb_u(&l, AA_TL_Y, (uint64_t)py);
 		pb_u(&l, AA_TL_POINTER_ID, (uint64_t)idx[k]);   /* the slot: the same id for a finger's whole stroke */
@@ -607,8 +637,8 @@ static void mt_send(int fd, aa_tls_t *tls, uint64_t ts, int ai, int action, int 
 		if (fd == -2) {
 			printf("t=%llu.%06llu action %d index %d:", (unsigned long long)(ts / 1000000), (unsigned long long)(ts % 1000000), action, with >= 0 ? at : ai);
 			for (int k = 0; k < n; k++) {
-				int px = mt_panel_x(mt[idx[k]].x) - PJ_RGN_X, py = mt_panel_y(mt[idx[k]].y);
-				px = px < 0 ? 0 : px >= PJ_RGN_W ? PJ_RGN_W - 1 : px; py = py < 0 ? 0 : py >= PJ_RGN_H ? PJ_RGN_H - 1 : py;
+				int px, py;
+				mt_ui(idx[k], &px, &py);
 				printf(" [id %d at %d,%d]", idx[k], px, py);
 			}
 			printf("\n"); fflush(stdout);
@@ -756,7 +786,9 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 			nlog++;
 		}
 		if (chan == AA_CH_CONTROL && id == AA_CTL_SERVICE_DISCOVERY_REQUEST) {
-			uint8_t sd[512]; size_t sn = build_service_discovery_response(sd, sizeof sd, AA_RES_720p);
+			vid = low_res_wanted() ? AA_VIDEO_480 : AA_VIDEO_720;
+			fprintf(stderr, "aa: video %dx%d, the phone's UI %dx%d\n", vid.fw, vid.fh, vid.uw, vid.uh);
+			uint8_t sd[512]; size_t sn = build_service_discovery_response(sd, sizeof sd, &vid);
 			send_msg(fd, tls, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_SERVICE_DISCOVERY_RESPONSE, sd, sn);
 		} else if (id == AA_CTL_CHANNEL_OPEN_REQUEST) {
 			// The request comes ON the channel being opened (a control-type message there), and the answer goes back

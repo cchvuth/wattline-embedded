@@ -83,7 +83,7 @@ int main(void) {
   CHECK(settings_save(&st) == 0);
   CHECK(!strcmp(slurp("settings.conf"), "minor_figures = 1\nclock_24h = 0\nbrightness_pct = 40\nfollow_car = 0\nfollow_offset = 0\nssh = 0\nrecord = 1\n"
                                           "car = modelY7\nsparse = 1\nwifi_first = 1\ntz = UTC0\npanda_host = 192.168.4.1\n"
-                                          "panda_port = 1338\nota_auto = 0\n"));
+                                          "panda_port = 1338\nota_auto = 0\naa_low_res = 0\n"));
   CHECK(settings_car_saved);   // written: no first-boot question next time
   CHECK(!strcmp(slurp("wifi/networks.conf"), "S3XY_OBD\n12345678\nHome\ns3cret pass\nCafe\n\n"));
   CHECK(mode_of("wifi") == 0700 && mode_of("wifi/networks.conf") == 0600);
@@ -101,6 +101,10 @@ int main(void) {
   settings_save(&back);
   CHECK(strstr(slurp("settings.conf"), "\nota_auto = 1\n") != NULL);   // S99ota greps this exact form
   { dash_settings_t again; settings_load(&again, &cf); CHECK(again.ota_auto); }
+  back.aa_low_res = true;                                                    // Android Auto's lower resolution
+  CHECK(settings_save(&back) == 0);
+  CHECK(strstr(slurp("settings.conf"), "\naa_low_res = 1\n") != NULL);   // aa reads this exact form
+  { dash_settings_t again; settings_load(&again, &cf); CHECK(again.aa_low_res); }
   CHECK(strstr(slurp("settings.conf"), "car = model3rwd\nsparse = 0\nwifi_first = 0\n") != NULL);
   settings_load(&back, &cf);
   CHECK(back.car == CAR_MODEL3_RWD && !back.sparse && !back.wifi_first && settings_car_saved);

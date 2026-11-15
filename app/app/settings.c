@@ -112,6 +112,7 @@ void settings_load(dash_settings_t *st, const conf_t *cf) {
         else if (!strcmp(k, "sparse")) st->sparse = v;
         else if (!strcmp(k, "wifi_first")) st->wifi_first = v;
         else if (!strcmp(k, "ota_auto")) st->ota_auto = v;   // S99ota reads it from the file too
+        else if (!strcmp(k, "aa_low_res")) st->aa_low_res = v;   // aa reads it from the file at each connection
         else if (!strcmp(k, "car")) {   // by its id (modelY7 ...), as dash.conf names it
           for (int i = 0; i < CAR_COUNT; i++)
             if (!strcmp(val, kCars[i].id)) st->car = i, settings_car_saved = true;
@@ -203,11 +204,11 @@ int settings_save(dash_settings_t *st) {
   char text[1024];
   snprintf(text, sizeof text,
            "minor_figures = %d\nclock_24h = %d\nbrightness_pct = %d\nfollow_car = %d\nfollow_offset = %d\nssh = %d\nrecord = %d\n"
-           "car = %s\nsparse = %d\nwifi_first = %d\ntz = %s\npanda_host = %s\npanda_port = %d\nota_auto = %d\n",
+           "car = %s\nsparse = %d\nwifi_first = %d\ntz = %s\npanda_host = %s\npanda_port = %d\nota_auto = %d\naa_low_res = %d\n",
            now.minor_figures, !now.hour12, now.brightness_pct, now.follow_car, now.follow_offset, now.dev_ssh, now.record,
            kCars[now.car >= 0 && now.car < CAR_COUNT ? now.car : CAR_FALLBACK].id, now.sparse, now.wifi_first,
            strchr(now.tz, '\n') ? "UTC0" : now.tz, strchr(now.panda_host, '\n') ? "192.168.4.1" : now.panda_host,
-           now.panda_port, now.ota_auto);
+           now.panda_port, now.ota_auto, now.aa_low_res);
   if (!(rc |= put(settings_root, "settings.conf", text, 0644))) settings_car_saved = true;
   if (wifi) {
     char dir[256];

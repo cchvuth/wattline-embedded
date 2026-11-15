@@ -1,6 +1,6 @@
 // The settings screen's values, kept on /data (R3's writable mount) when there is one, else in memory only (the Mac):
 //   <root>/settings.conf        minor_figures, clock_24h, brightness_pct, follow_car, ssh, record, car, sparse,
-//                               wifi_first, tz, panda_host, panda_port, ota_auto   (key = value)
+//                               wifi_first, tz, panda_host, panda_port, ota_auto, aa_low_res   (key = value)
 //   <root>/tyres                the last tyre pressures, for the next start
 //   <root>/wifi/networks.conf   R3's list: two lines a network, SSID then passphrase ("" open), in order of
 //                               preference; folder 0700, file 0600. No file yet: the list is the car's

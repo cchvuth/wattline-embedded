@@ -16,6 +16,7 @@
 //   spike-vdec --fb-stream [--region X W]
 //                                decode a live Annex-B H.264 stream from stdin to the panel (the AA video sink). With
 //                                --region, the frame's middle W x 480 window is shown unscaled at landscape x = X..X+W-1
+//                                (a smaller frame: its middle window of that shape, scaled up to fill it)
 //                                (the AA receiver asks the phone for a frame whose margins leave exactly that window).
 #include <dirent.h>
 #include <errno.h>
@@ -415,12 +416,13 @@ static void rotate_nv12_bgra(const uint8_t *y, const uint8_t *uv, int stride, in
 					}
 				}
 }
-// rotate + scale NV12 (source sw x sh) into the panel region (w x h landscape) as panel-native BGRA.
-// Nearest-neighbour; folds the 90-degree rotation in. AA sends 800x480 (480p), the region is 1280x480,
-// so the map is scaled up to fill it. Per-pixel (not tiled): used only when a scale is actually needed.
-static void rotate_scale_nv12_bgra(const uint8_t *y, const uint8_t *uv, int stride, int sw, int sh, int w, int h, uint32_t *dst)
+// rotate + scale NV12 (source sw x sh) into the panel region (w x h landscape) as panel-native BGRA, its columns
+// ox0..ox1-1. Nearest-neighbour; folds the 90-degree rotation in. Used for a frame smaller than the region (Android
+// Auto's lower setting, 480p): per-pixel (not tiled), only when a scale is actually needed.
+static void rotate_scale_nv12_bgra(const uint8_t *y, const uint8_t *uv, int stride, int sw, int sh, int w, int h, uint32_t *dst,
+				   int ox0, int ox1)
 {
-	for (int ox = 0; ox < w; ox++) {
+	for (int ox = ox0; ox < ox1; ox++) {
 		int sx = sw == w ? ox : ox * sw / w;
 		const uint8_t *yr = y + sx, *uvc = uv + (sx & ~1);
 		for (int oy = 0; oy < h; oy++) {
@@ -550,6 +552,13 @@ static void *band_show(void *arg)
 	rotate_nv12_bgra(b->yy + b->sy * st + b->sx, b->uv + b->sy / 2 * st + b->sx, (int)st, rgn_w, RGN_H, fb_bgra, b->y0, b->y1);
 	return NULL;
 }
+typedef struct { const uint8_t *y, *uv; int stride, sw, sh, ox0, ox1; } scale_t;
+static void *scale_band(void *arg)
+{
+	const scale_t *s = arg;
+	rotate_scale_nv12_bgra(s->y, s->uv, s->stride, s->sw, s->sh, rgn_w, RGN_H, fb_bgra, s->ox0, s->ox1);
+	return NULL;
+}
 static void fb_show(dec_t *D)
 {
 	if (D->last_ci < 0) return;
@@ -565,11 +574,19 @@ static void fb_show(dec_t *D)
 		pthread_t th; int threaded = pthread_create(&th, NULL, band_show, &top) == 0;
 		band_show(&bot);
 		if (threaded) pthread_join(th, NULL); else band_show(&top);
-	} else {                                    /* a smaller frame than asked for: scale it into the region */
+	} else {   /* a smaller frame (AA's lower setting: 480p): its middle window of the region's shape (where the phone
+	            * lays its UI out, aa.c), scaled up to fill the region without stretching; both cores, a half each */
 		if (crop_w > D->stride || crop_h > D->ah) { D->last_ci = -1; return; }
+		int sw = crop_w, sh = (int)(((int64_t)crop_w * RGN_H + rgn_w - 1) / rgn_w + 1) & ~1;   /* up to even: 800 -> 332, aa.c's UI area */
+		if (sh > crop_h) sh = crop_h & ~1, sw = (int)((int64_t)crop_h * rgn_w / RGN_H) & ~1;   /* a wider frame: its middle columns */
+		if (sw < 2 || sh < 2) { D->last_ci = -1; return; }
+		int sx = (crop_x + (crop_w - sw) / 2) & ~1, sy = (crop_y + (crop_h - sh) / 2) & ~1;   /* even: 4:2:0 */
 		memcpy(D->fb_cram, D->cap[D->last_ci].p, (size_t)D->stride * D->ah * 3 / 2);
-		rotate_scale_nv12_bgra(yy + (size_t)crop_y * D->stride + crop_x, uv + (size_t)(crop_y / 2) * D->stride + crop_x, D->stride,
-				       crop_w, crop_h, rgn_w, RGN_H, fb_bgra);   /* from the crop's corner (crop_x even: 4:2:0) */
+		scale_t l = { yy + (size_t)sy * D->stride + sx, uv + (size_t)(sy / 2) * D->stride + sx, D->stride, sw, sh, 0, rgn_w / 2 }, r = l;
+		r.ox0 = rgn_w / 2, r.ox1 = rgn_w;
+		pthread_t th; int threaded = pthread_create(&th, NULL, scale_band, &l) == 0;
+		scale_band(&r);
+		if (threaded) pthread_join(th, NULL); else scale_band(&l);
 	}
 	fb_blit(rgn_w, RGN_H);
 	D->last_ci = -1; D->shown++; D->show_s += now() - t;
