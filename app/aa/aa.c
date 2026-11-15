@@ -137,18 +137,25 @@ static void pump(aa_tls_t *from, aa_tls_t *to)
 }
 
 // generate a self-signed cert/key to PEM files via the OpenSSL API (no openssl CLI needed; runs on-device)
-// A head-unit certificate a phone can accept: readable and not self-signed (phones pin Google's Android Auto CA, so a
-// self-signed one fails the handshake). 0 usable; 1 self-signed; -1 missing or not a PEM certificate.
-static int cert_check(const char *path)
+// A head-unit certificate a phone can accept: readable, not self-signed (phones pin Google's Android Auto CA, so a
+// self-signed one fails the handshake), and, given its key, that key loads and matches it (aa serve dies on a bad key).
+// 0 usable; 1 self-signed; 2 the key missing or not this certificate's; -1 no PEM certificate.
+static int cert_check(const char *path, const char *keypath)
 {
 	FILE *f = fopen(path, "r");
 	if (!f) return -1;
 	X509 *x = PEM_read_X509(f, NULL, NULL, NULL);
 	fclose(f);
 	if (!x) return -1;
-	int self = X509_check_issued(x, x) == X509_V_OK;
+	int r = X509_check_issued(x, x) == X509_V_OK;
+	if (!r && keypath) {
+		EVP_PKEY *k = NULL;
+		if ((f = fopen(keypath, "r"))) k = PEM_read_PrivateKey(f, NULL, NULL, NULL), fclose(f);
+		r = k && X509_check_private_key(x, k) == 1 ? 0 : 2;
+		EVP_PKEY_free(k);
+	}
 	X509_free(x);
-	return self;
+	return r;
 }
 
 static int gen_cert(const char *crt, const char *key, long valid_secs)
@@ -685,8 +692,23 @@ static void touch_read(int tf, int fd, aa_tls_t *tls)
 // the session after SSL + auth: answer the phone's requests, ping it, route video to the sink, ACK (and drop)
 // audio, send the touchscreen's touches
 #define AA_SILENT_US 6000000   /* the phone answers our 1.5 s pings: this long without a byte, it is gone */
+// the night-mode sensor: the dash's day/night (PJ_NIGHT), sent when the phone starts it and again on every change
+static int night_now(void)
+{
+	int c = '0';
+	FILE *f = fopen(PJ_NIGHT, "r");
+	if (f) c = fgetc(f), fclose(f);
+	return c == '1';
+}
+static void send_night(int fd, aa_tls_t *tls, int night)
+{
+	uint8_t ev[24]; pb_out e = { ev, 0, sizeof ev, 0 }; uint8_t sub[8]; pb_out b = { sub, 0, sizeof sub, 0 };
+	pb_u(&b, AA_NIGHT_IS_NIGHT, night); pb_b(&e, AA_SENEV_NIGHT_MODE, sub, b.n);
+	send_msg(fd, tls, AA_CH_SENSOR, AA_MSG_SPECIFIC, AA_SEN_EVENT, ev, e.n);
+}
 static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 {
+	int night_on = 0, night_sent = -1;   /* the phone started the night sensor; what it was last told */
 	int touch = *touchp;
 	const uint8_t *m; size_t mn; uint8_t chan; uint32_t frames = 0, st_frames = 0, nlog = 0; uint64_t st_bytes = 0;
 	memset(av_sess, 0, sizeof av_sess); input_open = 0;
@@ -710,7 +732,10 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 			fprintf(stderr, "aa: 5 s: %u video frames, %llu KB\n", st_frames, (unsigned long long)(st_bytes >> 10));
 			st_frames = 0; st_bytes = 0; next_stat = t + 5000000;
 		}
-		if (left <= 0) { send_ping(fd, tls); next_ping = t + AA_PING_EVERY_US; left = AA_PING_EVERY_US; }
+		if (left <= 0) {
+			send_ping(fd, tls); next_ping = t + AA_PING_EVERY_US; left = AA_PING_EVERY_US;
+			if (night_on) { int n = night_now(); if (n != night_sent) send_night(fd, tls, n), night_sent = n; }   /* dusk, dawn */
+		}
 		struct pollfd pf[2] = { { fd, POLLIN, 0 }, { touch, POLLIN, 0 } };
 		int pr = poll(pf, touch >= 0 ? 2 : 1, (int)(left / 1000) + 1);
 		if (pr < 0) { if (errno == EINTR) continue; break; }
@@ -763,7 +788,7 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 			// wire it to the car's speed/gear (parked vs moving) from the CAN bridge when that's plumbed in.
 			uint8_t ev[24]; pb_out e = { ev, 0, sizeof ev, 0 }; uint8_t sub[8]; pb_out b = { sub, 0, sizeof sub, 0 };
 			if (st == AA_SENSOR_DRIVING_STATUS)   { pb_u(&b, AA_DRV_STATUS, 0);     pb_b(&e, AA_SENEV_DRIVING_STATUS, sub, b.n); }
-			else if (st == AA_SENSOR_NIGHT_DATA)  { pb_u(&b, AA_NIGHT_IS_NIGHT, 0); pb_b(&e, AA_SENEV_NIGHT_MODE, sub, b.n); }
+			else if (st == AA_SENSOR_NIGHT_DATA)  { night_on = 1; night_sent = night_now(); pb_u(&b, AA_NIGHT_IS_NIGHT, (uint64_t)night_sent); pb_b(&e, AA_SENEV_NIGHT_MODE, sub, b.n); }
 			if (e.n) send_msg(fd, tls, AA_CH_SENSOR, AA_MSG_SPECIFIC, AA_SEN_EVENT, ev, e.n);
 		} else if (is_av(chan) && id == AA_AV_SETUP_REQUEST) {
 			uint8_t r[24]; size_t rn = build_av_setup_response(r, sizeof r);
@@ -1279,9 +1304,10 @@ int main(int argc, char **argv)
 		return 0;
 	}
 	if (argc > 1 && !strcmp(argv[1], "--selftest")) return selftest() | msg_selftest() | rx_selftest() | mt_selftest() | bt_selftest();
-	if (argc == 3 && !strcmp(argv[1], "certcheck")) {   // certcheck <crt>: 0 if a phone can accept it (not self-signed)
-		int r = cert_check(argv[2]);
-		if (r) fprintf(stderr, "aa: %s: %s\n", argv[2], r > 0 ? "self-signed: phones reject it (a Google-signed head-unit certificate is needed)" : "no PEM certificate");
+	if ((argc == 3 || argc == 4) && !strcmp(argv[1], "certcheck")) {   // certcheck <crt> [key]: 0 if usable (see cert_check)
+		int r = cert_check(argv[2], argc == 4 ? argv[3] : NULL);
+		if (r) fprintf(stderr, "aa: %s: %s\n", argv[2], r == 1 ? "self-signed: phones reject it (a Google-signed head-unit certificate is needed)"
+						       : r == 2 ? "its key is missing or belongs to another certificate" : "no PEM certificate");
 		return r ? 1 : 0;
 	}
 	if (argc == 4 && !strcmp(argv[1], "gencert"))   // gencert <crt> <key>: a self-signed cert (tests; phones reject it)

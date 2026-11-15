@@ -36,9 +36,16 @@ stop() {
 case "$1" in
 start)
 	[ -f "$CERT" ] || { echo "dash-aa: no head-unit certificate at $CERT" >&2; exit 1; }
-	aa certcheck "$CERT" || exit 1   # self-signed: the phone would refuse the handshake (it says why)
+	aa certcheck "$CERT" "${CERT%.crt}.key" || exit 1   # self-signed, or its key missing/another's: no session (it says why)
 	[ ${#PSK} -ge 8 ] || { echo "dash-aa: could not make the AP passphrase" >&2; exit 1; }
 	[ -f "$MARK" ] && exit 0   # already up
+	# one start at a time (a second tap after the UI's 15 s, while this one still waits on the Wi-Fi lock); a start that
+	# died leaves the lock: taken over after 90 s
+	if ! mkdir /run/dash-aa.starting 2>/dev/null; then
+		[ $(($(date +%s) - $(stat -c %Y /run/dash-aa.starting 2>/dev/null || echo 0))) -lt 90 ] && { echo "dash-aa: already starting" >&2; exit 0; }
+		rm -rf /run/dash-aa.starting; mkdir /run/dash-aa.starting || exit 1
+	fi
+	trap 'rmdir /run/dash-aa.starting 2>/dev/null' EXIT
 	IFACE=wlan1; ip link show wlan1 >/dev/null 2>&1 || IFACE=wlan0
 	BSSID=$(cat /sys/class/net/"$IFACE"/address)
 	# Prepare for AA: drop the Wi-Fi link to the Commander/home so the radio is free for the AP's own channel (single

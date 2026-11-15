@@ -8,6 +8,7 @@
 #include "record.h"
 #include "settings.h"
 #include "../core/panda.h"
+#include "../ui/project_region.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -188,6 +189,11 @@ static void clock_check(dash_t *d, int64_t now) {   // once per link: logs carry
 static void backlight(dash_t *d, int64_t now, int64_t idle) {
   const conf_t *cf = d->cf;
   int pct = bright_step(&d->bright, cf, &d->car, now, idle);
+  static int night = -1;   // day or night for the AA receiver (PJ_NIGHT): written when it changes
+  if (d->bright.night != night) {
+    FILE *f = fopen(PJ_NIGHT, "w");
+    if (f) fputs(d->bright.night ? "1\n" : "0\n", f), fclose(f), night = d->bright.night;
+  }
   if (pct == dash_bl_pct || !cf->backlight[0]) return;
   char p[160];
   if (!d->bl_max) {

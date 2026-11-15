@@ -19,4 +19,7 @@
 // receiver reads the touchscreen itself (every finger, the hardware's own timestamps) and sends touches to the
 // phone only while it exists. The touchscreen reports panel pixels of the landscape canvas.
 #define PJ_VISIBLE "/run/dash-pj-visible"
+// "1" after dark (the car's headlights on: the dash's own night brightness rule), "0" by day: the AA receiver tells the
+// phone (its night-mode sensor), so Maps darkens with the car.
+#define PJ_NIGHT "/run/dash-night"
 #define PJ_TOUCH_DEV "/dev/input/event0"
