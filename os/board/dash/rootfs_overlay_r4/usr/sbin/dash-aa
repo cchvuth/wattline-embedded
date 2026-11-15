@@ -1,5 +1,5 @@
 #!/bin/sh
-# dash-aa start|stop : wireless Android Auto on demand, from the Dash's Network tab.
+# dash-aa start|stop|forget : wireless Android Auto on demand, from the Dash's Network tab (forget: the paired phones).
 # Brings up the 5 GHz AP, the RFCOMM + HFP profiles that hand the phone the AP creds,
 # and the receiver (TCP 5288 + TLS + video -> the decode/blit sink). Started only by the
 # on-screen button, so the Dash advertises AA only while the user wants it -- a phone set
@@ -9,44 +9,69 @@
 # phone rejects the TLS handshake, so start refuses when it is missing (and the Network
 # tab hides the button). /run/dash-aa marks it running, for that button's on/off label.
 SSID=${SSID:-WattlineAA}
-PSK=${PSK:-wattline-aa}
+# A fresh random passphrase each session: a fixed one would be in this public repo. The phone needs no setup for it:
+# it gets the passphrase over Bluetooth (the paired AA channel) every time it connects.
+PSK=${PSK:-$(od -An -tx1 -N10 /dev/urandom 2>/dev/null | tr -d ' \n')}   # 20 hex digits
 IP=${IP:-192.168.53.1}
 CERT=/etc/wattline/aa.crt
 MARK=/run/dash-aa
 
 stop() {
-	killall aa hostapd udhcpd spike-vdec 2>/dev/null   # spike-vdec: the decoder, so its last picture stops being drawn
-	rm -f "$MARK" /run/dash-project   # drop the projection marker too, in case aa serve was killed mid-session
+	[ -f /run/aa-pair-timer ] && kill "$(cat /run/aa-pair-timer)" 2>/dev/null; rm -f /run/aa-pair-timer   # an old window's end
+	killall spike-vdec aa hostapd udhcpd 2>/dev/null   # the decoder first, so its last picture stops being drawn
+	# gone before anything else (a quick stop -> start would meet the old hostapd on the interface)
+	i=0; while pidof aa hostapd udhcpd spike-vdec >/dev/null 2>&1 && [ $i -lt 5 ]; do sleep 1; i=$((i+1)); done
+	killall -9 spike-vdec aa hostapd udhcpd 2>/dev/null
+	rm -f /run/dash-project   # the projection marker too, in case aa serve was killed mid-session
 	bluetoothctl -- discoverable off >/dev/null 2>&1 || true
-	# Reconnect the Wi-Fi link to the Commander/home that start dropped (SSH/OTA/WiFi-CAN return).
-	wpa_cli -i wlan0 reconnect >/dev/null 2>&1 || /etc/init.d/S45wifi-auto restart >/dev/null 2>&1 &
+	bluetoothctl -- pairable off >/dev/null 2>&1 || true   # no new pairings once AA is off
+	# Reconnect the Wi-Fi link to the Commander/home that start dropped (SSH/OTA/WiFi-CAN return); if wpa_supplicant is
+	# gone, bring Wi-Fi up from scratch (S45wifi-auto only knows "start")
+	rm -f "$MARK" /run/dash-aa-radio   # before Wi-Fi comes back (S45wifi-auto waits while they are there); the button off
+	if [ -e /run/wifi-auto.pending ]; then   # saved meanwhile (and the network picked, if one was)
+		J=$(head -n 1 /run/wifi-auto.pending); rm -f /run/wifi-auto.pending; /etc/init.d/S45wifi-auto start "$J" >/dev/null 2>&1
+	else wpa_cli -i wlan0 reconnect >/dev/null 2>&1 || /etc/init.d/S45wifi-auto start >/dev/null 2>&1; fi
 }
 
 case "$1" in
 start)
 	[ -f "$CERT" ] || { echo "dash-aa: no head-unit certificate at $CERT" >&2; exit 1; }
+	[ ${#PSK} -ge 8 ] || { echo "dash-aa: could not make the AP passphrase" >&2; exit 1; }
 	[ -f "$MARK" ] && exit 0   # already up
 	IFACE=wlan1; ip link show wlan1 >/dev/null 2>&1 || IFACE=wlan0
 	BSSID=$(cat /sys/class/net/"$IFACE"/address)
 	# Prepare for AA: drop the Wi-Fi link to the Commander/home so the radio is free for the AP's own channel (single
 	# radio can't host the AP on the station's channel, esp. a DFS one). During AA the car link rides the Commander's
 	# Bluetooth; dash-aa stop reconnects this. wpa_cli disconnect holds until reconnect (no auto-rejoin fighting the AP).
+	# first: from here a settings save waits for stop (S45wifi-auto), never restarting Wi-Fi beside the AP. Under the Wi-Fi
+	# lock, so a join already past its check finishes (and is then disconnected below) rather than restart Wi-Fi later
+	i=0; got=; until mkdir /run/wifi-auto.lock 2>/dev/null && got=1; do [ $i -ge 30 ] && break; sleep 1; i=$((i+1)); done
+	: > /run/dash-aa-radio
+	[ -n "$got" ] && rmdir /run/wifi-auto.lock
 	wpa_cli -i wlan0 disconnect >/dev/null 2>&1 || true
 	iw reg set SE >/dev/null 2>&1 || true   # EU domain: enables the 5 GHz AP channels (36-48, non-DFS); AA needs 5 GHz
 	echo "dash-aa: AP on $IFACE ($BSSID) ssid=$SSID ip=$IP"
 	mkdir -p /data/log   # per-session logs (overwritten each start): aa-hostapd, aa-udhcpd, aa-bt, aa-serve
-	aa ap "$IFACE" "$SSID" "$PSK" "$IP"
+	aa ap "$IFACE" "$SSID" "$PSK" "$IP" || { echo "dash-aa: the AP did not come up" >&2; stop; exit 1; }
 	# The AP carries live video: keep the radio out of power save for the session (latency, not a correctness fix).
 	iw dev "$IFACE" set power_save off 2>/dev/null; iw dev wlan0 set power_save off 2>/dev/null
 	bluetoothctl -- system-alias Wattline >/dev/null 2>&1 || true   # the name the phone sees (not the default BlueZ x.y)
+	# New phones can pair only in the first 2 minutes after the button (someone at the Dash), not for the whole session;
+	# a phone paired before connects at any time. The AA channel itself needs a paired link (aa.c).
 	bluetoothctl -- discoverable on >/dev/null 2>&1 || true
 	bluetoothctl -- pairable on     >/dev/null 2>&1 || true
+	( sleep 120; bluetoothctl -- pairable off; bluetoothctl -- discoverable off; rm -f /run/aa-pair-timer ) >/dev/null 2>&1 &
+	echo $! > /run/aa-pair-timer
 	aa bt "$IP" "$SSID" "$PSK" "$BSSID" >/data/log/aa-bt.log 2>&1 &
 	aa serve >/data/log/aa-serve.log 2>&1 &
 	: > "$MARK"
 	;;
 stop)
 	stop ;;
+forget)   # every phone paired with the Dash (each gets the AP's passphrase whenever AA is on): removed
+	bluetoothctl -- devices Paired 2>/dev/null | while read -r _ a _; do
+		case "$a" in ??:??:??:??:??:??) bluetoothctl -- remove "$a" >/dev/null 2>&1 && echo "dash-aa: forgot $a" ;; esac
+	done ;;
 *)
-	echo "usage: dash-aa start|stop" >&2; exit 2 ;;
+	echo "usage: dash-aa start|stop|forget" >&2; exit 2 ;;
 esac

@@ -5,11 +5,15 @@
 # That list is the one source of networks (the settings' Network tab edits it): two lines per network, SSID then
 # passphrase (empty: open). It is the owner's: read only, nothing from it is printed or copied.
 case "$1" in start|"") ;; *) exit 0;; esac
+# Android Auto holds the radio for its AP (dash-aa, /run/dash-aa-radio): a saved list is applied when it stops (a restarted
+# wpa_supplicant would rejoin the station beside the AP and drop the projection)
+[ -e /run/dash-aa-radio ] && { printf '%s\n' "$2" > /run/wifi-auto.pending; exit 0; }   # the network to join, if one was picked
 JOIN=$2   # start SSID: join that network now (the settings' Connect): it goes first, the rest stay as fallback
 (
 	# one at a time: two quick saves in the settings must not race (the later list wins, as saved)
-	i=0; until mkdir /run/wifi-auto.lock 2>/dev/null || [ $i -ge 30 ]; do sleep 1; i=$((i+1)); done
-	trap 'rmdir /run/wifi-auto.lock 2>/dev/null' EXIT
+	i=0; got=; until mkdir /run/wifi-auto.lock 2>/dev/null && got=1; do [ $i -ge 30 ] && break; sleep 1; i=$((i+1)); done
+	[ -n "$got" ] && trap 'rmdir /run/wifi-auto.lock 2>/dev/null' EXIT   # only a lock this run took is freed by it
+	[ -e /run/dash-aa-radio ] && { printf '%s\n' "$JOIN" > /run/wifi-auto.pending; exit 0; }   # AA came up while this waited
 	for i in $(seq 1 20); do [ -e /sys/class/net/wlan0 ] && break; sleep 1; done
 	[ -e /sys/class/net/wlan0 ] || exit 0
 	set --   # the car's default unless the saved list has it or it was deleted there on purpose (settings.c, the same rule)

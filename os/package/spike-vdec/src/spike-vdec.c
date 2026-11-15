@@ -95,21 +95,32 @@ static void parse_sps(br_t *b)
 		if (u(b, 1)) sps.flags |= V4L2_H264_SPS_FLAG_QPPRIME_Y_ZERO_TRANSFORM_BYPASS;
 		if (u(b, 1)) die("SPS scaling matrices: not in this spike decoder");
 	}
-	sps.log2_max_frame_num_minus4 = ue(b);
+	/* The stream comes from the phone (or whoever reached the AA socket): every value is checked against the
+	 * H.264 limits and our buffers before it is used, and a bad one ends the decoder (aa then ends the session). */
+	unsigned v;
+	if ((v = ue(b)) > 12) die("SPS log2_max_frame_num_minus4 %u > 12", v);
+	sps.log2_max_frame_num_minus4 = v;
 	sps.pic_order_cnt_type = ue(b);
-	if (sps.pic_order_cnt_type == 0) sps.log2_max_pic_order_cnt_lsb_minus4 = ue(b);
-	else if (sps.pic_order_cnt_type == 1) die("POC type 1: not in this spike decoder");
-	sps.max_num_ref_frames = ue(b);
+	if (sps.pic_order_cnt_type == 0) {
+		if ((v = ue(b)) > 12) die("SPS log2_max_pic_order_cnt_lsb_minus4 %u > 12", v);
+		sps.log2_max_pic_order_cnt_lsb_minus4 = v;
+	} else if (sps.pic_order_cnt_type == 1) die("POC type 1: not in this spike decoder");
+	else if (sps.pic_order_cnt_type != 2) die("SPS pic_order_cnt_type %u", sps.pic_order_cnt_type);
+	if ((v = ue(b)) > 16) die("SPS max_num_ref_frames %u > 16", v);   /* refs[] and the DPB hold 16 */
+	sps.max_num_ref_frames = v;
 	if (u(b, 1)) sps.flags |= V4L2_H264_SPS_FLAG_GAPS_IN_FRAME_NUM_VALUE_ALLOWED;
-	sps.pic_width_in_mbs_minus1 = ue(b); sps.pic_height_in_map_units_minus1 = ue(b);
+	unsigned wm = ue(b), hm = ue(b);
+	if (wm >= 1920 / 16 || hm >= 1088 / 16) die("SPS %ux%u macroblocks: larger than 1920x1088", wm + 1, hm + 1);
+	sps.pic_width_in_mbs_minus1 = wm; sps.pic_height_in_map_units_minus1 = hm;
 	if (!u(b, 1)) die("interlaced: not in this spike decoder");
 	sps.flags |= V4L2_H264_SPS_FLAG_FRAME_MBS_ONLY;
 	if (u(b, 1)) sps.flags |= V4L2_H264_SPS_FLAG_DIRECT_8X8_INFERENCE;
-	int cl = 0, cr = 0, ct = 0, cb = 0;
+	unsigned cl = 0, cr = 0, ct = 0, cb = 0, fw = 16 * (wm + 1), fh = 16 * (hm + 1);
 	if (u(b, 1)) { cl = ue(b); cr = ue(b); ct = ue(b); cb = ue(b); }
-	crop_x = 2 * cl; crop_y = 2 * ct;
-	crop_w = 16 * (sps.pic_width_in_mbs_minus1 + 1) - 2 * (cl + cr);
-	crop_h = 16 * (sps.pic_height_in_map_units_minus1 + 1) - 2 * (ct + cb);
+	/* each offset alone below the frame first (no overflow in the sum), then the window non-empty */
+	if (cl >= fw || cr >= fw || ct >= fh || cb >= fh || 2 * (cl + cr) >= fw || 2 * (ct + cb) >= fh) die("SPS crop outside the frame");
+	crop_x = (int)(2 * cl); crop_y = (int)(2 * ct);
+	crop_w = (int)(fw - 2 * (cl + cr)); crop_h = (int)(fh - 2 * (ct + cb));
 	have_sps = 1;
 }
 
@@ -121,6 +132,7 @@ static void parse_pps(br_t *b)
 	if (u(b, 1)) pps.flags |= V4L2_H264_PPS_FLAG_BOTTOM_FIELD_PIC_ORDER_IN_FRAME_PRESENT;
 	if ((pps.num_slice_groups_minus1 = ue(b))) die("slice groups: not in this spike decoder");
 	pps.num_ref_idx_l0_default_active_minus1 = ue(b); pps.num_ref_idx_l1_default_active_minus1 = ue(b);
+	if (pps.num_ref_idx_l0_default_active_minus1 > 31 || pps.num_ref_idx_l1_default_active_minus1 > 31) die("PPS num_ref_idx > 32");
 	if (u(b, 1)) pps.flags |= V4L2_H264_PPS_FLAG_WEIGHTED_PRED;
 	pps.weighted_bipred_idc = u(b, 2);
 	pps.pic_init_qp_minus26 = se(b); pps.pic_init_qs_minus26 = se(b);
@@ -164,7 +176,7 @@ static void parse_slice(br_t *b, int nal_type, int ref_idc, pic_t *p)
 	if (pps.flags & V4L2_H264_PPS_FLAG_REDUNDANT_PIC_CNT_PRESENT) p->sl.redundant_pic_cnt = ue(b);
 	p->sl.num_ref_idx_l0_active_minus1 = pps.num_ref_idx_l0_default_active_minus1;
 	if (t == V4L2_H264_SLICE_TYPE_P) {
-		if (u(b, 1)) p->sl.num_ref_idx_l0_active_minus1 = ue(b);
+		if (u(b, 1)) { unsigned n = ue(b); if (n > 31) die("slice num_ref_idx > 32"); p->sl.num_ref_idx_l0_active_minus1 = n; }
 		if (u(b, 1)) die("ref pic list modification: not in this spike decoder");
 		if (pps.flags & V4L2_H264_PPS_FLAG_WEIGHTED_PRED) die("weighted prediction: not in this spike decoder");
 	}
@@ -174,10 +186,12 @@ static void parse_slice(br_t *b, int nal_type, int ref_idc, pic_t *p)
 		else if (u(b, 1)) die("MMCO: not in this spike decoder");
 		p->dp.dec_ref_pic_marking_bit_size = b->pos - m0;
 	}
-	if ((pps.flags & V4L2_H264_PPS_FLAG_ENTROPY_CODING_MODE) && t != V4L2_H264_SLICE_TYPE_I) p->sl.cabac_init_idc = ue(b);
+	if ((pps.flags & V4L2_H264_PPS_FLAG_ENTROPY_CODING_MODE) && t != V4L2_H264_SLICE_TYPE_I) {
+		if ((p->sl.cabac_init_idc = ue(b)) > 2) die("cabac_init_idc > 2");
+	}
 	p->sl.slice_qp_delta = se(b);
 	if (pps.flags & V4L2_H264_PPS_FLAG_DEBLOCKING_FILTER_CONTROL_PRESENT) {
-		p->sl.disable_deblocking_filter_idc = ue(b);
+		if ((p->sl.disable_deblocking_filter_idc = ue(b)) > 2) die("disable_deblocking_filter_idc > 2");
 		if (p->sl.disable_deblocking_filter_idc != 1) {
 			p->sl.slice_alpha_c0_offset_div2 = se(b); p->sl.slice_beta_offset_div2 = se(b);
 		}
@@ -237,7 +251,8 @@ static void fill_refs(pic_t *p)
 static void add_ref(pic_t *p, uint64_t ts, int poc, int cap)
 {
 	int max = sps.max_num_ref_frames ? sps.max_num_ref_frames : 1, max_fn = 1 << (sps.log2_max_frame_num_minus4 + 4);
-	if (nrefs == max) {	/* sliding window: drop the smallest FrameNumWrap */
+	if (max > 16) max = 16;	/* refs[16] */
+	while (nrefs >= max) {	/* sliding window: drop the smallest FrameNumWrap */
 		int lo = 0, low = 1 << 30;
 		for (int i = 0; i < nrefs; i++) {
 			int w = refs[i].frame_num > p->dp.frame_num ? refs[i].frame_num - max_fn : refs[i].frame_num;
@@ -469,7 +484,9 @@ typedef struct {
 	struct buf out[NOUT], cap[MAXCAP];
 	uint8_t *fb_cram;	/* cached NV12 copy so the rotate reads fast (the V4L2 mmap is uncached) */
 	int show_each;		/* the file path: show every picture. The live stream shows only the newest (fb_show) */
+	int cw, ch;		/* the coded size the engine was set up for: a later SPS must not change it */
 	int last_ci;		/* the capture buffer of the newest picture not yet shown, or -1 */
+	int newest_ci;		/* the newest picture's, shown or not (shown again when the UI brings the picture back) */
 	int shown; double show_s;	/* stats: pictures shown and the time spent showing them */
 } dec_t;
 
@@ -477,11 +494,12 @@ typedef struct {
 static void dec_setup(dec_t *D, int show_each)
 {
 	memset(D, 0, sizeof *D);
-	D->show_each = show_each; D->last_ci = -1;
+	D->show_each = show_each; D->last_ci = D->newest_ci = -1;
 	char vname[64], mname[64];
 	D->vfd = find_dev("/dev/video*", 0, vname); D->mfd = find_dev("/dev/media*", 1, mname);
 	if (D->vfd < 0 || D->mfd < 0) die("no cedrus video/media device (spike-vdec --info)");
 	int cw = 16 * (sps.pic_width_in_mbs_minus1 + 1), ch = 16 * (sps.pic_height_in_map_units_minus1 + 1);
+	D->cw = cw; D->ch = ch;
 	struct v4l2_format fo = { .type = V4L2_BUF_TYPE_VIDEO_OUTPUT };
 	fo.fmt.pix.pixelformat = V4L2_PIX_FMT_H264_SLICE; fo.fmt.pix.width = cw; fo.fmt.pix.height = ch;
 	fo.fmt.pix.sizeimage = 1024 * 1024;
@@ -492,6 +510,7 @@ static void dec_setup(dec_t *D, int show_each)
 	struct v4l2_format fc = { .type = V4L2_BUF_TYPE_VIDEO_CAPTURE };
 	fc.fmt.pix.pixelformat = V4L2_PIX_FMT_NV12; fc.fmt.pix.width = cw; fc.fmt.pix.height = ch;
 	if (ioctl(D->vfd, VIDIOC_S_FMT, &fc) || fc.fmt.pix.pixelformat != V4L2_PIX_FMT_NV12) die("S_FMT capture NV12: %s", strerror(errno));
+	if ((int)fc.fmt.pix.width < cw || (int)fc.fmt.pix.height < ch || (int)fc.fmt.pix.bytesperline < cw) die("capture %ux%u < the coded %dx%d", fc.fmt.pix.width, fc.fmt.pix.height, cw, ch);
 	D->stride = fc.fmt.pix.bytesperline; D->ah = fc.fmt.pix.height;
 	D->ncap = sps.max_num_ref_frames + 3; if (D->ncap < 4) D->ncap = 4; if (D->ncap > MAXCAP) D->ncap = MAXCAP;
 	struct v4l2_requestbuffers rb = { .count = NOUT, .type = V4L2_BUF_TYPE_VIDEO_OUTPUT, .memory = V4L2_MEMORY_MMAP };
@@ -539,6 +558,7 @@ static void fb_show(dec_t *D)
 	uint8_t *yy = D->fb_cram, *uv = D->fb_cram + (size_t)D->stride * D->ah;
 	if (crop_w >= rgn_w && crop_h >= RGN_H) {   /* the region's window from the frame's middle, unscaled */
 		int sx = ((crop_w - rgn_w) / 2 + crop_x) & ~1, sy = ((crop_h - RGN_H) / 2 + crop_y) & ~1;   /* even: NV12 */
+		if (sx < 0 || sy < 0 || sx + rgn_w > D->stride || sy + RGN_H > D->ah) { D->last_ci = -1; return; }   /* parse_sps bounds it: belt and braces */
 		/* both cores (the T113 has two): the top band on a thread, the bottom one here. RGN_H / 2 = 240 keeps both
 		 * bands even and tile-aligned. If the thread cannot start, this thread does both bands. */
 		band_t top = { D, cy, cuv, yy, uv, sx, sy, 0, RGN_H / 2 }, bot = { D, cy, cuv, yy, uv, sx, sy, RGN_H / 2, RGN_H };
@@ -546,8 +566,10 @@ static void fb_show(dec_t *D)
 		band_show(&bot);
 		if (threaded) pthread_join(th, NULL); else band_show(&top);
 	} else {                                    /* a smaller frame than asked for: scale it into the region */
+		if (crop_w > D->stride || crop_h > D->ah) { D->last_ci = -1; return; }
 		memcpy(D->fb_cram, D->cap[D->last_ci].p, (size_t)D->stride * D->ah * 3 / 2);
-		rotate_scale_nv12_bgra(yy, uv, D->stride, crop_w, crop_h, rgn_w, RGN_H, fb_bgra);
+		rotate_scale_nv12_bgra(yy + (size_t)crop_y * D->stride + crop_x, uv + (size_t)(crop_y / 2) * D->stride + crop_x, D->stride,
+				       crop_w, crop_h, rgn_w, RGN_H, fb_bgra);   /* from the crop's corner (crop_x even: 4:2:0) */
 	}
 	fb_blit(rgn_w, RGN_H);
 	D->last_ci = -1; D->shown++; D->show_s += now() - t;
@@ -586,7 +608,7 @@ static int dec_one(dec_t *D, pic_t *p, nal_t *s)
 	if (ioctl(D->rq, MEDIA_REQUEST_IOC_REINIT)) die("MEDIA_REQUEST_IOC_REINIT: %s", strerror(errno));
 	if (p->ref) add_ref(p, ts, poc, ci);
 	D->frames++;
-	D->last_ci = ci;	/* decode order, not POC order: fine for the display (AA sends IPPP, no reorder) */
+	D->last_ci = D->newest_ci = ci;	/* decode order, not POC order: fine for the display (AA sends IPPP, no reorder) */
 	if (fb_fd >= 0 && D->show_each) fb_show(D);
 	return ci;
 }
@@ -650,8 +672,13 @@ static void process_nal(const uint8_t *p, size_t n, dec_t *D, int *set)
 	int t = p[0] & 0x1f, r = (p[0] >> 5) & 3;
 	size_t full = t == 7 || t == 8;
 	br_t b = { rbsp, unescape(p, n, rbsp, full ? sizeof rbsp : 512), 8 };
-	if (t == 7) parse_sps(&b);
-	else if (t == 8) parse_pps(&b);
+	if (t == 7) {
+		parse_sps(&b);
+		if (*set && (16 * (sps.pic_width_in_mbs_minus1 + 1) != D->cw || 16 * (sps.pic_height_in_map_units_minus1 + 1) != D->ch))
+			die("SPS changed the picture size mid-stream (%dx%d set up)", D->cw, D->ch);   /* the engine's buffers are for it */
+		if (*set && (int)sps.max_num_ref_frames + 3 > D->ncap)
+			die("SPS asks for %d reference frames mid-stream (%d buffers set up)", (int)sps.max_num_ref_frames, D->ncap);
+	} else if (t == 8) parse_pps(&b);
 	else if (t == 1 || t == 5) {
 		if (!have_sps || !have_pps) return;	/* joined mid-stream: wait for the next SPS/PPS before decoding */
 		if (!*set) { dec_setup(D, 0); *set = 1; }
@@ -663,10 +690,13 @@ static void process_nal(const uint8_t *p, size_t n, dec_t *D, int *set)
 
 /* process every complete NAL in buf[0..len) (one ending where the next start code begins); keep the last, possibly
  * partial, NAL unless at EOF. Returns how many bytes may be dropped from the front. */
-static size_t stream_nals(uint8_t *buf, size_t len, dec_t *D, int *set, int eof)
+static size_t stream_nals(uint8_t *buf, size_t len, dec_t *D, int *set, int eof, size_t *scan)
 {
-	size_t prev = (size_t)-1, last = (size_t)-1;
-	for (size_t i = 0; i + 3 <= len; i++) {
+	size_t prev = (size_t)-1, last = (size_t)-1, i = 0;
+	/* The caller keeps the pending NAL at buf[0] (its start code) and buf[0..*scan) is already scanned: resume
+	 * there instead of rescanning a large NAL on every read (quadratic in its size). */
+	if (*scan > 3 && len >= 3 && !buf[0] && !buf[1] && buf[2] == 1) prev = last = 0, i = *scan - 3;
+	for (; i + 3 <= len; i++) {
 		if (buf[i] || buf[i + 1] || buf[i + 2] != 1) continue;
 		if (prev != (size_t)-1) {
 			size_t e = i; while (e > prev + 3 && !buf[e - 1]) e--;	/* trim the trailing zeros of the start code */
@@ -674,6 +704,7 @@ static size_t stream_nals(uint8_t *buf, size_t len, dec_t *D, int *set, int eof)
 		}
 		prev = i; last = i; i += 2;
 	}
+	*scan = len;
 	if (eof && last != (size_t)-1) {
 		size_t e = len; while (e > last + 3 && !buf[e - 1]) e--;
 		process_nal(buf + last + 3, e - (last + 3), D, set);
@@ -682,25 +713,52 @@ static size_t stream_nals(uint8_t *buf, size_t len, dec_t *D, int *set, int eof)
 	return last == (size_t)-1 ? 0 : last;	/* keep from the last start code: its NAL may still be arriving */
 }
 
+/* The dash UI raises this while it shows the picture (ui/project_region.h PJ_VISIBLE): over the settings, the car panel
+ * or a dash the user went back to, the decoder draws nothing (a tap there must not land on a "map" over other buttons). */
+#define PJ_VISIBLE "/run/dash-pj-visible"
 static int decode_stream(int fd)
 {
 	have_sps = have_pps = 0; nrefs = 0;
 	dec_t D; int set = 0;
 	size_t cap = 1u << 20, len = 0; uint8_t *buf = malloc(cap);
 	if (!buf) die("out of memory");
-	double next_stat = now() + 5, last_show_t = 0; int last_frames = 0, last_shown = 0; double last_show_s = 0;
+	size_t scan = 0;
+	double next_stat = now() + 5, last_show_t = 0, reshow_at = 0; int last_frames = 0, last_shown = 0, vis = 0; double last_show_s = 0;
 	for (;;) {
-		if (cap - len < 65536) { cap *= 2; buf = realloc(buf, cap); if (!buf) die("out of memory"); }
+		if (cap - len < 65536) {   /* a NAL this large is not a 720p picture: refuse rather than grow without end */
+			if (cap >= (16u << 20)) die("over 16 MB without a complete NAL");
+			cap *= 2; buf = realloc(buf, cap); if (!buf) die("out of memory");
+		}
+		struct pollfd in = { .fd = fd, .events = POLLIN };
+		if (set && poll(&in, 1, 100) == 0) {   /* no input now: the UI may have brought the picture back */
+			int v = access(PJ_VISIBLE, F_OK) == 0;
+			if (v && !vis) reshow_at = now() + 0.25;   /* after the UI's own repaint of the split, which would cover it */
+			if (!v) reshow_at = 0;
+			if (v && reshow_at && now() >= reshow_at && D.newest_ci >= 0) {
+				D.last_ci = D.newest_ci; fb_show(&D); last_show_t = now(); reshow_at = 0;
+			}
+			vis = v;
+			continue;
+		}
 		ssize_t r = read(fd, buf + len, cap - len);
 		if (r < 0) { if (errno == EINTR) continue; die("read: %s", strerror(errno)); }
-		if (r == 0) { stream_nals(buf, len, &D, &set, 1); if (set) fb_show(&D); break; }	/* EOF: the last NAL */
+		if (r == 0) {	/* EOF: the last NAL; drawn only where the picture is shown */
+			stream_nals(buf, len, &D, &set, 1, &scan);
+			if (set && access(PJ_VISIBLE, F_OK) == 0) fb_show(&D);
+			break;
+		}
 		len += r;
-		size_t used = stream_nals(buf, len, &D, &set, 0);
-		if (used) { memmove(buf, buf + used, len - used); len -= used; }
+		size_t used = stream_nals(buf, len, &D, &set, 0, &scan);
+		if (used) { memmove(buf, buf + used, len - used); len -= used; scan -= used; }
 		/* show the newest picture once the input is drained: if more is already waiting, decode that first */
 		struct pollfd pf = { .fd = fd, .events = POLLIN };
 		/* ...but at least every 100 ms, so a burst of input cannot freeze the picture */
-		if (set && D.last_ci >= 0 && (poll(&pf, 1, 0) == 0 || now() - last_show_t >= 0.1)) { fb_show(&D); last_show_t = now(); }
+		if (set && D.last_ci >= 0 && (poll(&pf, 1, 0) == 0 || now() - last_show_t >= 0.1)) {
+			int v = access(PJ_VISIBLE, F_OK) == 0;
+			if (v && !vis) reshow_at = now() + 0.25;   /* just shown again: drawn now, and again after the UI's repaint */
+			vis = v;
+			if (v) fb_show(&D), last_show_t = now();
+		}
 		if (set && now() >= next_stat) {	/* the live picture's health: decoded vs shown, cost of showing */
 			int sh = D.shown - last_shown;
 			fprintf(stderr, "spike-vdec: 5 s: %d decoded, %d shown, %.1f ms per show\n", D.frames - last_frames, sh,

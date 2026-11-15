@@ -23,6 +23,8 @@ umask 077
 			echo "wifi-connect: network $N skipped: SSID must be 1-32 bytes, passphrase empty or 8-63" >&2
 			continue
 		fi
+		case $K in *\"*)   # psk="..." cannot hold a ": it would end the string early and the whole file fail to load
+			echo "wifi-connect: network $N skipped: a passphrase with \" in it" >&2; continue ;; esac
 		echo "network={"
 		echo "	ssid=$(printf %s "$S" | xxd -p | tr -d '\n')"
 		echo "	priority=$P"
@@ -41,4 +43,4 @@ umask 077
 ip link set wlan0 up || exit 1
 wpa_supplicant -B -i wlan0 -D nl80211 -c $C || exit 1
 wpa_cli -B -i wlan0 -p /run/wpa_supplicant -a /usr/sbin/wifi-event   # before udhcpc, which can wait ~45 s
-udhcpc -i wlan0 -b -t 15
+udhcpc -i wlan0 -b -t 3 -T 2 -A 5   # a few seconds here, then on in the background: S45wifi-auto's lock is not held for long
