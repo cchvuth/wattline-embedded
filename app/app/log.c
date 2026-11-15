@@ -1,6 +1,7 @@
 // A small rotating log in RAM (/run): path and path.1, each up to max_kb. No Diagnostics screen on the Dash.
 #include "app.h"
 #include <stdarg.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
@@ -14,7 +15,7 @@ void log_open(const char *p, int max_kb) {
   max_bytes = (long)max_kb * 1024;
   if (f) fclose(f);
   f = path[0] ? fopen(path, "a") : NULL;
-  if (f) setvbuf(f, NULL, _IOLBF, 0);
+  if (f) setvbuf(f, NULL, _IOLBF, 0), fcntl(fileno(f), F_SETFD, FD_CLOEXEC);   // not held open by the scripts it starts
 }
 
 void log_msg(const char *fmt, ...) {
@@ -41,6 +42,6 @@ void log_msg(const char *fmt, ...) {
     fclose(f);
     rename(path, old);
     f = fopen(path, "w");
-    if (f) setvbuf(f, NULL, _IOLBF, 0);
+    if (f) setvbuf(f, NULL, _IOLBF, 0), fcntl(fileno(f), F_SETFD, FD_CLOEXEC);
   }
 }

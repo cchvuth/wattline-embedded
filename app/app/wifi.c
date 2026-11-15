@@ -107,6 +107,21 @@ static void wpa_key(const char *b, const char *key, char *out, size_t n) {
   snprintf(out, n, "%.*s", (int)strcspn(s, "\n"), s);
 }
 
+// wpa_supplicant's printf_encode undone in place (\\ \" \n \r \t \e \xNN), so a name like "Café" reads as typed
+static void wpa_unescape(char *s) {
+  static const char hex[] = "0123456789abcdef";
+  char *o = s;
+  while (*s) {
+    if (*s != '\\' || !s[1]) { *o++ = *s++; continue; }
+    char c = s[1];
+    const char *h1 = c == 'x' && s[2] ? strchr(hex, s[2] | 0x20) : NULL, *h2 = h1 && s[3] ? strchr(hex, s[3] | 0x20) : NULL;
+    if (h1 && h2) { *o++ = (char)((h1 - hex) << 4 | (h2 - hex)); s += 4; continue; }
+    *o++ = c == 'n' ? '\n' : c == 'r' ? '\r' : c == 't' ? '\t' : c == 'e' ? 033 : c;
+    s += 2;
+  }
+  *o = 0;
+}
+
 // ssh: dropbear's port 22 in /proc/net/tcp{,6}: listening (st 0A) and the sessions open on it (st 01)
 static void ssh_look(bool *on, int *open) {
   static const char *const tabs[] = {"/proc/net/tcp", "/proc/net/tcp6"};
@@ -150,7 +165,10 @@ static const char *wpa_look(void) {
     b[n] = 0;
     if (!strncmp(b, "bssid /", 7)) { nearby_take(b); continue; }   // SCAN_RESULTS
     if (!strstr(b, "wpa_state=")) continue;   // SCAN's OK / FAIL-BUSY
-    wpa_key(b, "\nssid=", wpa_ssid, sizeof wpa_ssid);
+    char ssid[4 * 32 + 1];   // escaped: up to 4 bytes per byte
+    wpa_key(b, "\nssid=", ssid, sizeof ssid);
+    wpa_unescape(ssid);
+    snprintf(wpa_ssid, sizeof wpa_ssid, "%.32s", ssid);   // an SSID is 32 bytes at most
     wpa_key(b, "ip_address=", wpa_ip, sizeof wpa_ip);
     if ((s = strstr(b, "wpa_state="))) s += 10, s[strcspn(s, "\n")] = 0, snprintf(wpa_state, sizeof wpa_state, "%s", s), got = true;
   }

@@ -34,7 +34,9 @@ typedef struct {
 	int car;                  /* CAR_* (core/state.h): the body, seats and drive, as the phone app's picker */
 	bool sparse;              /* sparse polling: steadier speed, slower doors and belts */
 	bool wifi_first;          /* Bluetooth waits for the WiFi stream, no time limit */
+	bool ota_auto;            /* automatic updates: with internet, download + verify + arm for the next start */
 	char tz[64];              /* POSIX TZ for the clocks (arrival, charge done) */
+	char tz_conf[64];         /* dash.conf's (the owner's own, kept in the time zone button's cycle); read only */
 	char panda_host[64];      /* the Commander's Panda interface (WiFi CAN) */
 	int panda_port;
 	char join[33];            /* not saved: join this network now (it goes first; the rest stay as fallback), "" none */
@@ -42,7 +44,9 @@ typedef struct {
 enum { DASH_SETTINGS_SAVE, DASH_CMDR_APPROVE, DASH_CMDR_FORGET, DASH_PAIR_START, DASH_PAIR_CANCEL,
        DASH_SETTINGS_OPEN /* the screen shown: the app may hand fresher values back (SSH turned on by pairing) */,
        DASH_NET_SCAN /* the Network tab shown: a fresh scan for its Nearby list */,
-       DASH_AA_START, DASH_AA_STOP /* the on-screen button: bring wireless Android Auto up / tear it down */ };
+       DASH_AA_START, DASH_AA_STOP /* the on-screen button: bring wireless Android Auto up / tear it down */,
+       DASH_OTA_CHECK, DASH_OTA_INSTALL, DASH_OTA_RESTART /* Advanced: software update (dash-update check / auto / reboot) */,
+       DASH_AA_FORGET /* Advanced: forget the phones paired for Android Auto (dash-aa forget) */ };
 typedef void (*dash_settings_cb)(int what, const dash_settings_t *s, void *ctx);
 void dash_ui_set_settings_cb(dash_settings_cb cb, void *ctx);
 void dash_ui_settings(const dash_settings_t *s); /* the saved values, as the screen should show them */
@@ -54,3 +58,4 @@ enum { DASH_VIEW_DASH, DASH_VIEW_CAR_PANEL, DASH_VIEW_SETTINGS, DASH_VIEW_NETWOR
  * decoded video is drawn; project_region() gives its pixel rect so the video layer can blit straight to the framebuffer. */
 void dash_ui_project_region(int *x, int *y, int *w, int *h);
 void dash_ui_show(int view); /* also opened and closed by touch */
+extern const char *dash_ui_pj_marker; /* "/run/dash-project": an AA session is up (aa serve raises it) */

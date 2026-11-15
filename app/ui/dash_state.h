@@ -62,6 +62,7 @@ typedef struct {
 	char gear;                       /* 'P' 'R' 'N' 'D', 0 none */
 	float front_kw, rear_kw;         /* NAN: unknown */
 	float pedal_pct, brake_pct;      /* NAN: unknown */
+	float brake_nm[4];               /* each wheel's brake torque while braking (FL FR RL RR), Nm; NAN unknown */
 	float regen_cap_kw;              /* NAN: none (parked, unknown) */
 	float speed_limit;               /* NAN: blank sign */
 	dash_ap_t ap;

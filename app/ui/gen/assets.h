@@ -57,6 +57,7 @@ extern const lv_image_dsc_t ic_p_lock_open;
 extern const lv_image_dsc_t ic_p_net;
 extern const lv_image_dsc_t ic_place;
 extern const lv_image_dsc_t ic_route;
+extern const lv_image_dsc_t ic_route_btn;
 extern const lv_image_dsc_t ic_snow_dial;
 extern const lv_image_dsc_t ic_up_dial;
 extern const lv_image_dsc_t ic_wifi_find_l;

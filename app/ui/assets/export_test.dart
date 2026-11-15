@@ -40,13 +40,13 @@ final icons = <(String, Widget Function(double), double, double)>[
   ('i_snow_dial', (s) => Icon(Icons.ac_unit, size: s, color: Colors.white), 14, px * dial),
   ('i_up_dial', (s) => Icon(Icons.arrow_upward, size: s, color: Colors.white), 14, px * dial),
   for (final (n, i) in [
-    ('hourglass', Icons.hourglass_bottom), ('flag', Icons.flag), ('bolt', Icons.bolt),
+    ('hourglass', Icons.hourglass_bottom), ('flag', Icons.flag), ('route', Icons.route), ('bolt', Icons.bolt),
     ('ecar', Icons.electric_car), ('battery', Icons.battery_std), ('place', Icons.place),
   ])
     ('i_$n', (s) => Icon(i, size: s, color: Colors.white), 15, px * S('nav')),
   // The Android Auto button sits beside the car-panel button: same size and scale as i_car_panel (36 px), so it
-  // renders crisp with no runtime upscale.
-  ('i_route', (s) => Icon(Icons.route, size: s, color: Colors.white), 24, px * S('link')),
+  // renders crisp with no runtime upscale (i_route above: the destination box's row icon).
+  ('i_route_btn', (s) => Icon(Icons.route, size: s, color: Colors.white), 24, px * S('link')),
   ('i_gap_car', (s) => Icon(Icons.directions_car_filled, size: s, color: Colors.white), 16, px * S('ring')),
   ('i_wifi_s', (s) => Icon(Icons.wifi, size: s, color: Colors.white), 18, px * S('link')),
   ('i_bt_s', (s) => Icon(Icons.bluetooth_connected, size: s, color: Colors.white), 18, px * S('link')),

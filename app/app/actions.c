@@ -24,7 +24,7 @@ static int pending = -1;
 static int64_t pending_at, say_until;
 static char say[128];
 
-static void tell(const char *text, int64_t now) {  // main.dart _say: in place of the last
+void app_tell(const char *text, int64_t now) {  // main.dart _say: in place of the last
   snprintf(say, sizeof say, "%s", text);
   say_until = now + SAY_MS;
 }
@@ -35,7 +35,10 @@ void app_on_action(int a, void *ctx) {
   int64_t now = mono_ms();
   if (a < 0 || a >= ACT_COUNT) return;
   if (pending >= 0) {  // one at a time (car_panel.dart _busy); never queued, never resent
+    char t[128];
     log_msg("press %s dropped: %s still out", cmdr_actions[a].label, cmdr_actions[pending].label);
+    snprintf(t, sizeof t, "%s: waiting for %s's answer first", cmdr_actions[a].label, cmdr_actions[pending].label);
+    app_tell(t, now);   // said, on the dash and the car panel's line: else the tap seems to do nothing
     return;
   }
 #ifdef DASH_CMDR
@@ -44,7 +47,7 @@ void app_on_action(int a, void *ctx) {
     snprintf(t, sizeof t, "Commander Bluetooth: %s", cmdr_hook_why());
     log_msg("press %s: not linked", cmdr_actions[a].label);
     cmdr_hook_ask();
-    tell(t, now);
+    app_tell(t, now);
     return;
   }
   pending = a, pending_at = now;
@@ -52,7 +55,7 @@ void app_on_action(int a, void *ctx) {
   dash_press(a);  // the session guards it again and sends it once (cmdr_hook_press)
 #else
   log_msg("press %s: no Commander session in this build", cmdr_actions[a].label);
-  tell("Commander Bluetooth: off", now);
+  app_tell("Commander Bluetooth: off", now);
 #endif
 }
 
@@ -68,6 +71,7 @@ void app_press_result(int a, int result, int status, char gear, int64_t now) {
     if (panel) snprintf(t, sizeof t, a == ACT_UNLOCK ? "%s sent: unlocks with the driver inside" : "%s sent", label);
     break;
   case CMDR_E_NOT_READY: snprintf(t, sizeof t, "Commander Bluetooth: %s", cmdr_hook_why()); break;
+  case CMDR_E_STALE: snprintf(t, sizeof t, "%s: not sent: Bluetooth was busy, tap again", label); break;
   case CMDR_E_PARK:
     snprintf(t, sizeof t, gear == 'R' || gear == 'N' || gear == 'D' ? "%s opens in P only" : "%s: gear unknown — no live data", label);
     break;
@@ -89,14 +93,14 @@ void app_press_result(int a, int result, int status, char gear, int64_t now) {
   if (result) snprintf(t, sizeof t, "%s: error %d", label, result);
 #endif
   log_msg("press %s: %d", label, result);
-  if (t[0]) tell(t, now);
+  if (t[0]) app_tell(t, now);
 }
 
 void app_actions_fill(dash_state_t *s, int64_t now) {
   if (pending >= 0 && now - pending_at > ANSWER_MS) {  // no answer at all: let it go, never resend
     char t[128];
     snprintf(t, sizeof t, "%s: no answer: it may have gone through", cmdr_actions[pending].label);
-    tell(t, now);
+    app_tell(t, now);
     pending = -1;
   }
   s->press_pending = (int8_t)pending;
@@ -129,6 +133,20 @@ void app_on_settings(int what, const dash_settings_t *st, void *ctx) {
   case DASH_AA_STOP:
     log_msg("settings: stop Android Auto");
     settings_aa(false);
+    break;
+  case DASH_AA_FORGET:     // Advanced: the paired phones go (each gets the AP's passphrase whenever AA is on)
+    log_msg("settings: forget the phones paired for Android Auto");
+    settings_aa_forget();
+    break;
+  case DASH_OTA_CHECK:     // Advanced, software update: look for a newer release (status in /run/dash-update.status)
+    settings_ota("check");
+    break;
+  case DASH_OTA_INSTALL:   // download (if not already), verify, arm for the next start: no reboot
+    settings_ota("install");   // by hand: also retries a version that failed to start before
+    break;
+  case DASH_OTA_RESTART:   // the update is armed: start it now
+    log_msg("settings: restart for the update");
+    settings_reboot();
     break;
   case DASH_SETTINGS_OPEN:  // looked at again by the loop (settings_refresh), not from inside the UI's own call
     app_settings_refresh = true;
@@ -166,6 +184,9 @@ void dash_press(int a) { (void)a; presses++; }
 static int ready = 1, asks;
 void cmdr_hook_ask(void) { asks++; } void cmdr_hook_forget(void) {}
 void settings_aa(bool start) { (void)start; }
+void settings_aa_forget(void) {}
+void settings_ota(const char *what) { (void)what; }
+void settings_reboot(void) {}
 const char *cmdr_hook_why(void) { return "no Commander advertising"; }
 int cmdr_hook_ready(void) { return ready; }
 void dash_state_blank(dash_state_t *s) { memset(s, 0, sizeof *s); }
@@ -173,7 +194,7 @@ int main(void) {
   dash_state_t s;
   app_on_action(ACT_FRUNK, 0); app_on_action(ACT_TRUNK, 0);   // the second is dropped
   assert(presses == 1);
-  app_actions_fill(&s, T); assert(s.press_pending == ACT_FRUNK && !s.toast[0]);
+  app_actions_fill(&s, T); assert(s.press_pending == ACT_FRUNK && !strcmp(s.toast, "Trunk: waiting for Frunk's answer first"));
   app_press_result(ACT_FRUNK, CMDR_E_PARK, 0, 'D', T);
   app_actions_fill(&s, T); assert(s.press_pending == -1 && !strcmp(s.toast, "Frunk opens in P only"));
   app_on_action(ACT_MIRROR_TILT, 0); app_press_result(ACT_MIRROR_TILT, CMDR_E_GEAR, 0, 'P', T);

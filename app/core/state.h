@@ -28,6 +28,7 @@ typedef struct {
   double speed;                 // display units; 0 when none
   double front_kw, rear_kw, pack_kw, lv_kw, other_kw;   // other_kw: Panda.otherKw
   double pedal_pct, brake_pct, steer_deg;
+  double brake_wheel_nm[4];     // each wheel's brake torque (FL FR RL RR), Nm; NUL unknown
   double soc_pct, range_mi, speed_limit;
   bool braking, kph;
   const char *recirc, *autopilot, *dome_light, *tc_mode, *charge_why, *fan1, *fan2;

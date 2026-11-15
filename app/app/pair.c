@@ -16,7 +16,6 @@
 #include <sys/random.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 const char *pair_keys_path = "/data/ssh/authorized_keys", *pair_enable_cmd = "/usr/sbin/dash-ssh-enable";
@@ -28,7 +27,6 @@ static int lfd = -1, cfd = -1, tries;
 static int64_t until, client_at;
 static char req[REQ_MAX + 1];
 static size_t req_n;
-static pid_t enabler;
 extern char **environ;
 
 // ---- SHA-256 (FIPS 180-4), for the fingerprint ----
@@ -193,6 +191,11 @@ static int add_key(const char *line) {
 
 // ---- the window ----
 static void set_result(const char *r) { snprintf(st.result, sizeof st.result, "%s", r); }
+// The code travels in clear HTTP (the URL), so someone on the same WiFi could read it from the owner's page load and
+// post their own key first. The first client to show the right code is bound to the window; a key from any other
+// address is refused.
+static in_addr_t peer, bound_peer;
+static bool bound;
 static void drop_client(void) {
   if (cfd >= 0) close(cfd);
   cfd = -1, req_n = 0;
@@ -248,7 +251,7 @@ int pair_open(const char *iface, int64_t now) {
   }
   snprintf(st.code, sizeof st.code, "%06u", (unsigned)((uint32_t)r[0] << 24 | r[1] << 16 | r[2] << 8 | r[3]) % 1000000u);
   snprintf(st.url, sizeof st.url, "http://%s:%d/pair?code=%s", st.ip, PAIR_PORT, st.code);
-  st.open = true;
+  st.open = true, bound = false;
   until = now + PAIR_WINDOW_MS;
   log_msg("pair: window open on %s:%d for 5 min", st.ip, PAIR_PORT);   // the code stays on the screen only
   return 0;
@@ -325,6 +328,14 @@ static void serve(int64_t now) {
     if (++tries >= PAIR_TRIES) pair_close("Too many wrong codes: closed");
     return;
   }
+  if (!bound) bound = true, bound_peer = peer;   // the first with the right code owns this window
+  if (peer != bound_peer) {
+    reply(403, "text/plain", "Another device opened this pairing first: tap Cancel on the Dash, pair again, and use one computer for both steps\n");
+    drop_client();
+    log_msg("pair: the right code from a second address: refused");
+    set_result("Refused a key from another computer: cancel, pair again, use one computer");
+    return;
+  }
   if (!post) return reply(200, "text/html", PAGE), drop_client();
   if (!strncmp(body, "key=", 4)) url_decode(body += 4);
   char type[32], comment[64], fp[64], msg[160];
@@ -348,8 +359,8 @@ static void serve(int64_t now) {
   reply(200, "text/plain", msg);
   drop_client();
   char *argv[] = {(char *)pair_enable_cmd, NULL};
-  if (posix_spawn(&enabler, pair_enable_cmd, NULL, NULL, argv, environ)) {
-    enabler = 0;
+  pid_t pid;   // reaped by the loop (dash.c)
+  if (posix_spawn(&pid, pair_enable_cmd, NULL, NULL, argv, environ)) {
     log_msg("pair: %s did not start", pair_enable_cmd);
   }
   msg[strcspn(msg, "\n")] = 0;
@@ -358,13 +369,15 @@ static void serve(int64_t now) {
 }
 
 void pair_handle(int64_t now) {
-  if (enabler > 0 && waitpid(enabler, NULL, WNOHANG) == enabler) enabler = 0;   // reaped, never waited on
   if (lfd < 0) return;
   if (now >= until) return pair_close("Expired");
   if (cfd >= 0 && now - client_at > CLIENT_MS) drop_client();   // a slow client gives way
   if (cfd < 0) {
-    cfd = accept(lfd, NULL, NULL);
+    struct sockaddr_in pa = {0};
+    socklen_t pl = sizeof pa;
+    cfd = accept(lfd, (struct sockaddr *)&pa, &pl);
     if (cfd < 0) return;
+    peer = pa.sin_addr.s_addr;
     fcntl(cfd, F_SETFL, fcntl(cfd, F_GETFL) | O_NONBLOCK);
     fcntl(cfd, F_SETFD, FD_CLOEXEC);
     client_at = now, req_n = 0;
@@ -372,7 +385,12 @@ void pair_handle(int64_t now) {
   for (;;) {
     ssize_t n = read(cfd, req + req_n, REQ_MAX - req_n);
     if (n > 0) req_n += (size_t)n;
-    if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) return drop_client();
+    if (n == 0) { // the client is done sending (nc -N, a half-close): answer what came, then let it go
+      if (req_n) serve(now);
+      if (cfd >= 0) drop_client();
+      return;
+    }
+    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) return drop_client();
     if (n < 0) break;
     if (req_n >= REQ_MAX) return reply(413, "text/plain", "Too long\n"), drop_client();
   }
@@ -397,9 +415,11 @@ static const char ED[] = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL2VJrmcv852c7reeZ
 static const char EC[] = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBE625ieQDEN2j0EUEfUaUQGgzqSmRKCwayGpriR7Dfy1ri3YJ5m3O3/RXO9iZCA+H51qNy14n568I3Z9UrtJEvI= ec@x";
 static const char RSA2048[] = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC2bt5SiF74PEEWq0AOhdsPssJhmvs+cFKGdgijTdQBRtjvcM5E7SjsU/NfIuqB5DYo9dhCgnM9ZAr3kosJDJc3tDpO8SspbHy9vB2Qzo+cJJ1kSuDFMCaqbNbCX4wTkR02N2H3zSwIDjqIpzdh+vj17QqH6HOy2iW3LBmXsQA9kFZ5WANdSXkCTQE3JX2bb5LN/lH371t/0qCEOehxAhfgaCjEatzrbnqor/zr8yDm3X+R9p2Vpwc+ITpJRTXmgpB0ebFLnDW6xMo/HTdjvA105EHYRd9y2dxeoG2JYQlSFIvhCe5iwEBwJTDUncux2pDy1XJJXID6aDdU1c6Zb4S7 short@rsa";
 static char rq[8192], rs[4096];
+static const char *src;   // ask from this address (another computer); -1 where the system has none such
 static int ask(const char *method, const char *code, const char *body) {   // one request; the status code
   int s = socket(AF_INET, SOCK_STREAM, 0);
-  struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(PAIR_PORT)};
+  struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(PAIR_PORT)}, me = {.sin_family = AF_INET};
+  if (src && (inet_pton(AF_INET, src, &me.sin_addr) != 1 || bind(s, (struct sockaddr *)&me, sizeof me))) return close(s), -1;
   inet_pton(AF_INET, st.ip, &a.sin_addr);
   assert(!connect(s, (struct sockaddr *)&a, sizeof a));
   int n = snprintf(rq, sizeof rq, "%s /pair?code=%s HTTP/1.0\r\nContent-Length: %zu\r\n\r\n%s", method, code, strlen(body), body);
@@ -442,6 +462,12 @@ int main(void) {
   for (char l[512]; fgets(l, sizeof l, f);) lines++;
   fclose(f);
   assert(lines == 1);
+  assert(pair_open(lo, T) == 0 && ask("GET", st.code, "") == 200);   // the first with the code owns the window
+  src = "127.0.0.2";
+  int r = ask("POST", st.code, EC);
+  assert((r == 403 && st.open) || r == -1);   // another address, the right code: refused (macOS: no 127.0.0.2)
+  src = NULL;
+  pair_close("Cancelled");
   assert(pair_open(lo, T) == 0);
   for (int k = 0; k < PAIR_TRIES; k++) ask("GET", "99999x", "");
   assert(!st.open && strstr(st.result, "Too many"));   // five wrong codes close it

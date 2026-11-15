@@ -71,6 +71,10 @@ int main(int argc, char **argv) {
     lv_evdev_set_calibration(ts, cf.touch_cal[0], cf.touch_cal[1], cf.touch_cal[2], cf.touch_cal[3]);
   }
   dash_ui_init(lv_screen_active());
+  for (int fd = 3; fd < 256; fd++) {   // LVGL's framebuffer and touch fds are opened without O_CLOEXEC: the scripts the
+    int fl = fcntl(fd, F_GETFD);        // dash starts (Wi-Fi, SSH, Android Auto) must not inherit them
+    if (fl >= 0) fcntl(fd, F_SETFD, fl | FD_CLOEXEC);
+  }
   dash_ui_set_action_cb(app_on_action, NULL);       // taps -> one Commander press (actions.c)
   dash_ui_set_settings_cb(app_on_settings, NULL);   // the settings screen -> actions.c, saved by dash.c (settings.c)
 

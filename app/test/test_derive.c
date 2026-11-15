@@ -229,7 +229,7 @@ static void test_bt_stands_in(void) {   // 'Bluetooth stands in for WiFi, WiFi f
   NEAR(C.pack_kwh, 81.76, 1e-9); NEAR(C.pack_new_kwh, 80, 1e-9); NEAR(car_imbalance_mv(&C), 4, 1e-6);
   NEAR(car_range_at(&C, 58.61), 301.2, 0.1);
   BT(&C, {66, 1}, {113, 0}, {62, 255}, {51, 2047}, {53, 0});
-  CHECK(C.gear == 'P' && C.speed == 87 && car_parked(&C, now));
+  CHECK(C.gear == 'P' && C.speed == 87 && car_parked(&C, now));   // Bluetooth: a speed can stay stale (an empty push)
   CHECK(C.door_fl && C.pedal_pct == 50 && C.front_kw == 15.5);
   now += 60000; CHECK(car_parked(&C, now));   // over Bluetooth a P of any age holds
   L.state = LINK_LIVE; C.wifi_live = true;     // p.status = 'live'
@@ -499,6 +499,12 @@ static void test_steer_brake(void) {
   FR(0x185, 1, 0x14, 0x40, 0x01, 0x0A, 0xA0, 0x00, 0x54, 0xD9); NEAR(C.brake_pct, sqrt(120 / 4000.0) * 100, 1e-9);
   FR(0x185, 1, 0, 0, 0, 0, 0, 0, 0x04, 0x8A); CHECK(C.brake_pct == 0);
   FR(0x185, 1, 0xFE, 0xEF, 0xFF, 0xFE, 0xEF, 0xFF, 0, 0); CHECK(C.brake_pct == 100);
+  fresh();   // 'every torque shows, each wheel on its own, the accelerator down too (the stability control)'
+  C.pedal_pct = 20;
+  FR(0x185, 1, 0x0A, 0, 0, 0, 0, 0, 0, 0); CHECK(C.brake_pct > 0 && C.brake_wheel_nm[0] == 20 && C.brake_wheel_nm[3] == 0);
+  FR(0x185, 1, 0x08, 0x80, 0x00, 0x07, 0x70, 0x00, 0, 0);   // 16 / 16 / 14 / 14 Nm
+  CHECK(C.brake_wheel_nm[0] == 16 && C.brake_wheel_nm[1] == 16 && C.brake_wheel_nm[2] == 14 && C.brake_wheel_nm[3] == 14);
+  FR(0x185, 1, 0, 0, 0, 0, 0, 0, 0, 0); CHECK(C.brake_pct == 0 && C.brake_wheel_nm[1] == 0);
   fresh();   // 'brake torque and steering ignore their not-available value'
   FR(0x185, 1, 0x14, 0x40, 0x01, 0x0A, 0xA0, 0x00, 0x54, 0xD9);
   FR(0x129, 1, 0, 0, 0x0E, 0x21, 0, 0, 0, 0);

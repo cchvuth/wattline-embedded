@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include <string.h>
 #include <strings.h>
 #include <time.h>
@@ -54,7 +55,7 @@ static int64_t now_ms(void) {
 
 typedef struct {
   GDBusConnection *bus;
-  guint sub;
+  guint sub, sub_gone, sub_owner;
   char adapter[64], dev[PATH_MAX_], chr[3][PATH_MAX_];
   int mtu, notifying;
   // set by the session thread; called from BlueZ's signals on that thread
@@ -96,6 +97,19 @@ static int prop_bool(bz *t, const char *path, const char *iface, const char *nam
   return on;
 }
 
+// A Device1 flag with no log line when the object is gone (BlueZ drops an unseen device after ~30 s): -1 gone or no
+// answer, else 0 / 1.
+static int dev_flag_quiet(bz *t, const char *path, const char *name) {
+  GVariant *v = NULL, *r = g_dbus_connection_call_sync(t->bus, BLUEZ, path, PROPS, "Get", g_variant_new("(ss)", DEV_IF, name),
+                                                      G_VARIANT_TYPE("(v)"), G_DBUS_CALL_FLAGS_NONE, 5000, NULL, NULL);
+  if (!r) return -1;
+  g_variant_get(r, "(v)", &v);
+  int on = v && g_variant_is_of_type(v, G_VARIANT_TYPE_BOOLEAN) && g_variant_get_boolean(v);
+  if (v) g_variant_unref(v);
+  g_variant_unref(r);
+  return on;
+}
+
 static GVariant *no_opts(void) { return g_variant_new_array(G_VARIANT_TYPE("{sv}"), NULL, 0); }
 
 static GVariant *objects(bz *t) { return call(t, "/", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects", NULL, "(a{oa{sa{sv}}})", 5000); }
@@ -131,6 +145,23 @@ static void pushes(GDBusConnection *bus, const char *sender, const char *path, c
   g_variant_unref(ch);
 }
 
+// The link gone with no Connected=false: bluetoothd restarted (its name changed hands) or the device object went.
+static void gone(GDBusConnection *bus, const char *sender, const char *path, const char *iface, const char *sig,
+                 GVariant *p, gpointer u) {
+  (void)bus, (void)sender, (void)path, (void)iface;
+  bz *t = u;
+  if (!t->dev[0] || !t->on_lost) return;
+  if (!strcmp(sig, "InterfacesRemoved")) {
+    const char *obj;
+    g_variant_get(p, "(&oas)", &obj, NULL);
+    if (strcmp(obj, t->dev)) return;
+  }
+  // signals wait while a dial blocks: a queued one about the old link must not end a fresh one (as pushes() checks)
+  if (dev_flag_quiet(t, t->dev, "Connected") == 1) return;
+  fprintf(stderr, "ble: the link went with BlueZ (%s)\n", sig);
+  t->on_lost(t->u);
+}
+
 static int io_adapter_on(void *ctx) {
   bz *t = ctx;
   GVariant *v = prop(t, t->adapter, ADAPTER_IF, "Powered");
@@ -160,9 +191,12 @@ int ble_scan(cmdr_io *io, const char *uuid, int ms, const char *pin, ble_dev *ou
   g_variant_builder_init(&f, G_VARIANT_TYPE("a{sv}"));
   g_variant_builder_add(&f, "{sv}", "Transport", g_variant_new_string("le"));
   if (uuid) g_variant_builder_add(&f, "{sv}", "UUIDs", g_variant_new_strv(&uuid, 1));
-  if (ok(call(t, t->adapter, ADAPTER_IF, "SetDiscoveryFilter", g_variant_new("(a{sv})", &f), NULL, 5000)) ||
-      ok(call(t, t->adapter, ADAPTER_IF, "StartDiscovery", NULL, NULL, 5000)))
-    return -1;
+  if (ok(call(t, t->adapter, ADAPTER_IF, "SetDiscoveryFilter", g_variant_new("(a{sv})", &f), NULL, 5000))) return -1;
+  if (ok(call(t, t->adapter, ADAPTER_IF, "StartDiscovery", NULL, NULL, 5000))) {
+    // InProgress: our own session, left by a StopDiscovery that timed out; end it and start again (once)
+    ok(call(t, t->adapter, ADAPTER_IF, "StopDiscovery", NULL, NULL, 5000));
+    if (ok(call(t, t->adapter, ADAPTER_IF, "StartDiscovery", NULL, NULL, 5000))) return -1;
+  }
   int n = 0, hit = 0;
   for (int64_t end = now_ms() + ms; !hit && now_ms() < end;) {
     g_usleep(250 * 1000);
@@ -203,6 +237,17 @@ int ble_scan(cmdr_io *io, const char *uuid, int ms, const char *pin, ble_dev *ou
 
 static int io_scan(void *ctx, const char *pin, char addr[CMDR_ADDR_MAX]) {
   cmdr_io io = {.ctx = ctx};
+  bz *t = ctx;
+  if (pin && pin[0] && t->adapter[0]) { // still linked from an instance that died linked: it does not advertise so
+    char path[PATH_MAX_];
+    int k = snprintf(path, sizeof path, "%s/dev_%s", t->adapter, pin);
+    for (char *c = path + k - strlen(pin); k > 0 && k < (int)sizeof path && *c; c++) *c = *c == ':' ? '_' : (char)toupper((unsigned char)*c);
+    if (k > 0 && k < (int)sizeof path && dev_flag_quiet(t, path, "Connected") == 1) {
+      fprintf(stderr, "ble: %s still linked (an earlier run): disconnecting\n", pin);
+      ok(call(t, path, DEV_IF, "Disconnect", NULL, NULL, 5000));
+      g_usleep(1000 * 1000);
+    }
+  }
   ble_dev d[32];
   int n = ble_scan(&io, CMDR_SERVICE_UUID, 5000, pin, d, 32);
   for (int i = 0; i < n; i++) // strongest first
@@ -317,6 +362,8 @@ static void io_disconnect(void *ctx) {
   forget_link(t);
 }
 
+static int64_t io_now(void *ctx) { (void)ctx; return now_ms(); }
+
 static int io_random(void *ctx, uint8_t *b, size_t n) {
   (void)ctx;
 #ifdef __linux__
@@ -338,7 +385,7 @@ int ble_bluez_open(cmdr_io *io, const char *adapter_path) {
   bz *t = g_new0(bz, 1);
   t->bus = bus;
   snprintf(t->adapter, sizeof t->adapter, "%s", adapter_path);
-  *io = (cmdr_io){t, io_adapter_on, io_scan, io_connect, io_rpc, io_notify, io_disconnect, io_random};
+  *io = (cmdr_io){t, io_adapter_on, io_scan, io_connect, io_rpc, io_notify, io_disconnect, io_random, io_now};
   return 0;
 }
 
@@ -346,6 +393,8 @@ void ble_bluez_close(cmdr_io *io) {
   bz *t = io->ctx;
   if (!t) return;
   if (t->sub) g_dbus_connection_signal_unsubscribe(t->bus, t->sub);
+  if (t->sub_gone) g_dbus_connection_signal_unsubscribe(t->bus, t->sub_gone);
+  if (t->sub_owner) g_dbus_connection_signal_unsubscribe(t->bus, t->sub_owner);
   g_object_unref(t->bus);
   g_free(t);
   io->ctx = NULL;
@@ -426,7 +475,7 @@ static gboolean request(gpointer u) {
   case BLE_RESUME: cmdr_resume(c, now); break;
   case BLE_DATA_HOLD: cmdr_data_hold(c, m->a, now); break;
   case BLE_PRESS:   // queued behind a slow reconnect: dropped rather than sent seconds late on old park/gear facts
-    m->result = m->at && now - m->at > 2000 ? CMDR_E_NOT_READY : cmdr_press(c, (cmdr_action)m->a, m->b, m->gear, now);
+    m->result = m->at && now - m->at > 2000 ? CMDR_E_STALE : cmdr_press(c, (cmdr_action)m->a, m->b, m->gear, now);
     m->b = (int)c->last_status;
     reply(b, m);
     break;
@@ -470,6 +519,10 @@ static gboolean subscribe(gpointer u) {
   bz *t = u;
   t->sub = g_dbus_connection_signal_subscribe(t->bus, BLUEZ, PROPS, "PropertiesChanged", NULL, NULL,
                                               G_DBUS_SIGNAL_FLAGS_NONE, pushes, t, NULL);
+  t->sub_gone = g_dbus_connection_signal_subscribe(t->bus, BLUEZ, "org.freedesktop.DBus.ObjectManager", "InterfacesRemoved",
+                                                   NULL, NULL, G_DBUS_SIGNAL_FLAGS_NONE, gone, t, NULL);
+  t->sub_owner = g_dbus_connection_signal_subscribe(t->bus, "org.freedesktop.DBus", "org.freedesktop.DBus", "NameOwnerChanged",
+                                                    "/org/freedesktop/DBus", BLUEZ, G_DBUS_SIGNAL_FLAGS_NONE, gone, t, NULL);
   return G_SOURCE_REMOVE;
 }
 

@@ -1,8 +1,10 @@
 #include "cmdr.h"
 #include "pb.h"
 #include "../third_party/monocypher.h"
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 const cmdr_cfg cmdr_cfg_default = {
     .id_path = "/data/cmdr_id", .pin_path = "/data/cmdr_pin", .wifi_first = 1,
@@ -28,7 +30,7 @@ static int save(const char *path, const char *s) {
   if (!path || snprintf(tmp, sizeof tmp, "%s.tmp", path) >= (int)sizeof tmp) return -1;
   FILE *f = fopen(tmp, "w");
   if (!f) return -1;
-  int ok = fputs(s, f) >= 0 && fputc('\n', f) != EOF;
+  int ok = fputs(s, f) >= 0 && fputc('\n', f) != EOF && fflush(f) == 0 && fsync(fileno(f)) == 0;   // the key: never a torn file
   ok = fclose(f) == 0 && ok;
   return ok && rename(tmp, path) == 0 ? 0 : -1;
 }
@@ -37,10 +39,19 @@ static int save(const char *path, const char *s) {
 static int phone_id(cmdr_t *c) {
   static const char *const hx = "0123456789abcdef";
   char s[48];
-  if (load(c->cfg.id_path, s, sizeof s) && strlen(s) == 38 && s[0] == '{' && s[37] == '}' && s[15] == '4') {
-    memcpy(c->id, s, 39);
-    return 0;
-  }
+  if (c->id[0] == '{') return 0; // read once: a later failed read never makes a new one over the approved id
+  FILE *f = c->cfg.id_path ? fopen(c->cfg.id_path, "r") : NULL;
+  if (!f && c->cfg.id_path && errno != ENOENT) return -1; // there but not readable now (EIO, EMFILE): the next dial
+  if (f) {
+    int got = fgets(s, sizeof s, f) != NULL, bad = ferror(f);
+    fclose(f);
+    if (bad) return -1; // a read error: never a new id over the approved one
+    if (got) s[strcspn(s, "\r\n")] = 0;
+    if (got && strlen(s) == 38 && s[0] == '{' && s[37] == '}' && s[15] == '4') {
+      memcpy(c->id, s, 39);
+      return 0;
+    }
+  } // none yet, or a file that reads cleanly and holds no id: a new one
   uint8_t b[16];
   if (c->io.random(c->io.ctx, b, 16)) return -1;
   b[6] = (b[6] & 0x0f) | 0x40; // version 4
@@ -254,6 +265,7 @@ static int open_link(cmdr_t *c, int64_t now, cmdr_state *kind, const char **why)
       *why = "not approved: tap the Bluetooth icon, then double-press the right scroll wheel";
       return -1;
     }
+    if (c->io.now) now = c->io.now(c->io.ctx); // after the scan and connect: the owner gets the whole window
     c->approve_by = now + APPROVE_MS;
     c->approve_at = now + APPROVE_EVERY_MS;
     set(c, CS_APPROVING, "approve this unit: in the car, double-press the right scroll wheel");
@@ -292,6 +304,7 @@ static void dial(cmdr_t *c, int64_t now) {
   teardown(c);
   cmdr_state kind;
   int e = open_link(c, now, &kind, &why);
+  if (c->io.now) now = c->io.now(c->io.ctx); // the dial can block 20 s: retries count from its end
   if (e < 0 && kind == CS_AWAY && spent) c->asks++;   // not seen: nothing was asked, the tap still stands
   if (e < 0) {
     teardown(c);
@@ -497,8 +510,9 @@ int cmdr_press_guard(cmdr_action a, int parked, char gear) {
 }
 
 int cmdr_press(cmdr_t *c, cmdr_action a, int parked, char gear, int64_t now) {
-  if (!ready(c)) {
-    cmdr_kick(c, 1, now); // look now
+  if (!ready(c)) { // answered now; the look is the next tick's (a dial here would hold the answer up to 20 s)
+    if (c->paused) cmdr_kick(c, 1, now); // kept for when WiFi lets go (no dial)
+    else if (c->on && c->state != CS_APPROVING) c->asked = c->asks = 1, c->parked = 0, c->attempt = 0, c->retry_at = now;
     return CMDR_E_NOT_READY;
   }
   int g = cmdr_press_guard(a, parked, gear);

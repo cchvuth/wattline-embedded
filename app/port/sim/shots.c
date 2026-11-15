@@ -68,6 +68,17 @@ static int tap_label(lv_obj_t *o, const char *text)
 	return 0;
 }
 
+/* The label reading [text] under [o], or NULL. */
+static lv_obj_t *find_label(lv_obj_t *o, const char *text)
+{
+	for (uint32_t i = 0; i < lv_obj_get_child_count(o); i++) {
+		lv_obj_t *c = lv_obj_get_child(o, i), *f;
+		if (lv_obj_check_type(c, &lv_label_class) && !strcmp(lv_label_get_text(c), text)) return c;
+		if ((f = find_label(c, text))) return f;
+	}
+	return NULL;
+}
+
 int main(int argc, char **argv)
 {
 	const char *out = argc > 1 ? argv[1] : "build/shots";
@@ -114,18 +125,42 @@ int main(int argc, char **argv)
 		snprintf(s.bt_line, sizeof s.bt_line, "Bluetooth: connected. Car data: subscribed to the route and recirculation only, "
 			 "1284 pushes. Car link: connected to the car, Tesla API ready.");
 		bad |= shot(d, out, "touch-settings", &s, DASH_VIEW_SETTINGS);
+		char marker[600]; /* an AA session up: the split stays (without the marker the UI goes back to the dash) */
+		snprintf(marker, sizeof marker, "%s/.dash-project", out);
+		fclose(fopen(marker, "w"));
+		dash_ui_pj_marker = marker;
 		scenes[1].fill(&s); /* highway: a live drive, shown in the strip beside the map */
 		bad |= shot(d, out, "project", &s, DASH_VIEW_PROJECT);
+		s.blind_l = true, s.ind_r = true; /* a car in the left blind spot, the right indicator on */
+		bad |= shot(d, out, "project-blind", &s, DASH_VIEW_PROJECT);
+		s.blind_l = false, s.ind_r = false;
+		s.wifi = WIFI_IDLE; /* the phone on the Dash's own AP: Wi-Fi says AA (the wide box), Bluetooth settled (narrow) */
+		bad |= shot(d, out, "project-aa-links", &s, DASH_VIEW_PROJECT);
+		scenes[1].fill(&s);
 		{
 			dash_state_t off; /* no car data: the strip's dim / placeholder state */
 			dash_state_blank(&off);
 			bad |= shot(d, out, "project-offline", &off, DASH_VIEW_PROJECT);
 		}
+		remove(marker);
+		dash_ui_set(&s); /* back to the dash */
 		static const char *const tabs[] = {"touch-settings-car", "touch-settings-display", "touch-settings-network",
 						   "touch-settings-advanced"};
 		for (int t = 1; t <= 4; t++) {
 			dash_ui_settings_tab(t);
 			bad |= shot(d, out, tabs[t - 1], &s, DASH_VIEW_SETTINGS);
+		}
+		/* the long pages scrolled to their ends (the bar shows where) */
+		static const struct { int tab; const char *last, *name; } ends[] = {
+			{3, "Follow offset", "touch-settings-display-end"}, {5, "Check for updates", "touch-settings-advanced-end"}};
+		for (int k = 0; k < 2; k++) {
+			dash_ui_settings_tab(ends[k].tab - 1);
+			lv_obj_t *l = find_label(lv_layer_top(), ends[k].last);
+			if (!l) { printf("no label %s\n", ends[k].last); bad = 1; continue; }
+			do l = lv_obj_get_parent(l); while (l && !lv_obj_is_scrollable(l)); /* its page (a label is "scrollable" too) */
+			if (l) lv_obj_update_layout(l), lv_obj_scroll_by_bounded(l, 0, -100000, LV_ANIM_OFF); /* to the very end */
+			bad |= shot(d, out, ends[k].name, &s, DASH_VIEW_SETTINGS);
+			dash_ui_settings_tab(0); /* another tab: back at the top next time */
 		}
 		dash_ui_settings_tab(0);
 		s.bt = BT_APPROVING; /* the approval's turn: the step said, the wheel lit */
@@ -169,6 +204,59 @@ int main(int argc, char **argv)
 		scenes[1].fill(&s);
 		s.gear = 0;
 		bad |= shot(d, out, "gear-unknown", &s, DASH_VIEW_DASH);
+		/* edge cases: the widest figures and words the app can be given */
+		scenes[1].fill(&s); /* highway */
+		s.speed = 199, s.speed_limit = 120, s.cruise_set = 199, s.rear_kw = 288, s.front_kw = -120, s.outside_c = -28.5f;
+		s.soc_pct = 100, s.range = 999, s.climate_kw = 11.8f, s.lv_kw = 2.4f, s.other_kw = 10.9f, s.imbalance_mv = 1234;
+		s.degradation_pct = 23.4f, s.nav_minutes = 1439, s.route_len = 1234, s.route_kwh = 288.8f, s.arrive_range = -12;
+		snprintf(s.dest, sizeof s.dest, "%s", "Sankt Peterburg Pulkovo International Airport, Terminal 1");
+		snprintf(s.arrive_clock, sizeof s.arrive_clock, "%s", "12:59 PM");
+		for (int k = 0; k < 4; k++) s.tyre_psi[k] = k ? 22.5f : 51;
+		s.door_fl = s.door_fr = s.door_rl = s.door_rr = s.trunk = s.frunk = s.charge_port = true;
+		snprintf(s.toast, sizeof s.toast, "%s", "Climate: refused (not allowed): needs the Commander linked to the car (ScanMyTesla off)");
+		bad |= shot(d, out, "edge-extremes", &s, DASH_VIEW_DASH);
+		scenes[1].fill(&s); /* miles and a 12-hour clock: the other units' widths */
+		s.kph = false, s.speed = 68, s.range = 214, s.route_len = 6.4f, s.arrive_range = 141;
+		bad |= shot(d, out, "edge-miles", &s, DASH_VIEW_DASH);
+		scenes[2].fill(&s); /* braking at full lock to the right: the turned fronts whole, clear of their figures */
+		s.steer_deg = -520, s.brake_nm[0] = 400, s.brake_nm[1] = 12, s.brake_nm[2] = 0, s.brake_nm[3] = 160;
+		bad |= shot(d, out, "edge-brake-full-lock", &s, DASH_VIEW_DASH);
+		scenes[8].fill(&s); /* Bluetooth only, no route: what the Commander's pushes alone fill */
+		s.route = false, s.outside_c = 7, s.imbalance_mv = 6, s.pack_temp_c = 18;
+		bad |= shot(d, out, "edge-bt-no-route", &s, DASH_VIEW_DASH);
+		dash_state_blank(&s); /* nothing known at all: every figure its placeholder */
+		bad |= shot(d, out, "edge-nothing", &s, DASH_VIEW_DASH);
+		scenes[6].fill(&s); /* charging, in P, while the phone's map is up */
+		char pjm[600];
+		snprintf(pjm, sizeof pjm, "%s/.dash-project", out);
+		fclose(fopen(pjm, "w"));
+		dash_ui_pj_marker = pjm;
+		bad |= shot(d, out, "edge-project-charging", &s, DASH_VIEW_PROJECT);
+		scenes[1].fill(&s); /* the strip at its widest: three digits, a long nav line, the AP's words */
+		s.speed = 188, s.rear_kw = -88, s.front_kw = 188, s.nav_minutes = 1439, s.route_len = 1234, s.arrive_range = 999;
+		s.wifi = WIFI_IDLE, s.bt = BT_RETRYING, s.bt_secs = 12, s.bt_span = 20, s.blind_r = true;
+		bad |= shot(d, out, "edge-project-wide", &s, DASH_VIEW_PROJECT);
+		dash_state_blank(&s);
+		bad |= shot(d, out, "edge-project-nothing", &s, DASH_VIEW_PROJECT);
+		remove(pjm);
+		dash_ui_set(&s);
+		/* the Network tab with the longest names an SSID can have */
+		scenes[6].fill(&s);
+		dash_settings_t ln = {.minor_figures = true, .brightness_pct = 70, .car = 4, .net_count = 3,
+				      .net = {{"S3XY_OBD", ""}, {"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", ""}, {"Wi-Fi with spaces & 'quotes'", ""}},
+				      .tz = "UTC0", .panda_host = "192.168.200.254", .panda_port = 65535};
+		dash_ui_settings(&ln);
+		s.nearby_n = 3;
+		snprintf(s.nearby[0], sizeof s.nearby[0], "%s", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+		snprintf(s.nearby[1], sizeof s.nearby[1], "%s", "Café Nördlingen Gäste");
+		snprintf(s.nearby[2], sizeof s.nearby[2], "%s", "x");
+		snprintf(s.net_ssid, sizeof s.net_ssid, "%s", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+		dash_ui_settings_tab(3);
+		bad |= shot(d, out, "edge-settings-network-long", &s, DASH_VIEW_SETTINGS);
+		dash_ui_settings_tab(4);
+		bad |= shot(d, out, "edge-settings-advanced-host", &s, DASH_VIEW_SETTINGS);
+		dash_ui_settings_tab(0);
+		dash_ui_show(DASH_VIEW_DASH);
 	}
 	/* Every link state in its corner, on one sheet (links.png): WiFi state i beside Bluetooth state i (and i + 9). */
 	enum { CW = 300, CH = 170 };

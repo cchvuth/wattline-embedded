@@ -72,7 +72,7 @@ static void route(dash_state_t *s, const car_t *c, const bt_view_t *bt, const br
   double mins = bus && or0(c->nav_minutes) > 0 ? c->nav_minutes : or0(bt->nav_minutes);
   s->route = bus && seen(in, 0x238) ? c->nav_route : bt->dest != NULL || mins > 0;
   if (bus && c->charging) s->route = false;   // charging takes the route's place (_Controls)
-  bool trip = mins > 0;
+  bool trip = mins > 0 && mins < 10000;   // a sentinel or infinity from a push is no trip (int16_t, the clock)
   double pct = NAN;
   if (trip) {
     pct = bus ? car_arrive_pct(c) : NAN;
@@ -133,6 +133,7 @@ void bridge_fill(dash_state_t *s, const car_t *c, const link_t *l, const bt_view
   s->rear_kw = live ? c->rear_kw : NAN;
   s->pedal_pct = live ? c->pedal_pct : NAN;
   s->brake_pct = wl ? c->brake_pct : NAN;   // WiFi's alone: frozen once it stalls
+  for (int i = 0; i < 4; i++) s->brake_nm[i] = wl ? c->brake_wheel_nm[i] : NAN;
   s->steer_lines = wl && car_steer_lines(c, now);   // WiFi's alone: ID129 or the yaw rate
   s->steer_deg = s->steer_lines ? (float)c->steer_deg : 0;
   s->regen_cap_kw = live && c->gear != 'P' ? c->regen_max_kw : NAN;   // no regen parked

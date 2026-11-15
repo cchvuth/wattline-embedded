@@ -36,6 +36,7 @@ typedef struct {
   int (*notify)(void *ctx, int on);  // StartNotify on push-enhapi; pushes come back through cmdr_on_push
   void (*disconnect)(void *ctx);     // also cancels a connect in progress
   int (*random)(void *ctx, uint8_t *b, size_t n);  // 0 ok (getrandom on Linux)
+  int64_t (*now)(void *ctx);  // the monotonic clock, ms: a dial's retry is timed from its end; NULL: the tick's time
 } cmdr_io;
 
 typedef struct {
@@ -77,6 +78,7 @@ enum {
   CMDR_E_PARK = -5,       // opens a closure: P only
   CMDR_E_GEAR = -6,       // mirror tilt: never in P, N or D
   CMDR_E_NO_ANSWER = -7,  // the press may have gone through; never resent
+  CMDR_E_STALE = -20,     // waited over 2 s behind a redial or an approval step: dropped unsent, tap again
   CMDR_E_STATUS = -8,     // the Commander refused (last_status says why)
 };
 

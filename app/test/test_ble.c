@@ -27,7 +27,7 @@ static int f_rpc(void *x, int chr, const uint8_t *w, size_t wn, uint8_t *r, size
 static int f_notify(void *x, int on) { (void)x, (void)on; return -1; }
 static void f_disconnect(void *x) { (void)x; g_atomic_int_inc(&disconnects); }
 static int f_random(void *x, uint8_t *b, size_t n) { (void)x; memset(b, 1, n); return 0; }
-static const cmdr_io fake = {0, f_adapter, f_scan, f_connect, f_rpc, f_notify, f_disconnect, f_random};
+static const cmdr_io fake = {0, f_adapter, f_scan, f_connect, f_rpc, f_notify, f_disconnect, f_random, NULL};
 
 // The next reply that is not a BLE_DATA, waiting on ble_fd like the app's poll loop; counts DATA seen.
 static int datas;

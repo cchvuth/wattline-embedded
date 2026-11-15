@@ -72,6 +72,7 @@ static void city_turn(dash_state_t *s)
 	car(s);
 	s->speed = 27, s->gear = 'D', s->front_kw = -9, s->rear_kw = -41, s->pedal_pct = 0;
 	s->braking = true, s->brake_pct = 30, s->ind_l = true, s->blind_r = true;
+	s->brake_nm[0] = 140, s->brake_nm[1] = 130, s->brake_nm[2] = 50, s->brake_nm[3] = 40; /* the fronts do most of it */
 	s->steer_deg = 150, s->steer_lines = true; /* into the turn */
 	s->soc_pct = 52, s->range = 158 * 1.609344f, s->speed_limit = 50, s->ap = AP_READY;
 	s->low_beam = true, s->outside_c = 12, s->pack_temp_c = 27, s->regen_cap_kw = 84, s->co2_ppm = 640;
@@ -102,6 +103,7 @@ static void model_3(dash_state_t *s)
 	seen(s);
 	s->car = DASH_CAR_3, s->low_beam = true, s->braking = true, s->ind_l = true;
 	s->speed = 23, s->gear = 'D', s->front_kw = -8, s->rear_kw = -14, s->brake_pct = 40;
+	s->brake_nm[0] = 230, s->brake_nm[1] = 220, s->brake_nm[2] = 100, s->brake_nm[3] = 90;
 	s->soc_pct = 64, s->range = 198 * 1.609344f, s->speed_limit = 50, s->outside_c = 9;
 	s->cabin_c[0] = 21, s->cabin_c[1] = 21;
 	TEXT(s->fan[0], "3"), TEXT(s->fan[1], "OFF");

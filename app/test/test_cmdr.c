@@ -154,7 +154,7 @@ static int f_rpc(void *x, int chr, const uint8_t *w, size_t wn, uint8_t *r, size
   return 0;
 }
 
-static const cmdr_io io = {0, f_adapter, f_scan, f_connect, f_rpc, f_notify, f_disconnect, f_random};
+static const cmdr_io io = {0, f_adapter, f_scan, f_connect, f_rpc, f_notify, f_disconnect, f_random, NULL};
 
 static struct { int calls, nulls; size_t last; } data;
 static void on_data(void *x, const uint8_t *d, size_t n) { (void)x; data.calls++; data.nulls += !d; data.last = n; }
@@ -368,8 +368,10 @@ int main(void) {
   cmdr_link_lost(&c, now);
   run(&c, 2000);
   CHECK(c.state == CS_REFUSED && file_is(PIN_PATH, "AA:BB:CC:00:00:01"));
-  // A press while refused is the tap.
-  CHECK(cmdr_press(&c, ACT_HONK, 0, 'D', now) == CMDR_E_NOT_READY && c.state == CS_APPROVING);
+  // A press while refused is the tap: answered at once, the approval dialled at the next tick.
+  CHECK(cmdr_press(&c, ACT_HONK, 0, 'D', now) == CMDR_E_NOT_READY);
+  run(&c, 500);
+  CHECK(c.state == CS_APPROVING);
   // A link lost while approving retries (not parked), and the tap's one retry still counts as asked.
   cmdr_link_lost(&c, now);
   CHECK(c.state == CS_RETRYING);

@@ -2,6 +2,7 @@
 #include "record.h"
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -39,7 +40,9 @@ static void fail(const char *what, const char *why) {
 static FILE *open_in(const char *base, const char *ext, const char *mode) {
   char p[256];
   snprintf(p, sizeof p, "%s/%s.%s", record_dir, base, ext);
-  return fopen(p, mode);
+  FILE *f = fopen(p, mode);
+  if (f) fcntl(fileno(f), F_SETFD, FD_CLOEXEC);   // a daemon a script starts must not keep a pruned recording's space
+  return f;
 }
 
 static int64_t ms(int64_t at) { return at < t0 ? 0 : at - t0 > UINT32_MAX ? UINT32_MAX : at - t0; }

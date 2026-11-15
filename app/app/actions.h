@@ -14,6 +14,7 @@ void app_on_settings(int what, const dash_settings_t *s, void *ctx);  // DASH_SE
 void app_press_result(int action, int result, int status, char gear, int64_t now); // the session's answer (CMDR_OK /
                                                                                    // CMDR_E_*), the Commander's status
 void app_actions_fill(dash_state_t *s, int64_t now);                   // the press out and the snackbar's line
+void app_tell(const char *text, int64_t now);                         // a line on the snackbar
 
 // The settings as last saved from the screen, for the writer of /data (dirty: not written yet). A network's pass is
 // what was just typed ("" keep the one on file); the writer clears it once written.

@@ -18,6 +18,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #ifdef DASH_CMDR
@@ -65,8 +66,10 @@ static int p_settle(void *x, int64_t now) {
 #ifdef DASH_CMDR
   dash_t *d = x;
   const char *w;
-  if (!d->aside_asked && wifi_join(now, &w) >= 0) return 0;   // not joined: no stream to make way for (the open fails on
-                                                              // no route); stepping aside here only kept Bluetooth down
+  const char *ss = wifi_ssid();   // "" until wpa_supplicant answers (the first look, or just after a join): not a no
+  if (!d->aside_asked && (wifi_join(now, &w) >= 0 || (*ss && strcmp(ss, SETTINGS_CAR_SSID))))
+    return 0;   // not joined, or joined to another network (home WiFi: no Panda there): no stream to make way for;
+                // stepping aside then only kept Bluetooth down (main.dart steps aside on the car's network alone)
   if (!d->aside_asked) {
     d->aside_asked = true;
     d->aside_until = now + 400;
@@ -278,12 +281,12 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
   d->link.cfg = cf->link;
   link_set_sparse(&d->link, app_settings.sparse);
   log_msg("start: panda %s:%d, car %s, tz %s", d->host, d->port, kCars[app_settings.car].id, app_settings.tz);
-  link_connect(&d->link, now);
   bt_view_t bt;
   bt_view_none(&bt);
 #ifdef DASH_CMDR
-  cmdr_hook_start(cf, app_settings.wifi_first);
+  cmdr_hook_start(cf, app_settings.wifi_first);   // before the link's first attempt: its step-aside must reach it
 #endif
+  link_connect(&d->link, now);
   started = true;
 
   int64_t next_frame = now, next_stat = now + 10000;
@@ -305,6 +308,7 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
     if (now > d->last) d->last = now;
     link_poll(&d->link, now);
     pair_handle(now);   // the SSH pairing window's server, while it is open
+    while (waitpid(-1, NULL, WNOHANG) > 0) {}   // the scripts settings.c and pair.c start (none is waited on)
     if (app_settings_refresh) {   // the settings screen opened: SSH may have come on since (the pairing turns it on)
       app_settings_refresh = false;
       bool was = app_settings.dev_ssh;
@@ -313,7 +317,7 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
     }
     if (app_settings_dirty) {   // the settings screen's save (taken in the last frame's touch handling)
       app_settings_dirty = false;
-      settings_save(&app_settings);
+      if (settings_save(&app_settings)) app_tell("Settings not saved: the card could not be written", now);
       apply_settings(d, now);
     }
     record_sync(app_settings.record, cf, now);   // the switch takes effect here, at once

@@ -112,7 +112,7 @@ static void pack_heat(car_t *c) { c->pack_heating = c->p.heat_motors || c->p.hea
 
 void car_frame(car_t *c, uint16_t id, uint8_t bus, const uint8_t *d, uint8_t len, int64_t now) {
   if (id == 0x185) {   // all four wheels each frame: none is no reading, never the last one frozen
-    for (int i = 0; i < 4; i++) c->p.brake_nm[i] = NUL;
+    for (int i = 0; i < 4; i++) c->p.brake_nm[i] = c->brake_wheel_nm[i] = NUL;
     c->brake_pct = NUL;
   }
   if (id == 0x129) { c->steer_deg = NUL; c->p.steer_at = now; }
@@ -228,10 +228,7 @@ void car_frame(car_t *c, uint16_t id, uint8_t bus, const uint8_t *d, uint8_t len
     case SIG_rearKw: c->p.rear_at = v; motor_frame(c); blend(c); break;
     case SIG_steerSccm: car_set_steer(c, -v, now); break;   // the frame is positive to the right
     case SIG_brakeFL: case SIG_brakeFR: case SIG_brakeRL: case SIG_brakeRR: {
-      c->p.brake_nm[s - SIG_brakeFL] = v;
-      double sum = 0;
-      for (int i = 0; i < 4; i++) sum += or0(c->p.brake_nm[i]);
-      c->brake_pct = sqrt(clampd(sum / kBrakeFullNm, 0.0, 1.0)) * 100;
+      c->p.brake_nm[s - SIG_brakeFL] = v;   // the sum once all four are in (after the loop)
       break;
     }
     case SIG_compV:
@@ -328,8 +325,17 @@ void car_frame(car_t *c, uint16_t id, uint8_t bus, const uint8_t *d, uint8_t len
       break;
     }
   }
-  if (utc_n == 6 && utc[1] >= 1 && utc[1] <= 12 && utc[4] >= 1 && utc[4] <= 31 && utc[3] < 24 && utc[5] < 60 &&
-      utc[2] < 60) {
+  if (id == 0x185) {   // the brake: the four wheels' sum, once the whole frame is read
+    double sum = 0;
+    int got = 0;
+    for (int i = 0; i < 4; i++) if (!isnan(c->p.brake_nm[i])) sum += c->p.brake_nm[i], got++;
+    // Every torque shows, the stability control's short touches on one wheel too (also with the accelerator down:
+    // worth seeing), and each wheel on its own (the dash's four tyres)
+    c->brake_pct = !got ? NUL : sqrt(clampd(sum / kBrakeFullNm, 0.0, 1.0)) * 100;
+    for (int i = 0; i < 4; i++) c->brake_wheel_nm[i] = !got ? NUL : or0(c->p.brake_nm[i]);
+  }
+  if (utc_n == 6 && utc[0] >= 2025 && utc[0] <= 2099 && utc[1] >= 1 && utc[1] <= 12 && utc[4] >= 1 && utc[4] <= 31 &&
+      utc[3] < 24 && utc[5] < 60 && utc[2] < 60) {   // a car clock not yet set (year 0, 255) sets nothing
     c->utc.year = utc[0]; c->utc.month = utc[1]; c->utc.second = utc[2];
     c->utc.hour = utc[3]; c->utc.day = utc[4]; c->utc.minute = utc[5];
     c->utc.at = now;
@@ -373,6 +379,7 @@ void car_forget(car_t *c, int64_t now) {
   c->other_kw = NUL;
   c->lv_kw = c->p.comp_kw = c->p.heat_l_kw = c->p.heat_r_kw = c->p.lv_v = NUL;
   c->brake_pct = NUL;
+  for (int i = 0; i < 4; i++) c->brake_wheel_nm[i] = NUL;
   c->display_brightness = NUL;
   c->p.bright_bt = false;
   car_set_steer(c, NUL, now);
@@ -498,7 +505,8 @@ bool car_live(const car_t *c) { return c->wifi_live || car_via_bt(c); }
 // What lets the frunk, trunk and doors open: P, under gear_fresh_ms old on the monotonic clock, or
 // a live Bluetooth session pushing it. Anything else (no gear yet, stalled link, clock odd) is false.
 bool car_parked(const car_t *c, int64_t now) {
-  if (c->gear != 'P') return false;
+  if (c->gear != 'P' || (!car_via_bt(c) && c->speed > 0.5)) return false;   // P while it moves (WiFi): a stale gear. Over
+  // Bluetooth a speed only changes when a push carries it (a 0 can come as an empty push): no speed check there
   if (car_via_bt(c)) return true;
   return c->p.gear_at != NEVER && now >= c->p.gear_at && now - c->p.gear_at < c->cfg.gear_fresh_ms;
 }

@@ -11,4 +11,8 @@
 #define LV_MEM_SIZE (12 * 1024 * 1024U)
 #undef LV_USE_QRCODE
 #define LV_USE_QRCODE 1 /* the SSH pairing view */
+/* Areas to redraw per frame before LVGL gives up and redraws the whole screen (32 by default): in the Android Auto
+ * split a whole-screen redraw paints over the phone's picture, and a frame where all the car data arrives at once
+ * reached 33 */
+#define LV_INV_BUF_SIZE 128
 #endif

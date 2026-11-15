@@ -201,7 +201,7 @@ static uint16_t msg_id(const uint8_t *p, size_t n) { return n >= 2 ? (uint16_t)(
 // What the phone is asked to render: a 720p frame with margins, so the UI it lays out in the frame's middle is
 // exactly the panel's picture rectangle (PJ_RGN_W x PJ_RGN_H), pixel for pixel: no scaling, so no stretch or blur.
 // The decoder shows that middle window. Touches are NOT in frame coordinates: a current phone takes them in its UI
-// area (the frame minus the margins; a current phone's AA displays are e.g. an 80x480 rail + 1080x480 = 1160x480). Frame
+// area (the frame minus the margins; a phone's AA displays there are e.g. an 80x480 rail + a 1080x480 app = 1160x480). Frame
 // coordinates (headunit's 2018 way, +half the margins) landed every tap that offset low-right on the unit.
 #define AA_FRAME_W 1280
 #define AA_FRAME_H 720
@@ -367,7 +367,21 @@ static int msg_selftest(void)
 // ---- server: TCP 5288 + the AA handshake sequence, media -> the decoder sink ----
 // NOTE: compiled and built on the self-tested transport+message layer, but the live exchange is
 // only validated with an Android phone + the user's head-unit cert (none in the repo/image).
-static int readn(int fd, uint8_t *b, size_t n) { size_t g = 0; while (g < n) { ssize_t r = read(fd, b + g, n - g); if (r <= 0) return -1; g += (size_t)r; } return 0; }
+static int64_t now_us(void);
+// before authentication the whole version + TLS exchange must be done by this time (0: no deadline), so a client that
+// trickles bytes cannot hold the single accept slot; each read also has its own timeout (SO_RCVTIMEO)
+static int64_t rd_deadline;
+static int readn(int fd, uint8_t *b, size_t n)
+{
+	size_t g = 0;
+	while (g < n) {
+		if (rd_deadline && now_us() > rd_deadline) return -1;
+		ssize_t r = read(fd, b + g, n - g);
+		if (r <= 0) return -1;
+		g += (size_t)r;
+	}
+	return 0;
+}
 static int writen(int fd, const uint8_t *b, size_t n) { size_t w = 0; while (w < n) { ssize_t r = write(fd, b + w, n - w); if (r <= 0) return -1; w += (size_t)r; } return 0; }
 
 // read one frame: header(2) + size(SHORT 2 / EXTENDED 6 on a FIRST frame) + payload
@@ -390,9 +404,9 @@ static int read_frame(int fd, uint8_t *chan, uint8_t *flags, uint8_t *buf, size_
 #define AA_MSG_MAX (4u << 20)   /* a 720p key frame is a few hundred KB; refuse nonsense */
 typedef struct { uint8_t *p; size_t n, cap; } aa_asm_t;
 static aa_asm_t rx_asm[AA_NCHAN];
-static int asm_add(aa_asm_t *a, const uint8_t *d, size_t n)
+static int asm_add(aa_asm_t *a, const uint8_t *d, size_t n, uint8_t ch)
 {
-	if (a->n + n > AA_MSG_MAX) return -1;
+	if (a->n + n > (ch == AA_CH_VIDEO ? AA_MSG_MAX : (1u << 20))) return -1;   /* only video is big (the discovery request's phone icons: tens of KB) */
 	if (a->n + n > a->cap) {
 		size_t c = a->cap ? a->cap : 32768; while (c < a->n + n) c *= 2;
 		uint8_t *q = realloc(a->p, c); if (!q) return -1;
@@ -407,6 +421,9 @@ static int recv_msg(int fd, aa_tls_t *tls, uint8_t *chan, const uint8_t **msg, s
 	for (;;) {
 		uint8_t ch, flags; int pn = read_frame(fd, &ch, &flags, fr, sizeof fr);
 		if (pn < 0) return -1;
+		// before TLS (version + handshake) only whole single frames on the control channel: no reassembly buffers
+		// (up to 16 x 4 MB) for a peer that has not authenticated
+		if (!tls && (ch != AA_CH_CONTROL || (flags & AA_FRAME_BULK) != AA_FRAME_BULK)) return -1;
 		aa_asm_t *a = &rx_asm[ch % AA_NCHAN];
 		if (flags & AA_FRAME_FIRST) a->n = 0;   // FIRST or BULK: a new message starts on this channel
 		if (flags & AA_ENC_ENCRYPTED) {
@@ -414,11 +431,15 @@ static int recv_msg(int fd, aa_tls_t *tls, uint8_t *chan, const uint8_t **msg, s
 			tls_feed(tls, fr, (size_t)pn);
 			for (;;) {   // everything this frame's records hold
 				int r = SSL_read(tls->ssl, plain, sizeof plain);
-				if (r > 0) { if (asm_add(a, plain, (size_t)r)) return -1; continue; }
+				if (r > 0) { if (asm_add(a, plain, (size_t)r, ch)) return -1; continue; }
 				if (SSL_get_error(tls->ssl, r) != SSL_ERROR_WANT_READ) return -1;
 				break;
 			}
-		} else if (asm_add(a, fr, (size_t)pn)) return -1;
+		} else if (tls) {   // once TLS is up the phone sends only encrypted frames: a plaintext one is another device on the AP
+			static int said;
+			if (!said++) fprintf(stderr, "aa: plaintext frame after TLS on channel %u: ignored\n", ch);
+			continue;
+		} else if (asm_add(a, fr, (size_t)pn, ch)) return -1;
 		if (flags & AA_FRAME_LAST) { *chan = ch; *msg = a->p; *mlen = a->n; return 0; }   // LAST or BULK: complete
 	}
 }
@@ -517,6 +538,7 @@ static void send_ping(int fd, aa_tls_t *tls)
 typedef struct { int active, on, moved, x, y; } mt_slot_t;   /* active: finger down (kernel); on: in the phone's list */
 static mt_slot_t mt[MT_MAX];
 static int mt_cur, mt_gesture, mt_prev_any;   /* mt_gesture: 0 none, 1 ours, -1 ignored until every finger is up */
+static int mt_dropped;   /* SYN_DROPPED seen: events ignored until the frame's SYN_REPORT, then the kernel's state read */
 static int mt_max_x = PJ_PANEL_W - 1, mt_max_y = PJ_RGN_H - 1;
 static int input_open;
 static int touch_open(void)
@@ -554,6 +576,7 @@ static void mt_send(int fd, aa_tls_t *tls, uint64_t ts, int ai, int action, int 
 {
 	int idx[MT_MAX], n = 0, at = 0;   /* the list: every finger on, plus `with` (one going up) */
 	for (int k = 0; k < MT_MAX; k++) if (mt[k].on || k == with) { if (k == with) at = n; idx[n++] = k; }
+	if (fd >= 0 && !tls) return;   /* nothing goes to a phone in plain text */
 	if (fd < 0) {   /* the self-test records; --touch-test prints what would go to the phone */
 		if (mt_nlog < 16) { mt_log[mt_nlog][0] = action; mt_log[mt_nlog][1] = n; mt_log[mt_nlog][2] = with >= 0 ? at : ai; mt_nlog++; }
 		if (fd == -2) {
@@ -600,6 +623,26 @@ static void mt_frame(int fd, aa_tls_t *tls, uint64_t ts)
 	for (int i = 0; i < MT_MAX; i++) { mt[i].moved = 0; mt_prev_any |= mt[i].active; }
 	if (!mt_prev_any) mt_gesture = 0;
 }
+// the touchscreen's slots as the kernel holds them now: after events were dropped (between sessions the queue
+// overflows) the stream alone would leave a stale slot or position (it reports only what changes)
+static void mt_resync(int tf)
+{
+	struct input_absinfo a;
+	if (ioctl(tf, EVIOCGABS(ABS_MT_SLOT), &a)) return;   /* no slots to read back */
+	mt_cur = a.value >= 0 && a.value < MT_MAX ? a.value : -1;
+	/* only the slots the device has (a GT911: 5): the kernel fills no more, and what it leaves is never read */
+	int n = a.maximum + 1 < MT_MAX ? a.maximum + 1 : MT_MAX;
+	static const uint32_t codes[3] = { ABS_MT_TRACKING_ID, ABS_MT_POSITION_X, ABS_MT_POSITION_Y };
+	struct { uint32_t code; int32_t v[MT_MAX]; } q;
+	for (int c = 0; c < 3; c++) {
+		q.code = codes[c];
+		for (int k = 0; k < MT_MAX; k++) q.v[k] = c == 0 ? -1 : c == 1 ? mt[k].x : mt[k].y;   /* unchanged if unfilled */
+		if (ioctl(tf, EVIOCGMTSLOTS(sizeof q), &q)) continue;
+		for (int k = 0; k < n; k++)
+			if (c == 0) mt[k].active = q.v[k] >= 0; else if (c == 1) mt[k].x = q.v[k]; else mt[k].y = q.v[k];
+	}
+	for (int k = n; k < MT_MAX; k++) mt[k].active = 0;   /* slots the device lacks: never a finger */
+}
 // read what the touchscreen has; with tls NULL (between sessions) just keep the slots in step, sending nothing
 static void touch_read(int tf, int fd, aa_tls_t *tls)
 {
@@ -607,6 +650,7 @@ static void touch_read(int tf, int fd, aa_tls_t *tls)
 	while ((r = read(tf, ev, sizeof ev)) > 0)
 		for (int k = 0; k < (int)(r / (ssize_t)sizeof *ev); k++) {
 			const struct input_event *e = &ev[k];
+			if (mt_dropped && !(e->type == EV_SYN && e->code == SYN_REPORT)) continue;
 			if (e->type == EV_ABS) {
 				if (e->code == ABS_MT_SLOT) { mt_cur = e->value >= 0 && e->value < MT_MAX ? e->value : -1; continue; }
 				if (mt_cur < 0) continue;
@@ -614,24 +658,37 @@ static void touch_read(int tf, int fd, aa_tls_t *tls)
 				if (e->code == ABS_MT_TRACKING_ID) s->active = e->value >= 0;
 				else if (e->code == ABS_MT_POSITION_X) s->x = e->value, s->moved = 1;
 				else if (e->code == ABS_MT_POSITION_Y) s->y = e->value, s->moved = 1;
-			} else if (e->type == EV_SYN && e->code == SYN_DROPPED) {   /* the kernel lost events: lift every finger */
-				for (int i = 0; i < MT_MAX; i++) mt[i].active = 0;
-			} else if (e->type == EV_SYN && e->code == SYN_REPORT)
+			} else if (e->type == EV_SYN && e->code == SYN_DROPPED) {   /* the kernel lost events: its state, read back at */
+				mt_dropped = 1;                                              /* the frame's end (what follows is partial) */
+			} else if (e->type == EV_SYN && e->code == SYN_REPORT) {
+				if (mt_dropped) mt_resync(tf), mt_dropped = 0;
 				mt_frame(fd, tls, (uint64_t)e->input_event_sec * 1000000u + (uint64_t)e->input_event_usec);
+			}
 		}
 }
 
 // the session after SSL + auth: answer the phone's requests, ping it, route video to the sink, ACK (and drop)
 // audio, send the touchscreen's touches
 #define AA_SILENT_US 6000000   /* the phone answers our 1.5 s pings: this long without a byte, it is gone */
-static void aa_session(int fd, aa_tls_t *tls, int sink, int touch)
+static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 {
-	const uint8_t *m; size_t mn; uint8_t chan; uint32_t frames = 0, st_frames = 0; uint64_t st_bytes = 0;
+	int touch = *touchp;
+	const uint8_t *m; size_t mn; uint8_t chan; uint32_t frames = 0, st_frames = 0, nlog = 0; uint64_t st_bytes = 0;
 	memset(av_sess, 0, sizeof av_sess); input_open = 0;
-	if (touch >= 0) touch_read(touch, fd, NULL);   // catch up on what happened before this session, sending nothing
+	for (int k = 0; k < MT_MAX; k++) mt[k].active = mt[k].on = mt[k].moved = 0;   // a finger left down at the last
+	mt_prev_any = 0; mt_gesture = 0;   // session's end: forgotten (positions kept: the kernel sends only changes)
+	if (touch >= 0) {   // catch up on what happened before this session, sending nothing, then the kernel's own state
+		touch_read(touch, fd, NULL);
+		mt_resync(touch), mt_dropped = 0;
+		mt_gesture = 0;
+		for (int k = 0; k < MT_MAX; k++) mt[k].on = mt[k].moved = 0, mt_prev_any |= mt[k].active;   // a finger down
+	}                                                                    // now: ignored until all are up
 	fprintf(stderr, "aa: session loop: waiting for the phone's first message\n");
 	int64_t next_ping = now_us() + AA_PING_EVERY_US, last_rx = now_us(), next_stat = now_us() + 5000000;
 	for (;;) {
+		// the decoder died (bad or unsupported stream): end the session rather than leave its last picture up as if
+		// live; the phone reconnects and a fresh decoder starts
+		if (sink == -2) { fprintf(stderr, "aa: ending the session: no video decoder\n"); break; }
 		int64_t t = now_us(), left = next_ping - t;
 		if (t - last_rx > AA_SILENT_US) { fprintf(stderr, "aa: phone silent for %d s, ending the session\n", AA_SILENT_US / 1000000); break; }
 		if (t >= next_stat) {   // what the video path did: frames and data in from the phone
@@ -643,13 +700,18 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int touch)
 		int pr = poll(pf, touch >= 0 ? 2 : 1, (int)(left / 1000) + 1);
 		if (pr < 0) { if (errno == EINTR) continue; break; }
 		if (pr == 0) continue;
-		if (touch >= 0 && (pf[1].revents & POLLIN)) touch_read(touch, fd, tls);
+		if (touch >= 0 && (pf[1].revents & (POLLERR | POLLHUP | POLLNVAL))) {   // the touchscreen went away (its queue
+			fprintf(stderr, "aa: touch device gone\n"); close(touch); *touchp = touch = -1;   // may still read POLLIN): for
+		} else if (touch >= 0 && (pf[1].revents & POLLIN)) touch_read(touch, fd, tls);     // the next sessions too
 		if (!(pf[0].revents & POLLIN)) { if (pf[0].revents) break; continue; }   // hung up / error with nothing to read
 		if (recv_msg(fd, tls, &chan, &m, &mn) || mn < 2) break;
 		last_rx = now_us();
 		uint16_t id = msg_id(m, mn); const uint8_t *body = m + 2; size_t blen = mn - 2;
-		if (!(is_av(chan) && is_media(id)) && !(chan == AA_CH_CONTROL && (id == AA_CTL_PING_REQUEST || id == AA_CTL_PING_RESPONSE)))
-			fprintf(stderr, "aa: rx chan %u msg 0x%04x (%zu bytes)\n", chan, id, blen);
+		if (!(is_av(chan) && is_media(id)) && !(chan == AA_CH_CONTROL && (id == AA_CTL_PING_REQUEST || id == AA_CTL_PING_RESPONSE))) {
+			if (nlog < 300) fprintf(stderr, "aa: rx chan %u msg 0x%04x (%zu bytes)\n", chan, id, blen);   // the log is on /data:
+			else if (nlog == 300) fprintf(stderr, "aa: further messages not logged this session\n");   // never flooded
+			nlog++;
+		}
 		if (chan == AA_CH_CONTROL && id == AA_CTL_SERVICE_DISCOVERY_REQUEST) {
 			uint8_t sd[512]; size_t sn = build_service_discovery_response(sd, sizeof sd, AA_RES_720p);
 			send_msg(fd, tls, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_SERVICE_DISCOVERY_RESPONSE, sd, sn);
@@ -716,7 +778,7 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int touch)
 				// then an access-unit delimiter: the decoder takes a NAL as complete when the next start code
 				// comes, so without it every picture would wait for the following one (a still screen: forever)
 				static const uint8_t aud[] = { 0, 0, 0, 1, 0x09, 0xf0 };
-				if (sink >= 0 && (writen(sink, nal, nl) || writen(sink, aud, sizeof aud))) { fprintf(stderr, "aa: video sink died\n"); close(sink); sink = -1; }
+				if (sink >= 0 && (writen(sink, nal, nl) || writen(sink, aud, sizeof aud))) { fprintf(stderr, "aa: video sink died\n"); close(sink); sink = -2; }
 			}   // ponytail: audio is ACKed and dropped — no sound out yet; pipe to ALSA when the Dash gets a speaker path
 		acked:
 			ack(fd, tls, chan);
@@ -811,8 +873,9 @@ static int aa_serve(const char *cert, const char *key)
 		// not held until the phone acknowledges the previous one -- with one frame in flight, that stalls video
 		setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
 		fprintf(stderr, "aa: phone dialled in on %d\n", AA_PORT);
-		struct timeval tmo = { 20, 0 }, none = { 0, 0 };   // a stalled handshake must not wedge the accept loop
+		struct timeval tmo = { 5, 0 }, live = { AA_SILENT_US / 1000000, 0 };   // per read: before auth, and in the session
 		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tmo, sizeof tmo);
+		rd_deadline = now_us() + 20000000;   // version + TLS within 20 s, however the bytes trickle in
 		aa_tls_t t; tls_init(&t, ctx, 0);
 		uint8_t vr[4] = { AA_VERSION_MAJOR >> 8, AA_VERSION_MAJOR & 0xff, AA_VERSION_MINOR >> 8, AA_VERSION_MINOR & 0xff };
 		send_msg(fd, NULL, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_VERSION_REQUEST, vr, sizeof vr);
@@ -821,7 +884,8 @@ static int aa_serve(const char *cert, const char *key)
 		fprintf(stderr, "aa: version %s\n", ok ? "agreed" : "refused");
 		if (ok && do_ssl_handshake(fd, &t) == 0) {
 			fprintf(stderr, "aa: TLS up (%s, %s), session starting\n", SSL_get_version(t.ssl), SSL_get_cipher(t.ssl));
-			setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &none, sizeof none);
+			rd_deadline = 0;
+			setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &live, sizeof live);   // a frame stalled half-way ends the session
 			// AUTH_COMPLETE is the PLAINTEXT handshake-done signal: the phone activates its SSL context on
 			// receiving it, and only frames AFTER it are encrypted. Sent encrypted, the phone logs "encrypted
 			// frame ... with no ssl context, waiting" and times out. So NULL (plain), like VERSION/SSL_HANDSHAKE.
@@ -829,7 +893,8 @@ static int aa_serve(const char *cert, const char *key)
 			send_msg(fd, NULL, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_AUTH_COMPLETE, ac, o.n);
 			int sink = spawn_sink();
 			close(open("/run/dash-project", O_CREAT | O_WRONLY, 0644));   // the dash UI yields the video region
-			aa_session(fd, &t, sink, touch);
+			aa_session(fd, &t, sink, &touch);
+			for (int k = 0; k < AA_NCHAN; k++) free(rx_asm[k].p), rx_asm[k] = (aa_asm_t){0};   /* the next session starts small */
 			// stop the decoder and wait it out BEFORE dropping the marker: the UI repaints the dash when the marker
 			// goes, and a decoder still drawing would leave its last picture over it
 			if (sink >= 0) close(sink);
@@ -937,11 +1002,27 @@ static void hfp_handle(int fd)
 	while (read(fd, buf, sizeof buf) > 0) { }   // SLC up: keep the link alive until the phone drops it
 }
 
+// A bonded phone only: RequireAuthentication lets an unbonded "Just Works" link through (the kernel allows a
+// no-bonding pairing even while the adapter is not pairable), and the agent says yes to it. Bonding needs the pairable
+// window dash-aa opens, so this keeps the AP's passphrase to phones paired in that window.
+static int dev_bonded(GDBusConnection *conn, const char *dev)
+{
+	GVariant *r = g_dbus_connection_call_sync(conn, BLUEZ_BUS, dev, "org.freedesktop.DBus.Properties", "Get",
+		g_variant_new("(ss)", "org.bluez.Device1", "Bonded"), G_VARIANT_TYPE("(v)"), G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
+	if (!r) return 0;
+	GVariant *v = NULL;
+	g_variant_get(r, "(v)", &v);
+	int b = v && g_variant_is_of_type(v, G_VARIANT_TYPE_BOOLEAN) && g_variant_get_boolean(v);
+	if (v) g_variant_unref(v);
+	g_variant_unref(r);
+	return b;
+}
+
 static void profile_method(GDBusConnection *conn, const char *sender, const char *path,
 			   const char *iface, const char *method, GVariant *params,
 			   GDBusMethodInvocation *inv, gpointer user)
 {
-	(void)conn; (void)sender; (void)iface;
+	(void)sender; (void)iface;
 	bt_creds *cr = user;
 	if (!strcmp(method, "NewConnection")) {
 		const char *dev; gint32 idx; GVariant *props = NULL;
@@ -952,6 +1033,7 @@ static void profile_method(GDBusConnection *conn, const char *sender, const char
 		int fd = fdl ? g_unix_fd_list_get(fdl, idx, NULL) : -1;
 		g_dbus_method_invocation_return_value(inv, NULL);   // ack: we own the fd now
 		if (fd < 0) return;
+		if (!dev_bonded(conn, dev)) { fprintf(stderr, "aa: %s is not bonded: refused\n", dev); close(fd); return; }
 		// BlueZ hands the socket over non-blocking; our readn/writen expect blocking I/O
 		fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
 		if (!strcmp(path, HFP_PATH)) {
@@ -998,7 +1080,7 @@ static const char PROFILE_XML[] =
 	"</interface></node>";
 
 // pairing agent: auto-accept every request so a phone pairs with no touch on the Dash.
-// ponytail: accepts anyone while the Dash is pairable; gate on a pairing window/button if that matters.
+// It accepts anyone while the Dash is pairable: dash-aa keeps that to 2 minutes after AA is turned on.
 #define AGENT_PATH "/wattline/aa/agent"
 static const char AGENT_XML[] =
 	"<node><interface name='org.bluez.Agent1'>"
@@ -1013,11 +1095,43 @@ static const char AGENT_XML[] =
 	"<method name='Cancel'/>"
 	"</interface></node>";
 
+// The adapter of a device object (/org/bluez/hci0/dev_..): pairable now (dash-aa's 2-minute window)?
+static int adapter_pairable(GDBusConnection *conn, const char *dev)
+{
+	char ad[64];
+	const char *p = strstr(dev, "/dev_");
+	size_t n = p ? (size_t)(p - dev) : 0;
+	if (!n || n >= sizeof ad) return 0;
+	memcpy(ad, dev, n), ad[n] = 0;
+	GVariant *r = g_dbus_connection_call_sync(conn, BLUEZ_BUS, ad, "org.freedesktop.DBus.Properties", "Get",
+		g_variant_new("(ss)", "org.bluez.Adapter1", "Pairable"), G_VARIANT_TYPE("(v)"), G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
+	if (!r) return 0;
+	GVariant *v = NULL;
+	g_variant_get(r, "(v)", &v);
+	int on = v && g_variant_is_of_type(v, G_VARIANT_TYPE_BOOLEAN) && g_variant_get_boolean(v);
+	if (v) g_variant_unref(v);
+	g_variant_unref(r);
+	return on;
+}
+
 static void agent_method(GDBusConnection *conn, const char *sender, const char *path,
 			 const char *iface, const char *method, GVariant *params,
 			 GDBusMethodInvocation *inv, gpointer user)
 {
-	(void)conn; (void)sender; (void)path; (void)iface; (void)params; (void)user;
+	(void)sender; (void)path; (void)iface; (void)user;
+	// a pairing only inside the window: the kernel lets a no-bonding pairing through at any time, and a device that
+	// copies a bonded phone's address would otherwise be confirmed here and pass the Bonded check (AuthorizeService:
+	// a bonded phone's later connections, still yes)
+	if (!strcmp(method, "RequestPinCode") || !strcmp(method, "RequestPasskey") || !strcmp(method, "RequestConfirmation") ||
+	    !strcmp(method, "RequestAuthorization")) {
+		const char *dev = "";
+		g_variant_get_child(params, 0, "&o", &dev);
+		if (!adapter_pairable(conn, dev)) {
+			fprintf(stderr, "aa: pairing from %s refused: not in the pairing window\n", dev);
+			g_dbus_method_invocation_return_dbus_error(inv, "org.bluez.Error.Rejected", "not pairable now");
+			return;
+		}
+	}
 	if (!strcmp(method, "RequestPinCode"))
 		g_dbus_method_invocation_return_value(inv, g_variant_new("(s)", "0000"));
 	else if (!strcmp(method, "RequestPasskey"))
@@ -1084,7 +1198,8 @@ static int aa_bt_serve(const char *ip, const char *ssid, const char *key, const 
 	g_variant_builder_add(&ao, "{sv}", "Name", g_variant_new_string("Android Auto"));
 	g_variant_builder_add(&ao, "{sv}", "Role", g_variant_new_string("server"));
 	g_variant_builder_add(&ao, "{sv}", "Channel", g_variant_new_uint16(AA_BT_RFCOMM_CHANNEL));
-	g_variant_builder_add(&ao, "{sv}", "RequireAuthentication", g_variant_new_boolean(FALSE));
+	// a paired link only: this channel hands out the AP's passphrase, so an unpaired device must not get it
+	g_variant_builder_add(&ao, "{sv}", "RequireAuthentication", g_variant_new_boolean(TRUE));
 	g_variant_builder_add(&ao, "{sv}", "RequireAuthorization", g_variant_new_boolean(FALSE));
 	if (reg_profile(bus, ni, PROFILE_PATH, AA_BT_UUID, g_variant_builder_end(&ao), &cr)) return -1;
 
@@ -1114,7 +1229,7 @@ static int aa_ap_up(const char *iface, const char *ssid, const char *key, const 
 	if (!f) return -1;
 	fchmod(fileno(f), 0600);
 	fprintf(f, "interface=%s\ndriver=nl80211\nssid=%s\nhw_mode=a\nchannel=36\nieee80211n=1\nwmm_enabled=1\n"
-		   "auth_algs=1\nwpa=2\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\nwpa_passphrase=%s\n", iface, ssid, key);
+		   "auth_algs=1\nwpa=2\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\nwpa_passphrase=%s\nap_isolate=1\n", iface, ssid, key);   // ap_isolate: clients cannot reach each other
 	fclose(f);
 	snprintf(c, sizeof c, ": > /data/log/aa-hostapd.log; hostapd -B -P /run/aa-hostapd.pid -f /data/log/aa-hostapd.log /run/aa-hostapd.conf");
 	if (sh(c)) { fprintf(stderr, "aa: hostapd failed\n"); return -1; }
