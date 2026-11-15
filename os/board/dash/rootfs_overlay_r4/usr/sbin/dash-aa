@@ -3,8 +3,8 @@
 # phones). It stays on across restarts: /data/aa-on is written once it is up and removed by stop, and the dash runs
 # `restore` at its start while the file is there: as start, but without the 2-minute pairing window (nobody tapped).
 # Brings up the 5 GHz AP, the RFCOMM + HFP profiles that hand the phone the AP creds,
-# and the receiver (TCP 5288 + TLS + video -> the decode/blit sink). Started only by the
-# on-screen button, so the Dash advertises AA only while the user wants it -- a phone set
+# and the receiver (TCP 5288 + TLS + video -> the decode/blit sink). Started by the on-screen
+# button (and restored at boot when left on), so the Dash advertises AA only while the user wants it -- a phone set
 # to "start Android Auto if last used" won't latch onto us the rest of the time.
 #
 # The head-unit certificate is user-supplied at /etc/wattline/aa.{crt,key}; without it the
@@ -32,7 +32,6 @@ stop() {
 	i=0; while pidof aa hostapd udhcpd spike-vdec >/dev/null 2>&1 && [ $i -lt 25 ]; do sleep 0.2; i=$((i+1)); done   # <= 5 s
 	killall -9 spike-vdec aa hostapd udhcpd 2>/dev/null
 	rm -f /run/dash-project /run/dash-aa-session /run/dash-aa-focus   # aa serve's markers too, if it was killed mid-session
-	rm -f /data/aa-on 2>/dev/null || echo "dash-aa: /data/aa-on not removed: AA comes back at the next start" >&2   # off: stays off
 	btc discoverable off >/dev/null 2>&1 || true
 	btc pairable off >/dev/null 2>&1 || true   # no new pairings once AA is off
 	# Reconnect the Wi-Fi link to the Commander/home that start dropped (SSH/OTA/WiFi-CAN return); if wpa_supplicant is
@@ -88,11 +87,12 @@ start|restore)
 	fi
 	aa bt "$IP" "$SSID" "$PSK" "$BSSID" >/data/log/aa-bt.log 2>&1 &
 	aa serve >/data/log/aa-serve.log 2>&1 &
+	: > /data/aa-on 2>/dev/null && sync   # up: on again at the next start (the dash restores it), until stopped
 	: > "$MARK"
-	: > /data/aa-on 2>/dev/null   # up: on again at the next start (the dash restores it), until stopped
 	;;
-stop)
-	stop ;;
+stop)   # the owner's stop (the button, the split's Exit): off, and off at the next start too
+	stop
+	rm -f /data/aa-on 2>/dev/null && sync || echo "dash-aa: /data/aa-on not removed: AA comes back at the next start" >&2 ;;
 forget)   # every phone paired with the Dash (each gets the AP's passphrase whenever AA is on): removed
 	btc devices Paired 2>/dev/null | while read -r _ a _; do
 		case "$a" in ??:??:??:??:??:??) btc remove "$a" >/dev/null 2>&1 && echo "dash-aa: forgot $a" ;; esac
