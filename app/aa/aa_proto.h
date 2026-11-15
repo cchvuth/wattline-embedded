@@ -159,6 +159,7 @@ enum { AA_AF_GAIN = 1, AA_AF_LOSS = 3 };   /* AudioFocusState */
 /* AuthCompleteIndication */
 #define AA_AC_STATUS 1               /* Status.Enum (OK=0) */
 /* VideoFocusIndication + VideoFocusMode */
+#define AA_VFR_FOCUS_MODE 2   /* VideoFocusRequest: disp_channel 1, focus_mode 2, focus_reason 3 */
 #define AA_VFI_FOCUS_MODE 1
 #define AA_VFI_UNREQUESTED 2
 enum { AA_FOCUS_NONE = 0, AA_FOCUS_FOCUSED = 1, AA_FOCUS_UNFOCUSED = 2 };

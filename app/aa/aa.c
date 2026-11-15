@@ -85,13 +85,15 @@ static SSL_CTX *tls_ctx(const char *cert, const char *key, int server)
 {
 	SSL_CTX *c = SSL_CTX_new(server ? TLS_server_method() : TLS_client_method());
 	if (!c) die("SSL_CTX_new");
+	// the head unit's side takes any certificate strength, set before its own is loaded: a SHA-1 or short-key head-unit
+	// certificate (which certcheck lets through) must not be refused at load by the default level
+	if (!server) SSL_CTX_set_security_level(c, 0);
 	if (cert && SSL_CTX_use_certificate_file(c, cert, SSL_FILETYPE_PEM) != 1) die("load cert %s", cert);
 	SSL_CTX_set_default_passwd_cb_userdata(c, (void *)"");   // a passphrase-protected key fails at once, never prompts
 	if (key && SSL_CTX_use_PrivateKey_file(c, key, SSL_FILETYPE_PEM) != 1) die("load key %s", key);
 	SSL_CTX_set_verify(c, SSL_VERIFY_NONE, NULL);  // AA pins at the app layer, not via the CA store
 	if (!server) {   // the head unit's side, as aasdk's: TLS 1.2, and the phone's certificate taken as it comes
 		SSL_CTX_set_max_proto_version(c, TLS1_2_VERSION);
-		SSL_CTX_set_security_level(c, 0);
 	}
 	return c;
 }
@@ -836,10 +838,17 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 				fprintf(stderr, "aa: video setup done, focus taken\n");
 			}
 		} else if (chan == AA_CH_VIDEO && id == AA_AV_VIDEO_FOCUS_REQUEST) {
-			// focus only on request, focused + not unrequested (OpenAuto VideoService::onVideoFocusRequest)
-			uint8_t vf[8]; pb_out o = { vf, 0, sizeof vf, 0 }; pb_u(&o, AA_VFI_FOCUS_MODE, AA_FOCUS_FOCUSED); pb_u(&o, AA_VFI_UNREQUESTED, 0);
+			// as asked, not unrequested (OpenAuto VideoService::onVideoFocusRequest). UNFOCUSED is AA's own Exit (its
+			// launcher's head-unit tile): the dash comes back (the UI leaves the split as the marker goes); a later
+			// FOCUSED brings the map back
+			uint64_t mode = AA_FOCUS_FOCUSED;
+			pb_get_u(body, blen, AA_VFR_FOCUS_MODE, &mode);
+			int off = mode == AA_FOCUS_UNFOCUSED;
+			uint8_t vf[8]; pb_out o = { vf, 0, sizeof vf, 0 }; pb_u(&o, AA_VFI_FOCUS_MODE, off ? AA_FOCUS_UNFOCUSED : AA_FOCUS_FOCUSED); pb_u(&o, AA_VFI_UNREQUESTED, 0);
 			send_msg(fd, tls, AA_CH_VIDEO, AA_MSG_SPECIFIC, AA_AV_VIDEO_FOCUS_INDICATION, vf, o.n);
-			fprintf(stderr, "aa: video focus granted\n");
+			if (off) unlink("/run/dash-project");
+			else close(open("/run/dash-project", O_CREAT | O_WRONLY | O_CLOEXEC, 0644));
+			fprintf(stderr, off ? "aa: video focus released (AA's Exit): the dash back\n" : "aa: video focus granted\n");
 		} else if (chan == AA_CH_AV_INPUT && id == AA_AV_INPUT_OPEN_REQUEST) {
 			uint8_t r[16]; pb_out o = { r, 0, sizeof r, 0 }; pb_u(&o, AA_AVINRESP_SESSION, av_sess[AA_CH_AV_INPUT]); pb_u(&o, AA_AVINRESP_VALUE, 0);
 			send_msg(fd, tls, AA_CH_AV_INPUT, AA_MSG_SPECIFIC, AA_AV_INPUT_OPEN_RESPONSE, r, o.n);

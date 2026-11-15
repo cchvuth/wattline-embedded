@@ -16,6 +16,13 @@ IP=${IP:-192.168.53.1}
 CERT=/etc/wattline/aa.crt
 MARK=/run/dash-aa
 
+# bluetoothctl, given up after 5 s: without bluetoothd it waits for ever (stop would never bring Wi-Fi back). Its own
+# --timeout is no use: set, it holds every command for that long.
+btc() {
+	bluetoothctl -- "$@" & _bp=$!
+	( sleep 5; kill $_bp ) >/dev/null 2>&1 & _bk=$!
+	wait $_bp; _br=$?; kill $_bk 2>/dev/null; return $_br
+}
 stop() {
 	[ -f /run/aa-pair-timer ] && kill "$(cat /run/aa-pair-timer)" 2>/dev/null; rm -f /run/aa-pair-timer   # an old window's end
 	killall spike-vdec aa hostapd udhcpd 2>/dev/null   # the decoder first, so its last picture stops being drawn
@@ -23,8 +30,8 @@ stop() {
 	i=0; while pidof aa hostapd udhcpd spike-vdec >/dev/null 2>&1 && [ $i -lt 5 ]; do sleep 1; i=$((i+1)); done
 	killall -9 spike-vdec aa hostapd udhcpd 2>/dev/null
 	rm -f /run/dash-project   # the projection marker too, in case aa serve was killed mid-session
-	bluetoothctl -- discoverable off >/dev/null 2>&1 || true
-	bluetoothctl -- pairable off >/dev/null 2>&1 || true   # no new pairings once AA is off
+	btc discoverable off >/dev/null 2>&1 || true
+	btc pairable off >/dev/null 2>&1 || true   # no new pairings once AA is off
 	# Reconnect the Wi-Fi link to the Commander/home that start dropped (SSH/OTA/WiFi-CAN return); if wpa_supplicant is
 	# gone, bring Wi-Fi up from scratch (S45wifi-auto only knows "start")
 	rm -f "$MARK" /run/dash-aa-radio   # before Wi-Fi comes back (S45wifi-auto waits while they are there); the button off
@@ -65,12 +72,12 @@ start)
 	aa ap "$IFACE" "$SSID" "$PSK" "$IP" || { echo "dash-aa: the AP did not come up" >&2; stop; exit 1; }
 	# The AP carries live video: keep the radio out of power save for the session (latency, not a correctness fix).
 	iw dev "$IFACE" set power_save off 2>/dev/null; iw dev wlan0 set power_save off 2>/dev/null
-	bluetoothctl -- system-alias Wattline >/dev/null 2>&1 || true   # the name the phone sees (not the default BlueZ x.y)
+	btc system-alias Wattline >/dev/null 2>&1 || true   # the name the phone sees (not the default BlueZ x.y)
 	# New phones can pair only in the first 2 minutes after the button (someone at the Dash), not for the whole session;
 	# a phone paired before connects at any time. The AA channel itself needs a paired link (aa.c).
-	bluetoothctl -- discoverable on >/dev/null 2>&1 || true
-	bluetoothctl -- pairable on     >/dev/null 2>&1 || true
-	( sleep 120; bluetoothctl -- pairable off; bluetoothctl -- discoverable off; rm -f /run/aa-pair-timer ) >/dev/null 2>&1 &
+	btc discoverable on >/dev/null 2>&1 || true
+	btc pairable on     >/dev/null 2>&1 || true
+	( sleep 120; btc pairable off; btc discoverable off; rm -f /run/aa-pair-timer ) >/dev/null 2>&1 &
 	echo $! > /run/aa-pair-timer
 	aa bt "$IP" "$SSID" "$PSK" "$BSSID" >/data/log/aa-bt.log 2>&1 &
 	aa serve >/data/log/aa-serve.log 2>&1 &
@@ -79,8 +86,8 @@ start)
 stop)
 	stop ;;
 forget)   # every phone paired with the Dash (each gets the AP's passphrase whenever AA is on): removed
-	bluetoothctl -- devices Paired 2>/dev/null | while read -r _ a _; do
-		case "$a" in ??:??:??:??:??:??) bluetoothctl -- remove "$a" >/dev/null 2>&1 && echo "dash-aa: forgot $a" ;; esac
+	btc devices Paired 2>/dev/null | while read -r _ a _; do
+		case "$a" in ??:??:??:??:??:??) btc remove "$a" >/dev/null 2>&1 && echo "dash-aa: forgot $a" ;; esac
 	done ;;
 *)
 	echo "usage: dash-aa start|stop|forget" >&2; exit 2 ;;
