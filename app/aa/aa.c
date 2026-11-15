@@ -235,9 +235,11 @@ static uint16_t msg_id(const uint8_t *p, size_t n) { return n >= 2 ? (uint16_t)(
 // alike), tune both on the unit.
 typedef struct { int res, fw, fh, uw, uh, dpi; } aa_video_t;   // frame w x h, the UI area in it, density
 static const aa_video_t AA_VIDEO_720 = {AA_RES_720p, 1280, 720, PJ_RGN_W, PJ_RGN_H, 160};
-static const aa_video_t AA_VIDEO_480 = {AA_RES_480p, 800, 480, 800, 332, 110};
+// the 480p UI area's height: the picture's shape at 800 wide, rounded up to even as the decoder takes its window
+#define AA_LOW_UH (((800 * PJ_RGN_H + PJ_RGN_W - 1) / PJ_RGN_W + 1) & ~1)
+static const aa_video_t AA_VIDEO_480 = {AA_RES_480p, 800, 480, 800, AA_LOW_UH, 110};
 _Static_assert((1280 - PJ_RGN_W) % 4 == 0 && (720 - PJ_RGN_H) % 4 == 0 && PJ_RGN_W <= 1280 && PJ_RGN_H <= 720 &&
-	       (480 - 332) % 4 == 0, "the UI area must fit its frame, centred on even pixels");
+	       AA_LOW_UH <= 480 && (480 - AA_LOW_UH) % 4 == 0, "the UI area must fit its frame, centred on even pixels");
 static aa_video_t vid = {AA_RES_720p, 1280, 720, PJ_RGN_W, PJ_RGN_H, 160};   // this session's (touches are in its UI area)
 #define AA_SETTINGS "/data/settings.conf"   // the dash's (app/settings.c)
 static int low_res_wanted(void)
@@ -246,7 +248,7 @@ static int low_res_wanted(void)
 	char l[128];
 	int on = 0, v;
 	if (!f) return 0;
-	while (fgets(l, sizeof l, f)) if (sscanf(l, " aa_low_res = %d", &v) == 1) on = v == 1;
+	while (fgets(l, sizeof l, f)) if (sscanf(l, " aa_low_res = %d", &v) == 1) on = v != 0;   // as the app reads it
 	fclose(f);
 	return on;
 }
@@ -1331,7 +1333,9 @@ int main(int argc, char **argv)
 		int tf = touch_open(), secs = argc > 2 ? atoi(argv[2]) : 15;
 		if (tf < 0) return 1;
 		input_open = 1; mt_force_visible = 1;
-		printf("touch-test: touchscreen 0..%d x 0..%d, picture x %d..%d; touch now (%d s)\n", mt_max_x, mt_max_y, PJ_RGN_X, PJ_RGN_X + PJ_RGN_W - 1, secs); fflush(stdout);
+		vid = low_res_wanted() ? AA_VIDEO_480 : AA_VIDEO_720;   /* the coordinates a session would send now */
+		printf("touch-test: touchscreen 0..%d x 0..%d, picture x %d..%d, sent as 0..%d x 0..%d; touch now (%d s)\n", mt_max_x, mt_max_y,
+		       PJ_RGN_X, PJ_RGN_X + PJ_RGN_W - 1, vid.uw - 1, vid.uh - 1, secs); fflush(stdout);
 		for (int64_t end = now_us() + (int64_t)secs * 1000000; now_us() < end; ) {
 			struct pollfd pf = { tf, POLLIN, 0 };
 			if (poll(&pf, 1, 200) > 0) touch_read(tf, -2, (aa_tls_t *)&mt_nlog);
