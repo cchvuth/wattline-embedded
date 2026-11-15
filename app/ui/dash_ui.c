@@ -752,11 +752,6 @@ void dash_ui_init(lv_obj_t *scr)
 	lv_image_set_inner_align(glow_l, LV_IMAGE_ALIGN_TOP_LEFT); /* cut to the split's strip, it keeps its bright edge */
 	glow_r = icon(root, &glow_dsc[1], REGEN);
 	lv_obj_set_pos(glow_r, ri(G.W - glow_dsc[1].header.w), 0);
-	/* the path lines: over the whole screen (the app does not clip them; only the dots' areas are repainted), under the
-	 * chips, the route card and the car */
-	steer = box(root);
-	place(steer, 0, 0, G.W, G.H);
-	lv_obj_add_event_cb(steer, steer_draw, LV_EVENT_DRAW_MAIN, NULL);
 	glow_b = box(root);
 	place(glow_b, 0, G.H - px(45), G.W, px(45));
 	lv_obj_set_style_bg_opa(glow_b, LV_OPA_COVER, 0);
@@ -765,6 +760,11 @@ void dash_ui_init(lv_obj_t *scr)
 	lv_obj_set_style_bg_grad_dir(glow_b, LV_GRAD_DIR_VER, 0);
 	lv_obj_set_style_bg_color(glow_b, rgb(ALERT), 0);
 	lv_obj_set_style_bg_grad_color(glow_b, rgb(ALERT), 0);
+	/* the path lines: over the edge glows (as the app paints them, under the whole dash), under the chips, the route
+	 * card and the car; over the whole screen (only the dots' areas are repainted), dots under a chip or the card left out */
+	steer = box(root);
+	place(steer, 0, 0, G.W, G.H);
+	lv_obj_add_event_cb(steer, steer_draw, LV_EVENT_DRAW_MAIN, NULL);
 
 	/* The pedal (main.dart's line along the top): a bar under the g-meter, a hairline track and the fill in kAccent. */
 	pedal = box(root);
@@ -3174,9 +3174,23 @@ static void set_snack(const dash_state_t *s)
 }
 
 /* ---- the car's path either side, dotted (widgets.dart _CarLights, steerLines): under the car ---- */
-/* The path lines' dots: drawn on LAYER (NULL: none), their bounding box into BOX; false when there are none. */
-static bool steer_dots(const dash_state_t *s, lv_layer_t *layer, lv_area_t *box)
+/* A dot over a chip or the route card (outlined, no fill when unlit): left out, as if passing under it. */
+static bool steer_under(const lv_area_t *a)
 {
+	lv_area_t o;
+	for (int i = 0; i <= 10; i++) {
+		lv_obj_t *b = i < 10 ? chips[i].box : dest_card;
+		if (!b || lv_obj_is_hidden(b)) continue;
+		lv_obj_get_coords(b, &o);
+		if (a->x1 <= o.x2 && a->x2 >= o.x1 && a->y1 <= o.y2 && a->y2 >= o.y1) return true;
+	}
+	return false;
+}
+/* The path lines' dots: drawn on LAYER (NULL: none), their bounding box into BOX and a checksum of the dots drawn into
+ * SUM (a dot that came out from under a chip or the card changes it, not always the box); false when there are none. */
+static bool steer_dots(const dash_state_t *s, lv_layer_t *layer, lv_area_t *box, uint32_t *sum)
+{
+	uint32_t ck = 0;
 	if (!s->live || !s->wifi_live || !s->steer_lines || isnan(s->steer_deg) || s->no_cabin) return false;
 	lv_area_t bb = {INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN};
 	const ui_car_pics_t *p = &ui_car_pics[s->car];
@@ -3206,22 +3220,27 @@ static bool steer_dots(const dash_state_t *s, lv_layer_t *layer, lv_area_t *box)
 			float x = ox + qx, y = oy + (rev ? h - qy : qy);
 			rd.bg_opa = (lv_opa_t)(0.8f * 255 * (1 - d / len));
 			lv_area_t a = {ri(x - dot), ri(y - dot), ri(x + dot) - 1, ri(y + dot) - 1};
+			if (steer_under(&a)) continue;
+			ck = ck * 31 + (uint32_t)(a.x1 * 2048 + a.y1);
 			if (layer) lv_draw_rect(layer, &rd, &a);
 			bb.x1 = LV_MIN(bb.x1, a.x1), bb.y1 = LV_MIN(bb.y1, a.y1), bb.x2 = LV_MAX(bb.x2, a.x2), bb.y2 = LV_MAX(bb.y2, a.y2);
 		}
 	}
 	if (box) *box = bb;
+	if (sum) *sum = ck;
 	return true;
 }
 static lv_area_t steer_drawn; /* the dots as last drawn (steer_on: any), whatever came between (the split, a page) */
+static uint32_t steer_sum;
 static bool steer_on;
-static void steer_draw(lv_event_t *e) { steer_on = steer_dots(&S, lv_event_get_layer(e), &steer_drawn); }
+static void steer_draw(lv_event_t *e) { steer_on = steer_dots(&S, lv_event_get_layer(e), &steer_drawn, &steer_sum); }
 /* Each frame: where the dots are drawn and where they go now are repainted when they differ (or CHANGED says so). */
 static void steer_dirty(const dash_state_t *s, bool changed)
 {
 	lv_area_t a;
-	bool has = steer_dots(s, NULL, &a);
-	if (!changed && has == steer_on && (!has || !memcmp(&a, &steer_drawn, sizeof a))) return;
+	uint32_t sum;
+	bool has = steer_dots(s, NULL, &a, &sum);
+	if (!changed && has == steer_on && (!has || (!memcmp(&a, &steer_drawn, sizeof a) && sum == steer_sum))) return;
 	if (steer_on) lv_obj_invalidate_area(steer, &steer_drawn);
 	if (has) lv_obj_invalidate_area(steer, &a);
 }
@@ -3339,7 +3358,6 @@ static void set_touch(const dash_state_t *s)
 		if (set_net_line) set_text(set_net_line, "%s", s->net_line);
 		set_approval(s->bt);
 	}
-	steer_dirty(s, CHANGED(steer_deg) || CHANGED(car) || CHANGED(gear));
 }
 
 void dash_ui_set(const dash_state_t *s)
@@ -3443,6 +3461,9 @@ void dash_ui_set(const dash_state_t *s)
 	set_energy(s, at[3] + w[3] / 2);
 	set_g(s, at[4] + w[4] / 2);
 	set_touch(s);
+	/* last, on this frame's layout (the car placed, the chips and the route card where the draw will find them) */
+	lv_obj_update_layout(root);
+	steer_dirty(s, CHANGED(steer_deg) || CHANGED(car) || CHANGED(gear));
 	P = *s;
 	first = false;
 }
