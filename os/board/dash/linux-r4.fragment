@@ -14,6 +14,7 @@ CONFIG_CMA_SIZE_MBYTES=64
 CONFIG_BT_RFCOMM=m
 # IPv6, link-local only (rootfs_overlay_r4/etc/sysctl.d/ipv6.conf): helpers that serve the phone on the access point
 # may need IPv6 sockets; no tunnels. A change in any linux-r*.fragment: make linux-reconfigure rtl8733bs-dirclean
-# rtl8733bs-cc-dirclean, or the old Wi-Fi modules still load against the new kernel and Wi-Fi dies.
+# rtl8733bs-cc-dirclean, or the old Wi-Fi modules still load against the new kernel and Wi-Fi dies (a kernel patch
+# needs linux-dirclean instead of linux-reconfigure: patches go in only when the kernel is unpacked).
 CONFIG_IPV6=y
 # CONFIG_IPV6_SIT is not set

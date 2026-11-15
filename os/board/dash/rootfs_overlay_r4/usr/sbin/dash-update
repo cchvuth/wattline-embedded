@@ -240,7 +240,9 @@ cmd_watch() {
 	# the rest of the boot its 4 min again
 	i=0; w=; while [ $i -lt 90 ] && pidof e2fsck fsck.ext4 >/dev/null; do w=1; i=$((i+1)); sleep 10; done; [ -n "$w" ] && sleep 240
 	[ -n "$B" ] && ota_read && [ -n "$trial" ] && [ "$slot" = "$B" ] || return 0
-	p=$(pidof dash) && sleep 30 && [ "$(pidof dash)" = "$p" ] && { log "slot $B on trial, unconfirmed, but its dash runs: left be"; return 0; }   # the same dash 30 s
+	# the same dash 30 s, and ready (its display opened in good time: /run/dash-ready names it)
+	p=$(pidof dash) && sleep 30 && [ "$(pidof dash)" = "$p" ] && [ "$(cat /run/dash-ready 2>/dev/null)" = "$p" ] &&
+		{ log "slot $B on trial, unconfirmed, but its dash runs: left be"; return 0; }
 	log "slot $B ($(current_version)) not confirmed 4 min after its start, its dash not running healthy: restarting (U-Boot counts the start)"
 	(sync &); sleep 2; reboot -nf   # -n: a sync stuck on a failing card must not hold the restart
 }

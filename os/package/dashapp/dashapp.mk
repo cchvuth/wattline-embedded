@@ -14,7 +14,7 @@ DASHAPP_OVERRIDE_SRCDIR_RSYNC_EXCLUSIONS = --include=/build/ --include=/build/si
 
 define DASHAPP_BUILD_CMDS
 	test -s $(@D)/build/signals_gen.h || { echo "dashapp: run make -f app.mk build/signals_gen.h on the Mac first"; exit 1; }
-	$(TARGET_MAKE_ENV) $(MAKE) -C $(@D) -f app.mk -o build/signals_gen.h ARM_CC="$(TARGET_CC)" CMDR=1 arm
+	$(TARGET_MAKE_ENV) $(MAKE) -C $(@D) -f app.mk -o build/signals_gen.h ARM_CC="$(TARGET_CC)" ARM_PKG_CONFIG="$(PKG_CONFIG_HOST_BINARY)" CMDR=1 arm
 endef
 
 define DASHAPP_INSTALL_TARGET_CMDS

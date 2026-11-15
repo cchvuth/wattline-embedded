@@ -16,6 +16,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 static int wd = -1;
@@ -61,9 +62,10 @@ int main(int argc, char **argv) {
   log_open(cf.log_path, cf.log_kb);
   log_msg("dash.conf %s%s", path, have ? "" : ": absent, built-in defaults");
 
+  struct timespec t0; clock_gettime(CLOCK_MONOTONIC, &t0);
   lv_init();
   lv_display_t *disp = lv_linux_fbdev_create();
-  lv_linux_fbdev_set_file(disp, cf.fb);
+  bool fb_ok = lv_linux_fbdev_set_file(disp, cf.fb) == LV_RESULT_OK;
   int r = cf.rotate;
   lv_display_set_rotation(disp, r == 90 ? LV_DISPLAY_ROTATION_90 : r == 180 ? LV_DISPLAY_ROTATION_180
                                 : r == 270 ? LV_DISPLAY_ROTATION_270 : LV_DISPLAY_ROTATION_0);
@@ -86,6 +88,15 @@ int main(int argc, char **argv) {
     else if (ioctl(wd, WDIOC_SETTIMEOUT, &t)) log_msg("watchdog timeout %d s: %s", cf.watchdog_s, strerror(errno));
     else log_msg("watchdog %d s", t);
   }
+  // Ready: the display open and the UI built, in good time. An update on trial (S99ota, dash-update watch) counts a
+  // start healthy only while this file names the running dash, so one whose display hangs (its open waiting out the
+  // driver's timeouts, the watchdog not armed yet) is rolled back rather than confirmed.
+  struct timespec t1; clock_gettime(CLOCK_MONOTONIC, &t1);
+  if (fb_ok && t1.tv_sec - t0.tv_sec < 10) {
+    FILE *f = fopen("/run/dash-ready.new", "w");
+    if (f) { fprintf(f, "%d\n", (int)getpid()); fclose(f); rename("/run/dash-ready.new", "/run/dash-ready"); }
+  } else log_msg("display %s after %ld s: not ready (an update on trial is not confirmed)", fb_ok ? "open" : "not open",
+                 (long)(t1.tv_sec - t0.tv_sec));
   for (int fd = 3; fd < 256; fd++) {   // LVGL's framebuffer and touch fds are opened without O_CLOEXEC: the scripts the
     int fl = fcntl(fd, F_GETFD);        // dash starts (Wi-Fi, SSH, Android Auto) must not inherit them
     if (fl >= 0) fcntl(fd, F_SETFD, fl | FD_CLOEXEC);

@@ -5,8 +5,9 @@
 # verify and arm it for the next power-up. Tried every 10 min for the first hour of a drive, quietly.
 case "$1" in start|"") ;; *) exit 0;; esac
 # the same dash for 30 s: a restart is a new pid (a count of the supervisor's start lines missed restarts once dash.out
-# rotated, and one 15 s window let a dash crashing every 20 s through)
-healthy() { p=$(pidof dash) || { sleep 15; return 1; }; sleep 30; [ "$(pidof dash)" = "$p" ]; }   # in a restart's gap: a look spent waiting
+# rotated, and one 15 s window let a dash crashing every 20 s through), and ready: its display opened in good time
+# (/run/dash-ready names it; a display that hangs keeps the dash running, its watchdog not armed yet)
+healthy() { p=$(pidof dash) || { sleep 15; return 1; }; sleep 30; [ "$(pidof dash)" = "$p" ] && [ "$(cat /run/dash-ready 2>/dev/null)" = "$p" ]; }
 (
 	sleep 15
 	# looked at for up to 2 min (a dash that crashed once at the start may settle), before S00trial's 4 min

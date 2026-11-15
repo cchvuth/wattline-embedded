@@ -53,8 +53,9 @@ build/arm-ui/%.o: %.c ui/conf/lv_conf.h port/linux/lv_conf.h
 	@mkdir -p $(dir $@); $(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
 build/arm-ui/ui/%.o: ARM_CFLAGS += $(WARN)
 build/arm-ui/ui/dash_ui.o: ui/dash_ui.h ui/dash_state.h ui/gen/assets.h ui/gen/aa_icon.h
-ARM_GIO_C = $(if $(CMDR_DEFS),$(shell /work/out-r0/host/bin/pkg-config --cflags gio-2.0))
-ARM_GIO_L = $(if $(CMDR_DEFS),$(shell /work/out-r0/host/bin/pkg-config --libs gio-2.0))
+ARM_PKG_CONFIG ?= $(dir $(lastword $(ARM_CC)))pkg-config   # the toolchain's own, beside its gcc (Buildroot's host/bin)
+ARM_GIO_C = $(if $(CMDR_DEFS),$(shell $(ARM_PKG_CONFIG) --cflags gio-2.0))
+ARM_GIO_L = $(if $(CMDR_DEFS),$(shell $(ARM_PKG_CONFIG) --libs gio-2.0))
 $(AA)/%.o: %.c $(APP_H)
 	@mkdir -p $(dir $@); $(ARM_CC) $(ARM_CFLAGS) $(WARN) $(CMDR_DEFS) $(ARM_GIO_C) -Ibuild -c $< -o $@
 $(AA)/dash: $(patsubst %.c,$(AA)/%.o,app/main.c $(APP_SRC)) $(patsubst %.c,build/arm-ui/%.o,$(UI_SRC) $(LVGL_SRC))

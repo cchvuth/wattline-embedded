@@ -152,9 +152,9 @@ int main(int argc, char **argv)
 		}
 		/* the long pages scrolled to their ends (the bar shows where) */
 		static const struct { int tab; const char *last, *name; } ends[] = {
-			{3, "Follow offset", "touch-settings-display-end"}, {5, "Check for updates", "touch-settings-advanced-end"}};
+			{2, "Follow offset", "touch-settings-display-end"}, {4, "Check for updates", "touch-settings-advanced-end"}};
 		for (int k = 0; k < 2; k++) {
-			dash_ui_settings_tab(ends[k].tab - 1);
+			dash_ui_settings_tab(ends[k].tab);
 			lv_obj_t *l = find_label(lv_layer_top(), ends[k].last);
 			if (!l) { printf("no label %s\n", ends[k].last); bad = 1; continue; }
 			do l = lv_obj_get_parent(l); while (l && !lv_obj_is_scrollable(l)); /* its page (a label is "scrollable" too) */
