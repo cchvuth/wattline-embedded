@@ -180,12 +180,14 @@ static const char *wpa_look(void) {
   return wpa_state[0] ? wpa_state : NULL;
 }
 
-// wlan0 has an IPv4 address now (not the 1.5 s look's)
+// wlan0 has an IPv4 address now (not the 1.5 s look's), on a link that is up: a lease outlives a disconnect (udhcpc
+// keeps it; dash-aa's `wpa_cli disconnect` for the AP), and that is no stream about to start
 bool wifi_has_addr(void) {
   struct ifaddrs *ifs, *i;
   bool ipv4 = false;
   if (getifaddrs(&ifs)) return false;
-  for (i = ifs; i; i = i->ifa_next) ipv4 |= i->ifa_addr && i->ifa_addr->sa_family == AF_INET && !strcmp(i->ifa_name, "wlan0");
+  for (i = ifs; i; i = i->ifa_next)
+    ipv4 |= i->ifa_addr && i->ifa_addr->sa_family == AF_INET && !strcmp(i->ifa_name, "wlan0") && (i->ifa_flags & IFF_RUNNING);
   freeifaddrs(ifs);
   return ipv4;
 }
