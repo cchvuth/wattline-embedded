@@ -45,6 +45,20 @@ void settings_reboot(void) { run("/sbin/reboot", NULL, NULL); }
 // Whole file, atomically: <path>.tmp written and synced, renamed over, the folder synced.
 static int put_sync(const char *dir, const char *name, const char *text, mode_t mode, bool sync);
 static int put(const char *dir, const char *name, const char *text, mode_t mode) { return put_sync(dir, name, text, mode, true); }
+// a file of its own, not settings.conf: the settings screen saves its own copy of those, which would undo it
+void settings_aa_keep(bool on) {
+  char p[256];
+  if (!writable()) return;
+  snprintf(p, sizeof p, "%s/aa-on", settings_root);
+  if (on) put(settings_root, "aa-on", "1\n", 0644);
+  else if (unlink(p) && errno != ENOENT) log_msg("settings: %s: %s", p, strerror(errno));
+}
+bool settings_aa_kept(void) {
+  char p[256];
+  if (!settings_root) return false;
+  snprintf(p, sizeof p, "%s/aa-on", settings_root);
+  return access(p, F_OK) == 0;
+}
 static int put_sync(const char *dir, const char *name, const char *text, mode_t mode, bool sync) {
   char path[256], tmp[264];
   snprintf(path, sizeof path, "%s/%s", dir, name);

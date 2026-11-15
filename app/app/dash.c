@@ -275,6 +275,10 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
   bright_init(&d->bright, cf, now);
   settings_load(&app_settings, cf);
   apply_settings(d, now);   // the time zone too (dash.conf's until set in the settings)
+  if (settings_aa_kept() && access("/etc/wattline/aa.crt", F_OK) == 0) {   // left on by its button: up again (the
+    log_msg("start: Android Auto was on: brought up again");                // phone rejoins; the car rides Bluetooth)
+    settings_aa(true);
+  }
   if (ui->show_settings) ui->show_settings(ui->ctx);
   if (!settings_car_saved && ui->ask_car) ui->ask_car(ui->ctx);   // first boot: which car (main.dart _askCar)
   car_init(&d->car);

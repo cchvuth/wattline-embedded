@@ -129,10 +129,12 @@ void app_on_settings(int what, const dash_settings_t *st, void *ctx) {
   case DASH_AA_START:  // the on-screen button: advertise + serve AA only while the user wants it (not always-on)
     log_msg("settings: start Android Auto");
     settings_aa(true);
+    settings_aa_keep(true);   // and again at the next start, until turned off
     break;
   case DASH_AA_STOP:
     log_msg("settings: stop Android Auto");
     settings_aa(false);
+    settings_aa_keep(false);
     break;
   case DASH_AA_FORGET:     // Advanced: the paired phones go (each gets the AP's passphrase whenever AA is on)
     log_msg("settings: forget the phones paired for Android Auto");
@@ -184,6 +186,7 @@ void dash_press(int a, int64_t at) { (void)a, (void)at; presses++; }
 static int ready = 1, asks;
 void cmdr_hook_ask(void) { asks++; } void cmdr_hook_forget(void) {}
 void settings_aa(bool start) { (void)start; }
+void settings_aa_keep(bool on) { (void)on; }
 void settings_aa_forget(void) {}
 void settings_ota(const char *what) { (void)what; }
 void settings_reboot(void) {}
