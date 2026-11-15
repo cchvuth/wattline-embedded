@@ -971,9 +971,10 @@ static size_t stream_nals(uint8_t *buf, size_t len, dec_t *D, int *set, int eof,
  * or a dash the user went back to, the decoder draws nothing (a tap there must not land on a "map" over other buttons). */
 #define PJ_VISIBLE "/run/dash-pj-visible"
 #define PJ_FPS "/run/dash-pj-fps"   /* the pictures shown each second, for the dash (ui/project_region.h: under the AA word) */
-/* The least time between two pictures shown. WiFi often delivers a clump of them together: shown this far apart, about a
- * panel refresh (16.7 ms) each, rather than all but the newest dropped, while a 60 fps stream still keeps up. */
-#define SHOW_GAP 0.014
+/* The least time between two pictures shown: about the panel's own frame (its glass shows 30 a second, whatever the
+ * display link's 60), so each picture is seen. WiFi often delivers a clump of them together: shown this far apart rather
+ * than all but the newest dropped; a 30 fps stream keeps up with a little room for its jitter. */
+#define SHOW_GAP 0.030
 static void show_next(dec_t *D, double *last_show_t, int *vis, double *reshow_at)   /* the oldest waiting, in its turn */
 {
 	if (!D->npend || now() - *last_show_t < SHOW_GAP) return;

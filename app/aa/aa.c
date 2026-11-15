@@ -306,11 +306,9 @@ static int setting_on(const char *key)   // a switch of the dash's settings ("ke
 	fclose(f);
 	return on;
 }
-static aa_video_t video_wanted(void)   // the settings' lower resolution and 60 frames a second, read at each connection
+static aa_video_t video_wanted(void)   // the settings' lower resolution, read at each connection; 30 fps (the panel's most)
 {
-	aa_video_t v = setting_on("aa_low_res") ? AA_VIDEO_480 : AA_VIDEO_720;
-	if (setting_on("fps60")) v.fps = AA_FPS_60;
-	return v;
+	return setting_on("aa_low_res") ? AA_VIDEO_480 : AA_VIDEO_720;
 }
 
 // one audio-sink ChannelDescriptor (PCM 16-bit at the given rate/channels)

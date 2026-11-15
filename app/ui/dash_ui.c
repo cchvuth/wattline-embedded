@@ -1773,7 +1773,7 @@ static char shown_nearby[DASH_NEARBY][33];     /* the Nearby rows as drawn (a ta
 static lv_obj_t *tip, *snack, *snack_wheel, *snack_text;
 static lv_obj_t *project, *project_video, *pj_hint, *pj_gear, *pj_bar, *pj_bar_fill, *pj_soc, *pj_cold, *pj_range,
 	*pj_belt, *pj_grip, *pj_info, *pj_exit;
-static lv_obj_t *panel, *panel_msg, *settings, *set_status, *set_step, *set_wheel, *set_sw[10], *set_car_btn[6], *set_slider, *set_bl_note, *set_offset, *set_offset_note, *net_list, *near_list, *net_edit, *net_ta[2],
+static lv_obj_t *panel, *panel_msg, *settings, *set_status, *set_step, *set_wheel, *set_sw[9], *set_car_btn[6], *set_slider, *set_bl_note, *set_offset, *set_offset_note, *net_list, *near_list, *net_edit, *net_ta[2],
 	*net_kb, *net_err, *set_bt_line, *set_wifi_line, *set_net_line, *set_car_ask, *set_tz_btn, *set_host_l;
 enum { HOST_SLOT = -2 }; /* edit_slot: the editor holds the Panda's address, not a network */
 static lv_timer_t *tip_timer;
@@ -2303,7 +2303,6 @@ static void switch_changed(lv_event_t *e)
 	else if (i == 6) ST.wifi_first = on;
 	else if (i == 7) ST.ota_auto = on;
 	else if (i == 8) ST.aa_low_res = on;
-	else if (i == 9) ST.fps60 = on;
 	else ST.follow_car = on, slider_look();
 	save(DASH_SETTINGS_SAVE);
 }
@@ -2721,10 +2720,9 @@ static void settings_build(void)
 	lv_obj_set_width(cnote, ri(w - xp - pad));
 	lv_label_set_text(cnote, "The car's picture, its seats and belts, and a rear-motor car's ring (the pedals on the right) follow it.");
 	/* the display */
-	c = set_page[2]; /* one column, three groups: performance (frame rate, AA's resolution), the dash's figures and clock, the screen's brightness */
+	c = set_page[2]; /* one column, three groups: performance (AA's resolution), the dash's figures and clock, the screen's brightness */
 	cw = w - xp - pad;
 	group_title(c, "Performance");
-	switch_note_row(c, "60 frames a second", "Smoother, more work for the Dash. Android Auto too, from the next connection", 9, cw);
 	switch_note_row(c, "Android Auto at 480p", "Scaled up to fit: a softer picture, lighter on the WiFi and the phone. From the next connection", 8, cw);
 	lv_obj_set_style_margin_top(group_title(c, "Dash"), ri(PB(14)), 0);
 	switch_row(c, "Show 12 V, other power and cell imbalance", 0, cw);
@@ -3093,7 +3091,6 @@ void dash_ui_show(int v)
 		lv_obj_set_state(set_sw[6], LV_STATE_CHECKED, ST.wifi_first);
 		lv_obj_set_state(set_sw[7], LV_STATE_CHECKED, ST.ota_auto);
 		lv_obj_set_state(set_sw[8], LV_STATE_CHECKED, ST.aa_low_res);
-		lv_obj_set_state(set_sw[9], LV_STATE_CHECKED, ST.fps60);
 		forget_reset(&fg_cmdr, true), forget_reset(&fg_aa, true);
 		for (int i = 0; i < 6; i++) { /* the chosen car filled, as a selected chip */
 			fill(set_car_btn[i], i == ST.car ? 0xFF4A4458u : 0x00000000u);
