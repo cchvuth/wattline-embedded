@@ -471,8 +471,10 @@ void cmdr_wifi(cmdr_t *c, int live, int trying, int64_t now) {
 void cmdr_wifi_first(cmdr_t *c, int on, int64_t now) {
   c->cfg.wifi_first = on;
   // stepped aside while it waited for the WiFi stream, which now does not go first (Android Auto took the radio before
-  // the stream came): back at the next tick, as a step-aside without wifi_first would have set it
+  // the stream came): back at the next tick. Set again before that tick (AA let go at once): stepped aside as it was
+  // (a step-aside with wifi_first leaves no back_at)
   if (!on && c->paused && c->back_at < 0 && c->buttons_at < 0) c->back_at = now;
+  else if (on && c->paused) c->back_at = -1;
 }
 
 int cmdr_step_aside(cmdr_t *c, int64_t now) {
