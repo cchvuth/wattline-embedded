@@ -516,6 +516,7 @@ typedef struct { uint8_t *p; size_t n, cap; } aa_asm_t;
 static aa_asm_t rx_asm[AA_NCHAN];
 static int asm_add(aa_asm_t *a, const uint8_t *d, size_t n, uint8_t ch)
 {
+	if (!n) return 0;
 	if (a->n + n > (ch == AA_CH_VIDEO ? AA_MSG_MAX : (1u << 20))) return -1;   /* only video is big (the discovery request's phone icons: tens of KB) */
 	if (a->n + n > a->cap) {
 		size_t c = a->cap ? a->cap : 32768; while (c < a->n + n) c *= 2;
@@ -547,10 +548,10 @@ static int recv_msg(int fd, aa_tls_t *tls, uint8_t *chan, const uint8_t **msg, s
 			}
 		} else if (tls) {   // once TLS is up the phone sends only encrypted frames: a plaintext one is another device on the AP
 			static int said;
-			if (!said++) fprintf(stderr, "aa: plaintext frame after TLS on channel %u: ignored\n", ch);
+			if (!said) said = 1, fprintf(stderr, "aa: plaintext frame after TLS on channel %u: ignored\n", ch);
 			continue;
 		} else if (asm_add(a, fr, (size_t)pn, ch)) return -1;
-		if (flags & AA_FRAME_LAST) { *chan = ch; *msg = a->p; *mlen = a->n; return 0; }   // LAST or BULK: complete
+		if (flags & AA_FRAME_LAST) { *chan = ch; *msg = a->p; *mlen = a->n; a->n = 0; return 0; }   // (n = 0: no frame without FIRST replays it)   // LAST or BULK: complete
 	}
 }
 
@@ -570,8 +571,8 @@ static int send_msg(int fd, aa_tls_t *tls, uint8_t chan, uint8_t msgtype, uint16
 	if (tls) { SSL_write(tls->ssl, msg, mn); int cn = tls_take(tls, cipher, sizeof cipher); if (cn <= 0) return -1; payload = cipher; plen = (size_t)cn; enc = AA_ENC_ENCRYPTED; }
 	int fn = frame_put(frame, sizeof frame, chan, (uint8_t)(enc | msgtype), payload, plen);
 	if (fn < 0) return -1;
-	// one write: on this blocking socket a short count comes only from SO_SNDTIMEO (no signal handlers), and writing
-	// the rest would wait the timeout out a second time
+	// one write: on this blocking socket a short count comes from SO_SNDTIMEO (or a stop and continue of this process,
+	// which nothing does), and writing the rest would wait the timeout out a second time
 	if (write(fd, frame, (size_t)fn) != (ssize_t)fn) { tx_dead = 1; return -1; }
 	return 0;
 }
@@ -773,7 +774,7 @@ static void mt_frame(int fd, aa_tls_t *tls, uint64_t ts)
 		for (int i = 0; i < MT_MAX && first < 0; i++) if (mt[i].active) first = i;
 		if (first >= 0) {
 			int x = mt_panel_x(mt[first].x);
-			mt_gesture = tls && input_open && (mt_force_visible || (phone_off_ok && access(PJ_VISIBLE, F_OK) == 0)) &&
+			mt_gesture = tls && input_open && phone_off_ok && (mt_force_visible || access(PJ_VISIBLE, F_OK) == 0) &&
 				     x >= PJ_RGN_X && x < PJ_RGN_X + PJ_RGN_W ? 1 : -1;   /* (not before the phone's clock is known) */
 		}
 	}
@@ -861,7 +862,9 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 {
 	int night_on = 0, night_sent = -1;   /* the phone started the night sensor; what it was last told */
 	int touch = *touchp;
-	const uint8_t *m; size_t mn; uint8_t chan; uint32_t frames = 0, st_frames = 0, nlog = 0; uint64_t st_bytes = 0;
+	const uint8_t *m; size_t mn; uint8_t chan; uint32_t frames = 0, st_frames = 0; uint64_t st_bytes = 0;
+	static uint32_t nlog; static int64_t nlog_at;   /* the log is on /data: 300 messages logged per 10 min, across sessions */
+	if (now_us() - nlog_at > 600000000LL) nlog = 0, nlog_at = now_us();
 	memset(av_sess, 0, sizeof av_sess); input_open = 0;
 	for (int k = 0; k < MT_MAX; k++) mt[k].active = mt[k].on = mt[k].moved = 0;   // a finger left down at the last
 	mt_prev_any = 0; mt_gesture = 0;   // session's end: forgotten (positions kept: the kernel sends only changes)
@@ -894,6 +897,7 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 				close(open("/run/dash-project", O_CREAT | O_WRONLY | O_CLOEXEC, 0644));
 				fprintf(stderr, "aa: video focus taken back (the dash's AA button)\n");
 			}
+			if (tx_dead) continue;   /* to the loop's top: the session ends now */
 		}
 		struct pollfd pf[2] = { { fd, POLLIN, 0 }, { touch, POLLIN, 0 } };
 		int pr = poll(pf, touch >= 0 ? 2 : 1, (int)(left / 1000) + 1);
@@ -908,8 +912,8 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 		uint16_t id = msg_id(m, mn); const uint8_t *body = m + 2; size_t blen = mn - 2;
 		if (!(is_av(chan) && is_media(id)) && !(chan == AA_CH_CONTROL && (id == AA_CTL_PING_REQUEST || id == AA_CTL_PING_RESPONSE))) {
 			if (nlog < 300) fprintf(stderr, "aa: rx chan %u msg 0x%04x (%zu bytes)\n", chan, id, blen);   // the log is on /data:
-			else if (nlog == 300) fprintf(stderr, "aa: further messages not logged this session\n");   // never flooded
-			nlog++;
+			else if (nlog == 300) fprintf(stderr, "aa: further messages not logged (300 per 10 min)\n");   // never flooded
+			if (nlog <= 300) nlog++;
 		}
 		if (chan == AA_CH_CONTROL && id == AA_CTL_SERVICE_DISCOVERY_REQUEST) {
 			vid = video_wanted();
@@ -1010,7 +1014,7 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 static int mt_selftest(void)
 {
 	aa_tls_t *fake = (aa_tls_t *)&mt_nlog;   /* any non-NULL: mt_send records instead of sending when fd < 0 */
-	input_open = 1; mt_force_visible = 1; memset(mt, 0, sizeof mt); mt_prev_any = 0; mt_gesture = 0;
+	input_open = 1; mt_force_visible = 1; phone_off_ok = 1; memset(mt, 0, sizeof mt); mt_prev_any = 0; mt_gesture = 0;
 	#define F(slot, act, X, Y) (mt[slot].active = (act), mt[slot].x = (X), mt[slot].y = (Y), mt[slot].moved = 1)
 	F(0, 1, 500, 200); mt_frame(-1, fake, 1);                       /* finger 0 down on the picture */
 	F(1, 1, 700, 250); mt_frame(-1, fake, 2);                       /* finger 1 down */
@@ -1040,6 +1044,9 @@ static int mt_selftest(void)
 	phone_off_seen = 0; phone_clock(-10000); mt_nlog = 0; F(0, 1, 500, 200); mt_frame(-1, fake, 3000);   /* clamped at 0 */
 	mt[0].active = 0; mt_frame(-1, fake, 4000);
 	if (mt_nlog != 2 || mt_log_ts[0] != 0) die("touch selftest: a time below zero not clamped");
+	phone_off_ok = 0; mt_nlog = 0; F(0, 1, 500, 200); mt_frame(-1, fake, 5000); mt[0].active = 0; mt_frame(-1, fake, 6000);
+	phone_off_ok = 1; F(0, 1, 500, 200); mt_frame(-1, fake, 7000); mt[0].active = 0; mt_frame(-1, fake, 8000);
+	if (mt_nlog != 2) die("touch selftest: a gesture before the phone's clock was known went out (%d events)", mt_nlog);
 	phone_off = 0, phone_off_seen = phone_off_ok = 0;
 	#undef F
 	uint8_t b[400]; int idx[2] = { 0, 1 }; mt[0].x = 120; mt[1].x = 1279; mt[0].y = 0; mt[1].y = 479;   /* picture corners */
@@ -1139,7 +1146,10 @@ static int aa_serve(const char *cert, const char *key)
 				fprintf(stderr, "aa: the phone left before its session (AUTH_COMPLETE not sent)\n");
 				goto done;   /* no decoder and no split for a session that never starts */
 			}
+			char c;   /* nor for a phone that closed right after its handshake (a write to it still succeeds) */
+			if (recv(fd, &c, 1, MSG_PEEK | MSG_DONTWAIT) == 0) { fprintf(stderr, "aa: the phone left before its session\n"); goto done; }
 			int sink = spawn_sink();
+			if (sink < 0) { fprintf(stderr, "aa: no video decoder (%s): no session\n", strerror(errno)); goto done; }
 			close(open("/run/dash-project", O_CREAT | O_WRONLY, 0644));   // the dash UI yields the video region
 			close(open(PJ_AA_SESSION, O_CREAT | O_WRONLY | O_CLOEXEC, 0644));
 			unlink(PJ_AA_FOCUS);   // one left from before
@@ -1369,9 +1379,11 @@ static void profile_method(GDBusConnection *conn, const char *sender, const char
 				struct timeval none = { 0, 0 };   // creds done: block and keep the link alive for the session
 				setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &none, sizeof none);
 				uint16_t id; uint8_t m[256]; size_t mn; int nb = 0;
-				while (bt_recv(fd, &id, m, sizeof m, &mn) == 0)   // logged a few times only: a phone could repeat these for hours
-					if (nb++ < 20) fprintf(stderr, "aa: BT rx id %u (%zu bytes) — link held\n", id, mn);
-					else if (nb == 21) fprintf(stderr, "aa: further BT messages not logged\n");
+				while (bt_recv(fd, &id, m, sizeof m, &mn) == 0) {   // logged a few times only: a phone could repeat these for hours
+					if (nb < 20) fprintf(stderr, "aa: BT rx id %u (%zu bytes) — link held\n", id, mn);
+					else if (nb == 20) fprintf(stderr, "aa: further BT messages not logged\n");
+					if (nb <= 20) nb++;
+				}
 				fprintf(stderr, "aa: RFCOMM closed by phone\n");
 				_exit(0);
 			}
@@ -1696,7 +1708,7 @@ int main(int argc, char **argv)
 	if (argc > 1 && !strcmp(argv[1], "--touch-test")) {   /* print the touch events a session would send, for N s */
 		int tf = touch_open(), secs = argc > 2 ? atoi(argv[2]) : 15;
 		if (tf < 0) return 1;
-		input_open = 1; mt_force_visible = 1;
+		input_open = 1; mt_force_visible = 1; phone_off_ok = 1;
 		vid = video_wanted();   /* the coordinates a session would send now */
 		printf("touch-test: touchscreen 0..%d x 0..%d, picture x %d..%d, sent as 0..%d x 0..%d; touch now (%d s)\n", mt_max_x, mt_max_y,
 		       PJ_RGN_X, PJ_RGN_X + PJ_RGN_W - 1, vid.uw - 1, vid.uh - 1, secs); fflush(stdout);
