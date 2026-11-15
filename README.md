@@ -48,7 +48,7 @@ cc -O2 -Wall -DAA_BT $(pkg-config --cflags gio-2.0 gio-unix-2.0) -o aa app/aa/aa
 
 Buildroot 2026.02 in a Docker container (`debian:stable`), with a persistent volume for the Buildroot tree and its output. Container packages: `build-essential make rsync pkg-config file bc cpio python3 git wget unzip` (plus `libssl-dev libglib2.0-dev` for host builds of the receiver).
 
-Mounts the build expects: `os/` at `/ext` (the `BR2_EXTERNAL` tree), `app/` at `/native` (the dash program and the Android Auto receiver are built from it; generate `app/build/signals_gen.h` first), and the RTL8733BS Wi-Fi driver source at `/radio` (Realtek's vendor driver, GPL-2.0, kept outside this repository: supply it separately). Because the image needs that tree, CI builds and tests the app and the firmware's tools, but not the image.
+Mounts the build expects: `os/` at `/ext` (the `BR2_EXTERNAL` tree), `app/` at `/native` (the dash program and the Android Auto receiver are built from it; generate `app/build/signals_gen.h` first), and `os/radio/` at `/radio` (the RTL8733BS Wi-Fi driver source, Realtek's vendor driver, GPL-2.0: see [os/radio/README.md](os/radio/README.md)). CI builds and tests the app and the firmware's tools, not the image (a full Buildroot build).
 
 ```
 make O=<output dir> BR2_EXTERNAL=/ext dash_r4_defconfig
