@@ -702,7 +702,7 @@ static size_t build_mt(uint8_t *buf, size_t cap, uint64_t ts, const int *idx, in
 // screens, or for ever. Each ping updates it; a gesture keeps the one it started with (mt_frame).
 static int64_t phone_off;
 static int phone_off_seen;   // from a ping, which supersedes the video's estimate
-static int phone_off_ok;     // known (a ping or a timestamped frame): no gesture goes to the phone before
+static int phone_off_ok;     // known (a ping or a timestamped frame): no gesture goes to the phone before it is
 // a ping's sample of it, less the ping's way here: the least-delayed (the highest) is the closest, kept and let sink
 // 1 ms a ping (the two clocks may drift); a ping held up behind a video burst does not drag it down
 static void phone_clock(int64_t smp)
@@ -961,7 +961,7 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 					if (nl <= 8) goto acked;
 					if (!phone_off_seen && frames <= 3) {   /* the phone's clock until its first ping: microseconds */
 						uint64_t vt = 0; for (int i = 0; i < 8; i++) vt = vt << 8 | nal[i];
-						if (vt && vt < 9000000000000000ULL) phone_off = (int64_t)vt * 1000 - now_us() * 1000, phone_off_ok = 1;
+						if (vt && vt < (uint64_t)INT64_MAX / 2 / 1000) phone_off = (int64_t)vt * 1000 - now_us() * 1000, phone_off_ok = 1;
 					}
 					nal += 8; nl -= 8;
 				}
@@ -1008,6 +1008,9 @@ static int mt_selftest(void)
 	ok = mt_nlog == 3 && mt_log_ts[0] == 1400000000000ULL && mt_log_ts[1] == 1400020000000ULL && mt_log_ts[2] == 1400040000000ULL;
 	phone_off_seen = 0; phone_clock(7000000); phone_clock(2000000);   /* a ping 5 ms more delayed: 1 ms down only */
 	if (!ok || phone_off != 6000000) die("touch selftest: the phone's clock (%d events, offset %lld)", mt_nlog, (long long)phone_off);
+	phone_off_seen = 0; phone_clock(-10000); mt_nlog = 0; F(0, 1, 500, 200); mt_frame(-1, fake, 3000);   /* clamped at 0 */
+	mt[0].active = 0; mt_frame(-1, fake, 4000);
+	if (mt_nlog != 2 || mt_log_ts[0] != 0) die("touch selftest: a time below zero not clamped");
 	phone_off = 0, phone_off_seen = phone_off_ok = 0;
 	#undef F
 	uint8_t b[400]; int idx[2] = { 0, 1 }; mt[0].x = 120; mt[1].x = 1279; mt[0].y = 0; mt[1].y = 479;   /* picture corners */
