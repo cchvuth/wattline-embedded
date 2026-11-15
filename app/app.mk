@@ -6,7 +6,7 @@
 #   CMDR=1 (any target) adds the Commander session (port/linux/ble_bluez.c, GDBus): build/{app-host,arm-app}-cmdr/
 LVGL := third_party/lvgl-9.6.0
 LVGL_SRC := $(shell find $(LVGL)/src -name '*.c')
-UI_SRC := ui/dash_ui.c ui/gen/assets.c ui/gen/roboto.c
+UI_SRC := ui/dash_ui.c ui/gen/assets.c ui/gen/aa_icon.c ui/gen/roboto.c
 APP_SRC := app/dash.c app/conf.c app/bridge.c app/log.c app/bright.c app/actions.c app/pair.c app/settings.c app/record.c app/wifi.c \
   core/panda.c core/derive.c core/sched.c core/cmdr_msg.c core/pb.c   # cmdr_msg: the actions' labels, every build
 APP_H := app/app.h app/actions.h app/pair.h app/settings.h app/record.h core/state.h core/sched.h core/panda.h core/cmdr_msg.h \
@@ -32,7 +32,7 @@ HOST_CFLAGS := -std=gnu11 -O2 -g -DLV_CONF_INCLUDE_SIMPLE -Iport/sim -I$(LVGL) -
 build/host/%.o: %.c port/sim/lv_conf.h ui/conf/lv_conf.h port/linux/lv_conf.h
 	@mkdir -p $(dir $@); $(HOST_CC) $(HOST_CFLAGS) -c $< -o $@
 build/host/ui/%.o: HOST_CFLAGS += $(WARN)
-build/host/ui/dash_ui.o: ui/dash_ui.h ui/dash_state.h ui/gen/assets.h
+build/host/ui/dash_ui.o: ui/dash_ui.h ui/dash_state.h ui/gen/assets.h ui/gen/aa_icon.h
 SAN := -fsanitize=address,undefined
 HOST_GIO_C = $(if $(CMDR_DEFS),$(shell pkg-config --cflags gio-2.0))
 HOST_GIO_L = $(if $(CMDR_DEFS),$(shell pkg-config --libs gio-2.0))
@@ -52,7 +52,7 @@ ARM_LIBS := -lm -lpthread
 build/arm-ui/%.o: %.c ui/conf/lv_conf.h port/linux/lv_conf.h
 	@mkdir -p $(dir $@); $(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
 build/arm-ui/ui/%.o: ARM_CFLAGS += $(WARN)
-build/arm-ui/ui/dash_ui.o: ui/dash_ui.h ui/dash_state.h ui/gen/assets.h
+build/arm-ui/ui/dash_ui.o: ui/dash_ui.h ui/dash_state.h ui/gen/assets.h ui/gen/aa_icon.h
 ARM_GIO_C = $(if $(CMDR_DEFS),$(shell /work/out-r0/host/bin/pkg-config --cflags gio-2.0))
 ARM_GIO_L = $(if $(CMDR_DEFS),$(shell /work/out-r0/host/bin/pkg-config --libs gio-2.0))
 $(AA)/%.o: %.c $(APP_H)

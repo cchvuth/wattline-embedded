@@ -24,4 +24,6 @@
 #define PJ_NIGHT "/run/dash-night"
 /* dash-aa holds the radio for Android Auto's AP (station disconnected): WiFi cannot go first, the car rides Bluetooth */
 #define PJ_AA_RADIO "/run/dash-aa-radio"
+/* S06wattline: the head-unit certificate cannot be used this start (its key, or unreadable): no AA button */
+#define PJ_AA_UNUSABLE "/run/dash-aa-unusable"
 #define PJ_TOUCH_DEV "/dev/input/event0"

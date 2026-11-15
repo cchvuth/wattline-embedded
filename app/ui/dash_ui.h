@@ -60,3 +60,5 @@ enum { DASH_VIEW_DASH, DASH_VIEW_CAR_PANEL, DASH_VIEW_SETTINGS, DASH_VIEW_NETWOR
 void dash_ui_project_region(int *x, int *y, int *w, int *h);
 void dash_ui_show(int view); /* also opened and closed by touch */
 extern const char *dash_ui_pj_marker; /* "/run/dash-project": an AA session is up (aa serve raises it) */
+extern const char *dash_ui_aa_cert;   /* "/etc/wattline/aa.crt": the AA button only with a head-unit certificate */
+extern const char *dash_ui_aa_up;     /* "/run/dash-aa": Android Auto is on (dash-aa start raises it) */

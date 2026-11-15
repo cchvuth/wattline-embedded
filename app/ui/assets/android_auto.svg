@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Android Auto logo, as supplied for the dash's AA button; its main shapes (the hairline shading overlays,
+     invisible at the button's 36 px, left out). ui/assets/aa_icon.py renders it into ui/gen/aa_icon.c. -->
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2751 2813.6">
+<g>
+	<path fill-rule="evenodd" clip-rule="evenodd" fill="#03A9F4" d="M187.6,2438.4C84,2438.4,0,2354.4,0,2250.8
+		c0-34.1,9.1-66.1,25.1-93.6L1213,94c32.2-56.1,92.9-94,162.4-94s130.2,37.9,162.5,94l1188,2063.2c16,27.5,25.1,59.5,25.1,93.6
+		c0,103.6-84,187.6-187.6,187.6H187.6z"/>
+	<linearGradient id="SVGID_1_" gradientUnits="userSpaceOnUse" x1="1039.8481" y1="1466.2634" x2="2691.9006" y2="2404.459">
+		<stop offset="0" style="stop-color:#1A237E;stop-opacity:0.2"/>
+		<stop offset="1" style="stop-color:#1A237E;stop-opacity:0.02"/>
+	</linearGradient>
+	<path fill="url(#SVGID_1_)" d="M2751,2250.9L1375.4,875.3v1563h1188C2667,2438.4,2750.9,2354.4,2751,2250.9z"/>
+	<path fill-rule="evenodd" clip-rule="evenodd" fill="#039BE5" d="M1212.9,94L25.1,2157.1c-16,27.5-25.1,59.5-25.1,93.6
+		c0,103.6,84,187.6,187.6,187.6h1188V0C1305.9,0,1245.2,37.9,1212.9,94L1212.9,94z"/>
+	<path fill-rule="evenodd" clip-rule="evenodd" fill="#F1F1F1" d="M1375.4,875.3L2438.2,2751l-62.6,62.6l-1000.4-375.1l-1000.2,375
+		l-62.6-62.6L1375.4,875.3z"/>
+	<path fill-rule="evenodd" clip-rule="evenodd" fill="#E1E1E1" d="M1375.4,875.3L2438.2,2751l-62.6,62.6l-1000.4-375.1"/>
+	<polygon opacity="0.2" fill-rule="evenodd" clip-rule="evenodd" fill="#FFFFFF" points="1375.4,891.3 2432.5,2756.8 2438.2,2751
+		1375.4,875.3 312.5,2750.9 318.3,2756.7"/>
+	<polygon opacity="0.07" fill-rule="evenodd" clip-rule="evenodd" points="2375.7,2799.6
+		1375.3,2424.5 375.1,2799.5 317.6,2741.9 312.5,2750.9 375.1,2813.5 1375.3,2438.5 2375.7,2813.6 2438.2,2751 2433.2,2742.1"/>
+</g>
+</svg>

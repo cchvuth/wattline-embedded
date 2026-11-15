@@ -4,6 +4,7 @@
  * and car pictures are the app's own renders (ui/assets/export.sh), the text is Roboto through tiny_ttf. */
 #include "dash_ui.h"
 #include "gen/assets.h"
+#include "gen/aa_icon.h"
 #include "../core/cmdr_msg.h" /* cmdr_action: what a tap asks for */
 #include "project_region.h"    /* the phone picture's rectangle, shared with the AA receiver */
 #include <fcntl.h>
@@ -804,10 +805,10 @@ void dash_ui_init(lv_obj_t *scr)
 		float cy = G.link_top + PL(22);
 		int car_x = ri(G.W - G.ml - inset(cy) - PL(20) - PL(12)), car_y = ri(cy - PL(12));
 		lv_obj_set_pos(car_panel, car_x, car_y);
-		/* Android Auto on demand, a gap to the car panel's left. ic_route is baked at ic_car_panel's size and scale
-		 * (export_test.dart), so it sits at the car icon's y unscaled: level, same size, crisp. Cert-gated. */
-		aa_btn = icon(root, &ic_route_btn, WHITE);
-		lv_obj_set_pos(aa_btn, car_x - ri(PL(16)) - (int)ic_route_btn.header.w, car_y);
+		/* Android Auto on demand, a gap to the car panel's left: the Android Auto logo (gen/aa_icon.c, from
+		 * assets/android_auto.svg), 36 px as ic_car_panel, level with it. Cert-gated. */
+		aa_btn = icon(root, &ic_aa_mono, WHITE);
+		lv_obj_set_pos(aa_btn, car_x - ri(PL(16)) - (int)ic_aa_mono.header.w, car_y);
 		show(aa_btn, false);
 	}
 
@@ -1021,7 +1022,8 @@ static const char *bt_word(dash_bt_t b, uint32_t *c, const lv_image_dsc_t **i)
 
 static dash_settings_t ST; /* the settings as shown (defined with the settings screen below) */
 static bool projecting;    /* an Android Auto session is up (/run/dash-project, raised by aa serve) */
-const char *dash_ui_pj_marker = "/run/dash-project"; /* the shots harness points it at a file of its own */
+const char *dash_ui_pj_marker = "/run/dash-project"; /* the shots harness points these at files of its own */
+const char *dash_ui_aa_cert = "/etc/wattline/aa.crt", *dash_ui_aa_up = "/run/dash-aa";
 static bool aa_pending;    /* tapped start, waiting for /run/dash-aa to appear — immediate amber feedback */
 static bool pj_left;       /* Exit tapped in the split: stay on the dash until this session's marker is gone */
 /* After leaving the split, repaint everything once more a moment later: the decoder is stopped in the background
@@ -1844,7 +1846,7 @@ static void aa_tap(lv_event_t *e)
 	(void)e;
 	if (FRESH(dash_at, 700)) return;
 	if (aa_pending && lv_tick_elaps(aa_pending_at) < 15000) return; /* still starting: a second start would race it */
-	bool up = access("/run/dash-aa", F_OK) == 0;
+	bool up = access(dash_ui_aa_up, F_OK) == 0;
 	save(up ? DASH_AA_STOP : DASH_AA_START);
 	aa_pending = !up, aa_pending_at = lv_tick_get();
 }
@@ -3411,12 +3413,19 @@ void dash_ui_set(const dash_state_t *s)
 
 	/* Android Auto button: only with a head-unit cert in place (else the phone rejects the handshake); green while the
 	 * on-demand bring-up is up, so a tap tears it down rather than leaving the Dash advertising all the time. */
-	bool aa_cert = access("/etc/wattline/aa.crt", F_OK) == 0;
+	bool aa_cert = access(dash_ui_aa_cert, F_OK) == 0 && access(PJ_AA_UNUSABLE, F_OK) != 0;
 	show(aa_btn, aa_cert);
-	if (aa_cert) {   /* idle = white, connecting = amber (AP up / tap pending), projecting = green */
-		bool up = access("/run/dash-aa", F_OK) == 0;
+	if (aa_cert) {   /* on: AP up, a tap pending, or projecting */
+		bool up = access(dash_ui_aa_up, F_OK) == 0;
 		if (up || (aa_pending && lv_tick_elaps(aa_pending_at) > 15000)) aa_pending = false;
-		icon_color(aa_btn, projecting ? REGEN : (up || aa_pending) ? WARN : WHITE);
+		static int aa_look = -1; /* off: the one-colour icon in white, as the other icons; on: the logo in its colours */
+		int look = projecting || up || aa_pending;
+		if (look != aa_look) {
+			aa_look = look;
+			lv_image_set_src(aa_btn, look ? &ic_aa : &ic_aa_mono);
+			lv_obj_set_style_image_recolor_opa(aa_btn, look ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
+			icon_color(aa_btn, WHITE);
+		}
 	}
 
 	/* The blocks: the car and the route (only with one) left of the ring, the energy figures and the g-meter right of

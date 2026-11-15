@@ -238,6 +238,18 @@ int main(int argc, char **argv)
 		bad |= shot(d, out, "edge-bt-no-route", &s, DASH_VIEW_DASH);
 		dash_state_blank(&s); /* nothing known at all: every figure its placeholder */
 		bad |= shot(d, out, "edge-nothing", &s, DASH_VIEW_DASH);
+		{ /* the Android Auto button (only with a head-unit certificate): off, the white icon; on, the logo's colours */
+			char crt[600], up[600];
+			snprintf(crt, sizeof crt, "%s/.aa.crt", out), snprintf(up, sizeof up, "%s/.dash-aa", out);
+			fclose(fopen(crt, "w"));
+			dash_ui_aa_cert = crt, dash_ui_aa_up = up;
+			scenes[0].fill(&s);
+			bad |= shot(d, out, "aa-button-off", &s, DASH_VIEW_DASH);
+			fclose(fopen(up, "w"));
+			bad |= shot(d, out, "aa-button-on", &s, DASH_VIEW_DASH);
+			remove(up), remove(crt);
+			bad |= shot(d, out, "aa-button-none", &s, DASH_VIEW_DASH); /* the certificate gone: no button */
+		}
 		scenes[6].fill(&s); /* charging, in P, while the phone's map is up */
 		char pjm[600];
 		snprintf(pjm, sizeof pjm, "%s/.dash-project", out);

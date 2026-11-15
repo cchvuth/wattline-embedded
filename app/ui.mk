@@ -1,7 +1,7 @@
 # The dash UI (ui/): host shots and the Dash binary. make -f ui.mk shots | compare | arm (arm: in the build container, tools/arm-ui.sh)
 LVGL := third_party/lvgl-9.6.0
 LVGL_SRC := $(shell find $(LVGL)/src -name '*.c')
-UI_SRC := ui/dash_ui.c ui/scenes.c ui/gen/assets.c ui/gen/roboto.c
+UI_SRC := ui/dash_ui.c ui/scenes.c ui/gen/assets.c ui/gen/aa_icon.c ui/gen/roboto.c
 WARN := -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
 
 # --- host (Mac): headless renderer -> build/shots/<scene>.png
@@ -10,7 +10,7 @@ HOST_CFLAGS := -std=gnu11 -O2 -g -DLV_CONF_INCLUDE_SIMPLE -Iport/sim -I$(LVGL) -
 build/host/%.o: %.c port/sim/lv_conf.h ui/conf/lv_conf.h port/linux/lv_conf.h
 	@mkdir -p $(dir $@); $(HOST_CC) $(HOST_CFLAGS) -c $< -o $@
 build/host/ui/%.o build/host/port/sim/%.o: HOST_CFLAGS += $(WARN)
-build/host/ui/dash_ui.o build/host/port/sim/shots.o build/host/ui/scenes.o: ui/dash_ui.h ui/dash_state.h ui/scenes.h ui/gen/assets.h
+build/host/ui/dash_ui.o build/host/port/sim/shots.o build/host/ui/scenes.o: ui/dash_ui.h ui/dash_state.h ui/scenes.h ui/gen/assets.h ui/gen/aa_icon.h
 build/host/dash-shots: $(patsubst %.c,build/host/%.o,port/sim/shots.c $(UI_SRC) $(LVGL_SRC))
 	$(HOST_CC) -o $@ $^ -lm
 
@@ -27,7 +27,7 @@ ARM_CFLAGS := -std=gnu11 -O2 -mcpu=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -
 build/arm-ui/%.o: %.c ui/conf/lv_conf.h port/linux/lv_conf.h
 	@mkdir -p $(dir $@); $(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
 build/arm-ui/ui/%.o: ARM_CFLAGS += $(WARN)
-build/arm-ui/ui/dash_ui.o build/arm-ui/ui/main_dash.o build/arm-ui/ui/scenes.o: ui/dash_ui.h ui/dash_state.h ui/scenes.h ui/gen/assets.h
+build/arm-ui/ui/dash_ui.o build/arm-ui/ui/main_dash.o build/arm-ui/ui/scenes.o: ui/dash_ui.h ui/dash_state.h ui/scenes.h ui/gen/assets.h ui/gen/aa_icon.h
 build/arm-ui/dash-ui: $(patsubst %.c,build/arm-ui/%.o,ui/main_dash.c $(UI_SRC) $(LVGL_SRC))
 	$(ARM_CC) -o $@ $^ -lm -lpthread
 	$(ARM_CC:gcc=strip) -o $@.stripped $@
