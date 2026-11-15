@@ -1,0 +1,249 @@
+#!/bin/sh
+# dash-update {status|check|fetch|apply|confirm|auto}: over-the-air updates from the project's GitHub releases.
+#
+# The factory image stays on the card's boot partition (p1) and is never rewritten. An update is unpacked into a
+# slot on /data (/data/boot/A or B), and ota.txt on p1 tells U-Boot's dash.scr which slot to start (see dash.cmd
+# for the rollback rules). Installing does not reboot: the new version starts at the next power-up, so the Dash
+# never restarts mid-drive, and that start confirms it (S99ota) once it has run healthy for half a minute. An
+# unconfirmed version is rolled back by U-Boot after 3 starts.
+#
+#   check    is there a newer release? (only with internet, never on the car's network)
+#   fetch    download the newest release's OTA bundle, check its signature + sha256, unpack it into the free slot
+#   apply    arm the unpacked slot for the next start (add `now` to restart at once)
+#   confirm  this start proved itself: keep it (S99ota runs this)
+#   install  fetch and apply the newest release (the Install button; also retries a version that failed before)
+#   auto     the same, but never a version that already failed to start here (S99ota, automatic updates on)
+#   status   print the state the UI shows (also in /run/dash-update.status)
+#
+# Trust: the release's SHA256SUMS must carry a valid Ed25519 signature by the project key baked into the image
+# (/etc/wattline-ota.pub.raw), and the bundle must match its line there. TLS (curl + CA bundle) is a second layer.
+set -u
+REPO=${DASH_UPDATE_REPO:-cchvuth/wattline-embedded-t113}
+API=${DASH_UPDATE_API:-https://api.github.com/repos/$REPO/releases?per_page=20}
+PUB=/etc/wattline-ota.pub.raw
+CMDLINE=${DASH_UPDATE_CMDLINE:-/proc/cmdline}   # these two and DASH_UPDATE_P1: for board/dash/test/dash-update-test.sh
+MOUNTS=${DASH_UPDATE_MOUNTS:-/proc/mounts}
+OTA=/data/ota                      # downloads
+SLOTS=/data/boot                   # unpacked slots A, B
+STATUS=/run/dash-update.status
+P1MNT=/run/ota-p1
+LOCK=/run/dash-update.lock
+FILES="zImage dash-r0.dtb rootfs.cpio.uboot"
+CAR_NET=S3XY_OBD                   # the car's adapter: no internet there
+
+log() { echo "dash-update: $*"; logger -t dash-update "$*" 2>/dev/null || true; }
+status() {   # status STATE [MORE...]: one line the UI can read
+	printf 'state=%s\ncurrent=%s\nlatest=%s\nslot=%s\nnote=%s\n' "$1" "$(current_version)" "${LATEST:-}" "$(booted_slot)" "${2:-}" > "$STATUS.tmp" &&
+		mv "$STATUS.tmp" "$STATUS"
+}
+fail() { log "$*"; status error "$*"; exit 1; }
+lock() {   # one at a time (S99ota's auto beside a tap on Install); a lock left by a killed run is taken over
+	if ! mkdir $LOCK 2>/dev/null; then
+		p=$(cat $LOCK/pid 2>/dev/null)
+		if [ -n "$p" ]; then kill -0 "$p" 2>/dev/null && { log "busy: another dash-update runs"; exit 1; }
+		elif [ $(($(date +%s) - $(stat -c %Y $LOCK 2>/dev/null || echo 0))) -lt 10 ]; then   # made, its pid not written yet
+			log "busy: another dash-update runs"; exit 1
+		fi
+		rm -rf $LOCK; mkdir $LOCK || exit 1
+	fi
+	echo $$ > $LOCK/pid; trap 'rm -rf $LOCK' EXIT; trap 'exit 1' INT TERM HUP
+}
+
+# the version is image-id's prefix when it is one (0.3.0-20261114-...); a bare build stamp counts as 0 (any release is newer)
+current_version() { v=$(cut -d- -f1 /etc/image-id 2>/dev/null); case "$v" in [0-9]*.[0-9]*) echo "$v" ;; *) echo 0 ;; esac; }
+booted_slot() { sed -n 's/.*dash\.slot=\([AB]\).*/\1/p' $CMDLINE; }   # empty: the factory image
+free_slot() { for s in A B; do [ "$s" != "$(booted_slot)" ] && [ "$s" != "$good" ] && echo $s && return 0; done; return 1; }   # after ota_read
+newer() { echo "$1 $2" | awk '{ n = split($1, a, "."); split($2, b, "."); for (i = 1; i <= 3; i++) { if (a[i] + 0 > b[i] + 0) exit 0; if (a[i] + 0 < b[i] + 0) exit 1 } exit 1 }'; }
+
+# the card's boot partition: the SD card's p1, found by device type as S05data does
+p1_dev() { [ -n "${DASH_UPDATE_P1:-}" ] && echo "$DASH_UPDATE_P1" && return; for d in /sys/block/mmcblk[0-9]; do [ "$(cat $d/device/type 2>/dev/null)" = SD ] && echo /dev/${d##*/}p1 && return; done; return 1; }
+ota_read() {   # ota.txt -> the variables slot good trial bootcount failed
+	slot=; good=; trial=; bootcount=; failed=
+	D=$(p1_dev) || return 1; mkdir -p $P1MNT; mount -o ro "$D" $P1MNT 2>/dev/null || return 1
+	# U-Boot's env export -t may end the file with a NUL (grep would call it binary): strip NULs and CRs first
+	[ -f $P1MNT/ota.txt ] && eval "$(tr -d '\r\000' < $P1MNT/ota.txt | grep -E '^(slot|good|trial|bootcount|failed)=[A-Za-z0-9]*$')"
+	umount $P1MNT
+}
+ota_write() {  # ota_write SLOT GOOD TRIAL BOOTCOUNT: rewrite ota.txt on p1 (U-Boot's env import -t format)
+	D=$(p1_dev) || return 1; mkdir -p $P1MNT; mount -o rw "$D" $P1MNT || return 1
+	{ [ -n "$1" ] && echo "slot=$1"; [ -n "$2" ] && echo "good=$2"; [ -n "$3" ] && echo "trial=$3"; echo "bootcount=$4"; } > $P1MNT/ota.txt.new &&
+		mv $P1MNT/ota.txt.new $P1MNT/ota.txt
+	r=$?; sync; umount $P1MNT; return $r
+}
+
+# The car's adapter network has no internet; never try there (the owner's rule), nor spend its link on it.
+on_car_network() { [ "$(wpa_cli -i wlan0 status 2>/dev/null | sed -n 's/^ssid=//p')" = "$CAR_NET" ]; }
+
+# What an update needs: the boot script that reads ota.txt (it passes dash.slot=), a real /data, ota.txt readable, and
+# no start on trial (this one: confirm it first; another: U-Boot is still counting it, at most 3 starts).
+can_update() {
+	grep -q 'dash\.slot=' $CMDLINE || fail "this card's boot loader does not do updates: reflash the card once"
+	grep -q '^[^ ]* /data ext4 ' $MOUNTS || fail "/data is not mounted"
+	ota_read || fail "cannot read ota.txt"
+	note_failed
+	[ -z "$trial" ] && return 0
+	st=trial
+	if [ "$slot" = "$(booted_slot)" ]; then n="confirm this start first"
+	elif armed; then st=armed; n="starts at the next power-up"
+	else n="slot $slot is still on trial"; fi
+	status $st "$n"; log "$n"; exit 1
+}
+# U-Boot gave up on a slot (ota.txt failed=, after ota_read): its version goes on the list automatic updates skip.
+# Done before anything can overwrite or re-arm that slot, healthy start or not.
+# Recorded once: failed= then leaves ota.txt, so a release fetched into that slot later is never taken for the failure.
+note_failed() {
+	[ -n "$failed" ] && grep -q '^[^ ]* /data ext4 ' $MOUNTS || return 1   # no real /data: kept for a start that has one
+	v=$(cat "$SLOTS/$failed/version" 2>/dev/null)
+	if [ -n "$v" ]; then
+		mkdir -p $OTA
+		grep -qx "$v" $OTA/failed 2>/dev/null || { echo "$v" >> $OTA/failed; log "version $v did not start: not installed automatically again"; }
+	fi
+	ota_write "$slot" "$good" "$trial" "${bootcount:-0}" && failed=
+	[ -n "$v" ]
+}
+
+# TLS needs the right time, and the Dash's RTC may hold none (a new card, a flat cell): the boot then starts in 1970
+# and every certificate looks "not yet valid". busybox has no NTP client, so take the time from an HTTP Date header
+# (GitHub's own, fetched without certificate checks: only that header is used, never content, and the release
+# signature does not depend on the clock). Only a year from the image's build to 10 after counts as set; the RTC
+# keeps the time for the next boots (S01hwclock reads it) only once a TLS call has worked with it.
+BUILD_YEAR=$(grep -o '20[0-9][0-9][01][0-9][0-3][0-9]' /etc/image-id 2>/dev/null | head -n 1 | cut -c1-4); BUILD_YEAR=${BUILD_YEAR:-2026}
+clock_ok() { y=$(date -u +%Y); [ "$y" -ge "$BUILD_YEAR" ] && [ "$y" -le $((BUILD_YEAR + 10)) ]; } 2>/dev/null
+set_clock() {
+	clock_ok && return 0
+	for u in https://api.github.com http://www.google.com; do
+		d=$(curl -skI --max-time 8 "$u" 2>/dev/null | tr -d '\r' | sed -n 's/^[Dd]ate: [A-Za-z]*, //p' | head -n 1)   # 14 Nov 2026 15:00:39 GMT
+		[ -n "$d" ] && date -u -s "${d% GMT}" -D "%d %b %Y %H:%M:%S" >/dev/null 2>&1 && clock_ok && break
+	done
+	clock_ok || return 1
+	CLOCK_SET=1; log "clock set to $(date -u) from the network"
+}
+keep_clock() {
+	[ -n "${CLOCK_SET:-}" ] || return 0
+	for r in /sys/class/rtc/rtc*; do case "$(cat $r/device/name 2>/dev/null)" in *pcf8563*) hwclock -w -u -f /dev/${r##*/} 2>/dev/null ;; esac; done
+	CLOCK_SET=
+}
+
+latest_release() {   # -> LATEST (version), BASE (download URL of that release's assets)
+	[ -n "${BASE:-}" ] && return 0   # asked already in this run (auto, then install)
+	LATEST=; BASE=
+	on_car_network && { status skipped "on the car's network"; return 1; }
+	set_clock || { status offline "no internet (could not get the time)"; return 1; }
+	J=$(curl -sSL --max-time 15 -w '\n%{http_code}' -H 'Accept: application/vnd.github+json' "$API" 2>/dev/null) || { status offline "no internet"; return 1; }
+	code=$(printf '%s' "$J" | tail -n 1); J=$(printf '%s' "$J" | sed '$d')   # the status, on curl's last line
+	case $code in
+	200) ;;
+	403|429) status offline "GitHub's limit for this network: later"; return 1 ;;   # 60 an hour per address (a shared hotspot)
+	*) status offline "no answer from GitHub ($code)"; return 1 ;;
+	esac
+	keep_clock   # TLS worked with it
+	# every OTA bundle the releases carry; the highest version wins (prereleases count: all of ours are)
+	U=$(echo "$J" | grep -o '"browser_download_url": *"[^"]*/wattline-ota-[0-9][0-9.]*\.tar\.gz"' | sed 's/.*"\(https[^"]*\)"$/\1/' |
+		awk -F'wattline-ota-' '{ v = $2; sub(/\.tar\.gz$/, "", v); split(v, p, "."); printf "%06d%06d%06d %s %s\n", p[1], p[2], p[3], v, $0 }' |
+		sort -r | head -n 1)
+	[ -n "$U" ] || { status error "no OTA bundle in the releases"; return 1; }
+	LATEST=$(echo "$U" | cut -d' ' -f2); BASE=$(echo "$U" | cut -d' ' -f3); BASE=${BASE%/*}
+}
+
+armed() {   # after ota_read: a slot waits for the next power-up -> LATEST its version
+	[ -n "$trial" ] && [ "$slot" != "$(booted_slot)" ] && [ "${bootcount:-0}" = 0 ] && LATEST=$(cat "$SLOTS/$slot/version" 2>/dev/null)
+}
+cmd_check() {
+	ota_read && armed && { status armed "starts at the next power-up"; cat $STATUS; return 0; }
+	latest_release || { cat $STATUS 2>/dev/null; return 0; }
+	if newer "$LATEST" "$(current_version)"; then status available; else status current; fi
+	cat $STATUS
+}
+
+sz() { stat -c %s "$1" 2>/dev/null || echo 0; }
+
+cmd_fetch() {
+	can_update
+	latest_release || return 1
+	newer "$LATEST" "$(current_version)" || { status current; log "already on $(current_version)"; return 0; }
+	S=$(free_slot) || fail "no free slot"; W=$OTA/$LATEST; B=wattline-ota-$LATEST.tar.gz
+	for d in $OTA/*/; do [ -d "$d" ] && [ "${d%/}" != "$W" ] && rm -rf "$d"; done   # a superseded release's partial download
+	[ "$(cat "$SLOTS/$S/version" 2>/dev/null)" = "$LATEST" ] && { status ready "slot $S"; log "$LATEST already in slot $S"; return 0; }
+	mkdir -p "$W" || fail "cannot write $W"
+	status downloading "$LATEST"
+	rm -f "$W/SHA256SUMS" "$W/SHA256SUMS.sig"   # always anew: a release re-signed since must not be stitched to the old
+	for f in SHA256SUMS SHA256SUMS.sig "$B"; do
+		curl -fsSL --max-time 900 -C - -o "$W/$f" "$BASE/$f"; r=$?
+		case $r in
+		0) ;;
+		22|33|36) rm -f "$W/$f"; curl -fsSL --max-time 900 -o "$W/$f" "$BASE/$f" || fail "download $f" ;;   # range refused: anew
+		*) fail "download $f broke off: the next try goes on from there" ;;
+		esac
+	done
+	status verifying "$LATEST"
+	sig-verify "$PUB" "$W/SHA256SUMS.sig" "$W/SHA256SUMS" || { rm -rf "$W"; fail "release $LATEST: bad signature, discarded"; }
+	want=$(awk -v f="$B" '{ n = $2; sub(/^\*/, "", n); if (n == f) print $1 }' "$W/SHA256SUMS")
+	[ -n "$want" ] && [ "$want" = "$(sha256sum "$W/$B" | cut -d' ' -f1)" ] || { rm -rf "$W"; fail "release $LATEST: bundle does not match SHA256SUMS, discarded"; }
+	status unpacking "$LATEST"
+	rm -rf "$SLOTS/$S.new"; mkdir -p "$SLOTS/$S.new"
+	gzip -dc "$W/$B" | tar -xf - -C "$SLOTS/$S.new" || { rm -rf "$SLOTS/$S.new"; fail "unpack $B"; }   # busybox tar: no -z
+	for f in $FILES; do [ -s "$SLOTS/$S.new/$f" ] || { rm -rf "$SLOTS/$S.new"; fail "bundle has no $f"; }; done
+	v=$(cat "$SLOTS/$S.new/version" 2>/dev/null)
+	[ "$v" = "$LATEST" ] || { rm -rf "$SLOTS/$S.new"; fail "bundle $LATEST says it is version '$v'"; }
+	# what fits between U-Boot's load addresses (128 MiB layout): kernel 8 MiB before the DTB, DTB 1 MiB before the
+	# running boot script, ramdisk up to the end of the smallest RAM
+	[ "$(sz "$SLOTS/$S.new/zImage")" -le 8388608 ] && [ "$(sz "$SLOTS/$S.new/dash-r0.dtb")" -le 1048576 ] &&
+		[ "$(sz "$SLOTS/$S.new/rootfs.cpio.uboot")" -le 100663296 ] || { rm -rf "$SLOTS/$S.new"; fail "bundle $LATEST: a file too big to boot"; }
+	rm -rf "$SLOTS/$S" && mv "$SLOTS/$S.new" "$SLOTS/$S" && sync || fail "install slot $S"
+	rm -rf "$W"
+	log "$LATEST unpacked into slot $S"; status ready "slot $S"
+}
+
+cmd_apply() {
+	can_update
+	S=$(free_slot) || fail "no free slot"
+	[ -s "$SLOTS/$S/version" ] || fail "nothing unpacked in slot $S (fetch first)"
+	LATEST=$(cat "$SLOTS/$S/version")
+	# U-Boot reads ext4 without replaying its journal: the new files must be in place on disk before ota.txt names them
+	sync; fsfreeze --freeze /data 2>/dev/null && fsfreeze --unfreeze /data
+	ota_write "$S" "${good:-$(booted_slot)}" 1 0 || fail "cannot write ota.txt"   # a confirmed slot stays the way back
+	log "slot $S ($LATEST) armed: starts next power-up, on trial for 3 starts"
+	status armed "starts at the next power-up"
+	[ "${1:-}" = now ] && { sync; reboot; }
+	return 0
+}
+
+cmd_confirm() {
+	B=$(booted_slot); ota_read || return 0
+	if [ -z "$trial" ]; then
+		if note_failed; then status rolled-back "version $v did not start"; else status ok; fi   # said once
+		return 0
+	fi
+	if [ "$slot" = "$B" ]; then   # this start is the trial: it ran healthy, keep it, if it found its /data (else it
+		grep -q '^[^ ]* /data ext4 ' $MOUNTS || { status trial "this version did not mount /data: not kept"; return 0; }   # rolls back)
+		ota_write "$B" "$B" "" 0 && log "slot $B confirmed ($(current_version))" && status ok "updated to $(current_version)"
+		[ -f $OTA/failed ] && grep -vx "$(current_version)" $OTA/failed > $OTA/failed.new; mv -f $OTA/failed.new $OTA/failed 2>/dev/null   # it starts after all
+	elif [ "${bootcount:-0}" = 0 ]; then   # armed just now (Install in the first half minute): the next power-up
+		LATEST=$(cat "$SLOTS/$slot/version" 2>/dev/null); status armed "starts at the next power-up"
+	else                          # the trial slot did not start this time (factory fell in): U-Boot keeps counting
+		LATEST=$(cat "$SLOTS/$slot/version" 2>/dev/null); status trial-failed "slot $slot did not start"
+	fi
+}
+
+# only the newest release itself: a slot left holding another version (one that failed, from a release pulled since)
+# is never armed by this
+cmd_install() { cmd_fetch && S=$(free_slot) && [ "$(cat "$SLOTS/$S/version" 2>/dev/null)" = "$LATEST" ] && newer "$LATEST" "$(current_version)" && cmd_apply; }
+cmd_auto() {
+	can_update   # records a rollback first (its check may not have passed); armed or on trial: says so and stops
+	latest_release || return 1
+	newer "$LATEST" "$(current_version)" || { status current; return 0; }   # running it (a retry by hand that took)
+	grep -qx "$LATEST" $OTA/failed 2>/dev/null && { status failed-before "version $LATEST did not start here: install it by hand to retry"; return 1; }
+	cmd_install
+}
+
+case "${1:-}" in check|fetch|apply|confirm|install|auto) lock ;; esac
+case "${1:-}" in
+	check) cmd_check ;;
+	fetch) cmd_fetch ;;
+	apply) cmd_apply "${2:-}" ;;
+	confirm) cmd_confirm ;;
+	install) cmd_install ;;
+	auto) cmd_auto ;;
+	status) cat $STATUS 2>/dev/null || { status idle; cat $STATUS; } ;;
+	*) echo "usage: dash-update {status|check|fetch|apply [now]|install|confirm|auto}" >&2; exit 2 ;;
+esac

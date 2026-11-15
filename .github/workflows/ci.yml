@@ -49,3 +49,13 @@ jobs:
           /tmp/aa --selftest
       - name: Host-compile the H.264 decoder (spike-vdec)
         run: cc -O2 -Wall -Werror -o /tmp/spike-vdec os/package/spike-vdec/src/spike-vdec.c
+
+  ota-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The updater (dash-update) against a local HTTPS release server, in a scratch container
+        run: |
+          docker run --rm -v "$PWD/os:/ext:ro" debian:stable sh -c 'apt-get update -qq && apt-get install -y -qq \
+            busybox curl openssl ca-certificates python3 gcc libc6-dev libssl-dev util-linux >/dev/null && \
+            sh /ext/board/dash/test/dash-update-test.sh /ext'

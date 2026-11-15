@@ -40,8 +40,16 @@ K1=$(keep "$(sfdisk -d $D)")
 [ "$K0" = "$K1" ] || { remount; echo "before:"; echo "$K0"; echo "after:"; echo "$K1"; die "p1/p2 or the disk id changed: STOP, no mkfs"; }
 [ -b ${D}p3 ] || { remount; die "${D}p3 did not appear: the table is written; reboot, then: mkfs.ext4 -L DASHDATA2 ${D}p3"; }
 [ "$(cat /sys/block/$N/${N}p3/start) $(cat /sys/block/$N/${N}p3/size)" = "$S $Z" ] || { remount; die "${D}p3 is not where it was put"; }
-mkfs.ext4 -q -L DASHDATA2 ${D}p3 || { remount; die "mkfs.ext4 failed"; }
-e2fsck -fn ${D}p3 >/dev/null || { remount; die "e2fsck after mkfs failed"; }
+# a card reflashed over an earlier one: its DASHDATA2 is still there, at the same place; keep it when it checks out
+# (e2fsck -p replays the journal and fixes what is safe: the car cuts power mid-write, so a used card always needs that)
+k=8; blkid ${D}p3 2>/dev/null | grep -q 'LABEL="DASHDATA2"' && { e2fsck -p ${D}p3 >/dev/null 2>&1; k=$?
+	[ $k -ge 4 ] && { e2fsck -fy ${D}p3 >/dev/null 2>&1; k=$?; }; }   # what -p leaves: answered yes, before giving it up
+if [ $k -lt 4 ]; then
+	echo "== ${D}p3: the earlier DASHDATA2 is sound (e2fsck $k): kept"
+else
+	mkfs.ext4 -F -q -L DASHDATA2 ${D}p3 </dev/null || { remount; die "mkfs.ext4 failed"; }
+	e2fsck -fn ${D}p3 >/dev/null || { remount; die "e2fsck after mkfs failed"; }
+fi
 remount
 echo "== $D after:"; sfdisk -l $D
 [ "$K0" = "$(keep "$(sfdisk -d $D)")" ] || die "p1/p2 changed"

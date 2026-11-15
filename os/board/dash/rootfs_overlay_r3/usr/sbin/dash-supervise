@@ -9,8 +9,7 @@ while :; do
 	[ -e /run/dashdata/dash.off ] && { echo "$(date) dash.off on the card: not started" >> $O; exit 0; }
 	[ "$(stat -c %s $O 2>/dev/null || echo 0)" -gt 262144 ] && mv $O $O.1
 	echo "$(date) start" >> $O
-	BIN=/usr/bin/dash; [ -x /data/dash ] && BIN=/data/dash   # a build dropped in /data overrides the image's (persists)
-	"$BIN" >> $O 2>&1 &
+	/usr/bin/dash >> $O 2>&1 &   # a newer build comes through /data/overlay (dash-push), dropped at an image change
 	P=$!; wait $P; r=$?; P=
 	echo "$(date) exit $r" >> $O
 	sleep 2

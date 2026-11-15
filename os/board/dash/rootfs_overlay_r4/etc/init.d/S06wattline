@@ -1,9 +1,13 @@
 #!/bin/sh
-# Keep the Android Auto head-unit certificate on /data (persistent across reboot and reflash). /etc/wattline -> there,
+# Keep the Android Auto head-unit certificate (and the Bluetooth bonds, below) on /data (persistent across reboot and reflash). /etc/wattline -> there,
 # so the app, aa and dash-aa (all reading /etc/wattline) use the persistent copy with no code change. A self-signed
 # placeholder is generated if none exists, so the Network button appears; the real cert replaces /data/wattline/aa.*.
 case "$1" in start|"") ;; *) exit 0;; esac
 mkdir -p /data/wattline
 [ -L /etc/wattline ] || { rm -rf /etc/wattline; ln -s /data/wattline /etc/wattline; }
 [ -f /data/wattline/aa.crt ] || /usr/bin/aa gencert /data/wattline/aa.crt /data/wattline/aa.key 2>/dev/null
+# Bluetooth bonds (the phones paired for Android Auto, their keys) on /data too, before bluetoothd starts (S40): in the
+# RAM root every power cycle forgot them, and a phone with an old key is then refused (aa takes bonded phones only)
+mkdir -p /data/bluetooth && chmod 700 /data/bluetooth
+[ -L /var/lib/bluetooth ] || { rm -rf /var/lib/bluetooth; ln -s /data/bluetooth /var/lib/bluetooth; }
 exit 0

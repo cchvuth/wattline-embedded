@@ -3,5 +3,7 @@
 # SPL+U-Boot, p1 boot, p2 DASHDATA small; /data is carved on first boot by dash-mkdata).
 set -e
 cp "$BINARIES_DIR/sun8i-t113s-dash-r4.dtb" "$BINARIES_DIR/dash-r0.dtb"
+# the boot script with OTA slots + rollback (U-Boot's bootcmd sources dash.scr from p1 when present)
+"$HOST_DIR/bin/mkimage" -A arm -O linux -T script -C none -d "$BR2_EXTERNAL_DASH_PATH/board/dash/dash.cmd" "$BINARIES_DIR/dash.scr"
 echo "Wattline T113 — data partition (settings, AA cert); /data (p3) is carved here on first boot." > "$BINARIES_DIR/DASHDATA.txt"
 exec support/scripts/genimage.sh -c "$BR2_EXTERNAL_DASH_PATH/board/dash/genimage-sd-release.cfg"

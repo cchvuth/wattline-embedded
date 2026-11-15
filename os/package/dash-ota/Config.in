@@ -1,0 +1,10 @@
+config BR2_PACKAGE_DASH_OTA
+	bool "dash-ota"
+	select BR2_PACKAGE_OPENSSL
+	select BR2_PACKAGE_LIBCURL
+	select BR2_PACKAGE_LIBCURL_CURL
+	select BR2_PACKAGE_CA_CERTIFICATES
+	help
+	  Over-the-air updates for the Dash: sig-verify (Ed25519 over the release's SHA256SUMS, with libcrypto);
+	  dash-update and the boot script (dash.scr) come from the board overlay / post-image. Pulls in curl and the
+	  CA bundle: busybox wget has no HTTPS.

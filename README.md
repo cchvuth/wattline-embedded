@@ -63,3 +63,15 @@ The root filesystem is an initramfs: it runs from RAM and is read back from the 
 
 - **Replace the image**: put a new `rootfs.cpio.uboot` on the card's boot partition (p1, FAT), keeping the old one as `rootfs.cpio.uboot.prev` to roll back.
 - **Or use the overlay** (images from v0.2.0 on): put the file under `/data/overlay/root/` at its path on the Dash (e.g. `/data/overlay/root/usr/bin/aa`) and write the image's `/etc/image-id` to `/data/overlay/image-id`. `S05overlay` copies the overlay over the root at boot, and drops an overlay made for a different image, so it never shadows newer firmware.
+
+### Over-the-air updates
+
+Cards burned from v0.3.0 on update themselves from this repo's releases (`dash-update`; Settings → Advanced → Software update, with an automatic option). The factory image on the boot partition is never rewritten: an update is unpacked into a slot on `/data` (`/data/boot/A` or `B`) and starts at the next power-up, on trial. A version that does not run healthy for 30 s within 3 starts is rolled back by U-Boot to the last good one, and automatic updates skip it from then on. The Dash only looks for updates with internet access (never on the car's adapter network), and installs nothing that is not signed with the project's key.
+
+To publish an update, build the image, then make the release's update assets and upload everything in the folder to the release:
+
+```
+os/board/dash/mk-ota.sh <output dir>/images <private key> <release folder>
+```
+
+This writes `wattline-ota-<version>.tar.gz` (the version comes from the image's own `/etc/image-id`), then `SHA256SUMS` over every file in the folder (put `sdcard.img.xz` there first) and `SHA256SUMS.sig` (Ed25519). The private key is never in the repo or a release; the image carries only its public half (`os/board/dash/wattline-ota.pub.raw`). Tests, each run in a scratch container (see their headers): `os/board/dash/test/dash-update-test.sh` (the updater against a local HTTPS release server) and `os/board/dash/test/dash-scr-test.sh` (the boot script in U-Boot's sandbox).
