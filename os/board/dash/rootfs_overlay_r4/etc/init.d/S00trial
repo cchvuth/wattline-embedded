@@ -1,7 +1,7 @@
 #!/bin/sh
 # OTA: a start of an update on trial that is not confirmed within 4 minutes (hung before the dash came up, or the dash
 # never healthy) is restarted, so U-Boot counts it and rolls the version back after 3: not a dark screen for 3 drives.
-# S99ota confirms a healthy start within 1.5 min. dash-update watch does the looking.
+# S99ota confirms a healthy start within ~2 min. dash-update watch does the looking.
 case "$1" in start|"") ;; *) exit 0;; esac
 grep -q 'dash\.slot=[AB]' /proc/cmdline || exit 0   # the factory image: never on trial
 ( sleep 240; dash-update watch ) </dev/null >/dev/null 2>&1 &

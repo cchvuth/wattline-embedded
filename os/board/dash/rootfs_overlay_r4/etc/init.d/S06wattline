@@ -2,8 +2,8 @@
 # Keep the Android Auto head-unit certificate (and the Bluetooth bonds, below) on /data (persistent across reboot and reflash). /etc/wattline -> there,
 # so the app, aa and dash-aa (all reading /etc/wattline) use the persistent copy with no code change. None is shipped or
 # made here: the owner supplies a Google-signed one (/data/wattline/aa.crt + aa.key), and the dash's AA button shows only
-# with it. One that cannot work (self-signed, as an earlier version's placeholder, or without its matching key) is moved
-# aside as *.unusable, so no button.
+# with it. A self-signed one (an earlier version's placeholder: phones refuse it) is moved aside as *.unusable; one whose
+# key is missing / another's / passphrase-protected, or that cannot be read, stays, and only the button is hidden.
 case "$1" in start|"") ;; *) exit 0;; esac
 mkdir -p /data/wattline
 [ -L /etc/wattline ] || { rm -rf /etc/wattline; ln -s /data/wattline /etc/wattline; }

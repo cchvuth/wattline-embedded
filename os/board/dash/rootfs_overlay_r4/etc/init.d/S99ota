@@ -6,7 +6,7 @@
 case "$1" in start|"") ;; *) exit 0;; esac
 # the same dash for 30 s: a restart is a new pid (a count of the supervisor's start lines missed restarts once dash.out
 # rotated, and one 15 s window let a dash crashing every 20 s through)
-healthy() { p=$(pidof dash) || return 1; sleep 30; [ "$(pidof dash)" = "$p" ]; }
+healthy() { p=$(pidof dash) || { sleep 15; return 1; }; sleep 30; [ "$(pidof dash)" = "$p" ]; }   # in a restart's gap: a look spent waiting
 (
 	sleep 15
 	# looked at for up to 2 min (a dash that crashed once at the start may settle), before S00trial's 4 min
