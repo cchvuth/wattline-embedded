@@ -32,4 +32,8 @@
 #define PJ_AA_FOCUS "/run/dash-aa-focus"
 /* spike-vdec: the phone's pictures shown in the last second, rewritten each second (the split's WiFi box shows it) */
 #define PJ_FPS "/run/dash-pj-fps"
+/* One phone at a time: a phone's projection session holds a write lock on this file (fcntl: F_GETLK names its pid) from
+ * the phone's connection to the session's end, Android Auto's (aa serve) or an addition's (its own helper). Another
+ * phone's session is refused while it is held, so two phones never share the picture or its touches. */
+#define PJ_SESSION "/run/dash-pj-session"
 #define PJ_TOUCH_DEV "/dev/input/event0"

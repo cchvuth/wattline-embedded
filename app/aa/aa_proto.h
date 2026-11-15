@@ -57,7 +57,9 @@ enum { AA_STATUS_OK = 0, AA_STATUS_FAIL = 1 };                /* StatusEnum (cha
 enum { AA_AVSTATUS_NONE = 0, AA_AVSTATUS_FAIL = 1, AA_AVSTATUS_OK = 2 }; /* AVChannelSetupStatus */
 enum { AA_AVSTREAM_NONE = 0, AA_AVSTREAM_AUDIO = 1, AA_AVSTREAM_VIDEO = 3 };
 enum { AA_RES_NONE = 0, AA_RES_480p = 1, AA_RES_720p = 2, AA_RES_1080p = 3 }; /* 800x480 / 1280x720 / 1920x1080 */
-enum { AA_FPS_NONE = 0, AA_FPS_30 = 1, AA_FPS_60 = 2 };
+enum { AA_FPS_NONE = 0, AA_FPS_60 = 1, AA_FPS_30 = 2 }; /* VideoFrameRateType (opencardev/aasdk); 2018's aasdk and
+                                                           * headunit swap them, and 60 fps asked so got 30 */
+_Static_assert(AA_FPS_60 == 1 && AA_FPS_30 == 2, "the phone reads 1 as 60 fps (checked on a phone: 2 gave 30)");
 /* TouchAction = Android's MotionEvent actions (opencardev/aasdk PointerAction.proto): a second finger is a
  * POINTER_DOWN / POINTER_UP with action_index naming it in the event's list of every finger */
 enum { AA_TOUCH_PRESS = 0, AA_TOUCH_RELEASE = 1, AA_TOUCH_DRAG = 2, AA_TOUCH_POINTER_DOWN = 5, AA_TOUCH_POINTER_UP = 6 };

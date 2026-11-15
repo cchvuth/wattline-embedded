@@ -27,6 +27,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/un.h>
+#include <ctype.h>
 #include <sys/ioctl.h>
 #include <netinet/tcp.h>
 #include <linux/input.h>
@@ -184,6 +186,40 @@ static int gen_cert(const char *crt, const char *key, long valid_secs)
 	return ok ? 0 : -1;
 }
 
+// Extra RFCOMM profiles, for helpers kept outside this repository: one per line of BT_EXTRA (absent on a plain image),
+//   UUID SOCKET [dial] [NAME...]
+// aa bt registers each, in both roles, while its helper runs (SOCKET exists when aa bt starts). A connection goes to the
+// helper as the connected socket itself (SCM_RIGHTS over its UNIX socket SOCKET) and is closed here. With "dial", aa bt
+// also opens the profile, once per Bluetooth connection, to each connected device that offers the UUID (some phones wait
+// for the head unit to open it).
+#define BT_EXTRA     "/etc/wattline/bt-profiles"
+#define BT_EXTRA_MAX 4
+typedef struct { char uuid[37], sock[108], name[32]; int dial; } bt_extra_t;
+// one line -> *e: 1 a profile, 0 blank or a comment, -1 malformed
+static int bt_extra_line(const char *line, bt_extra_t *e)
+{
+	char b[256], *sv, *t;
+	memset(e, 0, sizeof *e);
+	snprintf(b, sizeof b, "%s", line);
+	b[strcspn(b, "\r\n")] = 0;
+	for (char *h = b; (h = strchr(h, '#')); h++)   /* a comment: '#' at the start or after a blank (a path may hold one) */
+		if (h == b || h[-1] == ' ' || h[-1] == '\t') { *h = 0; break; }
+	if (!(t = strtok_r(b, " \t", &sv))) return 0;
+	if (strlen(t) != 36) return -1;
+	for (int i = 0; i < 36; i++)   /* 8-4-4-4-12 hex digits */
+		if ((i == 8 || i == 13 || i == 18 || i == 23) ? t[i] != '-' : !isxdigit((unsigned char)t[i])) return -1;
+	memcpy(e->uuid, t, 37);
+	if (!(t = strtok_r(NULL, " \t", &sv)) || t[0] != '/' || strlen(t) >= sizeof e->sock) return -1;
+	memcpy(e->sock, t, strlen(t) + 1);
+	t = strtok_r(NULL, "", &sv);   /* the rest: [dial] [NAME...] */
+	while (t && (*t == ' ' || *t == '\t')) t++;
+	if (t && !strncmp(t, "dial", 4) && (!t[4] || t[4] == ' ' || t[4] == '\t')) { e->dial = 1; t += 4; while (*t == ' ' || *t == '\t') t++; }
+	snprintf(e->name, sizeof e->name, "%s", t && *t ? t : "External");
+	for (size_t k = strlen(e->name); k && (e->name[k - 1] == ' ' || e->name[k - 1] == '\t'); ) e->name[--k] = 0;
+	for (char *c = e->name; *c; c++) if (*c < 0x20 || *c > 0x7e) *c = '?';   /* ASCII: a cut UTF-8 name is no valid string */
+	return 1;
+}
+
 static int selftest(void)
 {
 	// an ephemeral self-signed cert/key for the server side (stands in for the user's head-unit cert)
@@ -211,8 +247,24 @@ static int selftest(void)
 	uint64_t v; const uint8_t *sp; size_t sl;
 	if (!pb_get_u(pbbuf, o.n, 1, &v) || v != 1 || !pb_get_b(pbbuf, o.n, 2, &sp, &sl) || sl != 4 || memcmp(sp, "dash", 4))
 		die("selftest: pb fields");
+	// the extra Bluetooth profiles' lines (bt_extra_line)
+	bt_extra_t e;
+	if (bt_extra_line("12345678-1234-5678-9abc-DEF012345678 /run/x.sock dial  A helper  # note\n", &e) != 1 || !e.dial
+	    || strcmp(e.sock, "/run/x.sock") || strcmp(e.name, "A helper")) die("selftest: bt-profiles line");
+	if (bt_extra_line("12345678-1234-5678-9abc-def012345678 /run/y", &e) != 1 || e.dial || strcmp(e.name, "External")
+	    || bt_extra_line("12345678-1234-5678-9abc-def012345678 /run/y dialer", &e) != 1 || e.dial || strcmp(e.name, "dialer"))
+		die("selftest: bt-profiles defaults");
+	if (bt_extra_line("# a comment", &e) || bt_extra_line("  \t\n", &e) || bt_extra_line("", &e)) die("selftest: bt-profiles blanks");
+	if (bt_extra_line("12345678-1234-5678-9abc-def012345678 /run/a#b dial N\xc3\xa9 #c", &e) != 1 || strcmp(e.sock, "/run/a#b")
+	    || !e.dial || strcmp(e.name, "N??")) die("selftest: bt-profiles '#' in a path, a non-ASCII name");
+	if (bt_extra_line("12345678-1234-5678-9abc-def01234567 /run/x", &e) != -1             /* 35 characters */
+	    || bt_extra_line("12345678-1234-5678-9abc-def0123456789 /run/x", &e) != -1         /* 37 */
+	    || bt_extra_line("12345678x1234-5678-9abc-def012345678 /run/x", &e) != -1
+	    || bt_extra_line("12345678-1234-5678-9abc-def01234567g /run/x", &e) != -1
+	    || bt_extra_line("12345678-1234-5678-9abc-def012345678 run/x", &e) != -1
+	    || bt_extra_line("12345678-1234-5678-9abc-def012345678", &e) != -1) die("selftest: bt-profiles malformed");
 	tls_free(&c); tls_free(&s); SSL_CTX_free(sc); SSL_CTX_free(cc);
-	printf("AA-SELFTEST OK: TLS-in-frames handshake + a message each way + protobuf roundtrip\n");
+	printf("AA-SELFTEST OK: TLS-in-frames handshake + a message each way + protobuf roundtrip + bt-profiles lines\n");
 	return 0;
 }
 
@@ -230,7 +282,7 @@ static uint16_t msg_id(const uint8_t *p, size_t n) { return n >= 2 ? (uint16_t)(
 // The decoder shows that middle window. Touches are NOT in frame coordinates: a current phone takes them in its UI
 // area (the frame minus the margins; a phone's AA displays there are e.g. an 80x480 rail + a 1080x480 app = 1160x480). Frame
 // coordinates (headunit's 2018 way, +half the margins) landed every tap that offset low-right on the unit.
-// The lower setting (the dash's settings.conf `aa_low_res = 1`, Settings > Advanced): a 480p frame whose UI area has
+// The lower setting (the dash's settings.conf `aa_low_res = 1`, Settings > Display): a 480p frame whose UI area has
 // the picture's shape (800x332), which the decoder scales up 1.45x to fill the picture: less for the phone and the
 // WiFi, a softer picture. Read at each phone's service discovery, so a change counts from the next connection.
 // ponytail: the phone scales its UI by the density; 160 is a first value for this panel (110 keeps the 480p layout
@@ -274,7 +326,7 @@ static size_t audio_chd(uint8_t *buf, size_t cap, int ch, int type, int rate, in
 	return o.bad ? 0 : o.n;
 }
 
-// ServiceDiscoveryResponse: video (H.264 at vm's frame, 30 fps), sensors, touch, the three audio sinks and the mic —
+// ServiceDiscoveryResponse: video (H.264 at vm's frame and frame rate), sensors, touch, the three audio sinks and the mic —
 // the set OpenAuto advertises; AA refuses to start without sensors, audio playback or a mic ("No audio/mic").
 static size_t build_service_discovery_response(uint8_t *buf, size_t cap, const aa_video_t *vm)
 {
@@ -336,7 +388,8 @@ static size_t build_av_setup_response(uint8_t *buf, size_t cap)
 {
 	pb_out o = { buf, 0, cap, 0 };
 	pb_u(&o, AA_AVSETUPRESP_STATUS, AA_AVSTATUS_OK);
-	pb_u(&o, AA_AVSETUPRESP_MAX_UNACKED, 1);
+	pb_u(&o, AA_AVSETUPRESP_MAX_UNACKED, 2);   /* a frame on its way while the last one's ACK crosses the WiFi: at 1, each
+	                                            * round trip paced the phone (48-55 of 60 fps, unevenly) */
 	pb_u(&o, AA_AVSETUPRESP_CONFIGS, 0);   /* repeated: we offered one config, index 0 */
 	return o.bad ? 0 : o.n;
 }
@@ -549,9 +602,13 @@ static int do_ssl_handshake(int fd, aa_tls_t *tls)
 #define STR_(x) #x
 #define STR(x) STR_(x)
 static pid_t sink_pid = -1;
+#ifndef F_SETPIPE_SZ
+#define F_SETPIPE_SZ 1031   /* Linux's, without _GNU_SOURCE */
+#endif
 static int spawn_sink(void)
 {
 	int p[2]; if (pipe(p)) return -1;
+	fcntl(p[1], F_SETPIPE_SZ, 1 << 20);   /* a frame's write never waits on the decoder (its ACK, and so the phone, would) */
 	pid_t c = fork();
 	sink_pid = c;
 	if (c == 0) {
@@ -567,8 +624,8 @@ static uint32_t av_sess[16];   // per-AV-channel session id from AV_START, echoe
 static int is_av(uint8_t ch) { return ch == AA_CH_VIDEO || ch == AA_CH_MEDIA_AUDIO || ch == AA_CH_SPEECH_AUDIO || ch == AA_CH_SYSTEM_AUDIO || ch == AA_CH_AV_INPUT; }
 static int is_media(uint16_t id) { return id == AA_AV_MEDIA_WITH_TIMESTAMP || id == AA_AV_MEDIA; }
 
-// ACK one media frame on its channel: the AV_START session, value 1 per frame (as OpenAuto); with max_unacked 1
-// the phone sends the next frame only after this.
+// ACK one media frame on its channel: the AV_START session, value 1 per frame (as OpenAuto); with max_unacked 2 the
+// phone holds back its next frame while two are unacknowledged.
 static void ack(int fd, aa_tls_t *tls, uint8_t ch)
 {
 	uint8_t a[16]; pb_out o = { a, 0, sizeof a, 0 }; pb_u(&o, AA_ACK_SESSION, av_sess[ch & 15]); pb_u(&o, AA_ACK_VALUE, 1);
@@ -604,6 +661,7 @@ static int touch_open(void)
 {
 	int f = open(PJ_TOUCH_DEV, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	if (f < 0) { fprintf(stderr, "aa: touchscreen %s: %s\n", PJ_TOUCH_DEV, strerror(errno)); return -1; }
+	int clk = CLOCK_MONOTONIC; ioctl(f, EVIOCSCLOCKID, &clk);   /* the events' times on now_us's clock (see phone_off) */
 	struct input_absinfo a;
 	if (!ioctl(f, EVIOCGABS(ABS_MT_POSITION_X), &a) && a.maximum > 0) mt_max_x = a.maximum;
 	if (!ioctl(f, EVIOCGABS(ABS_MT_POSITION_Y), &a) && a.maximum > 0) mt_max_y = a.maximum;
@@ -637,6 +695,12 @@ static size_t build_mt(uint8_t *buf, size_t cap, uint64_t ts, const int *idx, in
 	pb_b(&o, AA_IEI_TOUCH_EVENT, te, t.n);
 	return t.bad || o.bad ? 0 : o.n;
 }
+// The phone's clock minus ours (CLOCK_MONOTONIC), in nanoseconds: its pings carry its time in nanoseconds (its video, in
+// microseconds, the same clock: its uptime), and touch events must go out on it. On ours or since 1970 the phone read
+// them as a thousand times faster (microseconds) or as from the future (nanoseconds): a quick flick flew the map ten
+// screens, or for ever. Each ping updates it; a gesture keeps the one it started with (mt_frame).
+static int64_t phone_off;
+static int phone_off_seen;   // from a ping, which supersedes the video's estimate
 static int mt_force_visible, mt_log[16][3], mt_nlog;   /* the self-test's view: no screen, events recorded */
 static void mt_send(int fd, aa_tls_t *tls, uint64_t ts, int ai, int action, int with)
 {
@@ -646,7 +710,7 @@ static void mt_send(int fd, aa_tls_t *tls, uint64_t ts, int ai, int action, int 
 	if (fd < 0) {   /* the self-test records; --touch-test prints what would go to the phone */
 		if (mt_nlog < 16) { mt_log[mt_nlog][0] = action; mt_log[mt_nlog][1] = n; mt_log[mt_nlog][2] = with >= 0 ? at : ai; mt_nlog++; }
 		if (fd == -2) {
-			printf("t=%llu.%06llu action %d index %d:", (unsigned long long)(ts / 1000000), (unsigned long long)(ts % 1000000), action, with >= 0 ? at : ai);
+			printf("t=%llu.%06llu action %d index %d:", (unsigned long long)(ts / 1000000000), (unsigned long long)(ts % 1000000000 / 1000), action, with >= 0 ? at : ai);
 			for (int k = 0; k < n; k++) {
 				int px, py;
 				mt_ui(idx[k], &px, &py);
@@ -662,6 +726,9 @@ static void mt_send(int fd, aa_tls_t *tls, uint64_t ts, int ai, int action, int 
 // one SYN_REPORT: turn the slots' changes into Android Auto touch events
 static void mt_frame(int fd, aa_tls_t *tls, uint64_t ts)
 {
+	static int64_t g_off;   /* phone_off for this gesture: a ping's update mid-stroke would bend its speed */
+	if (!mt_prev_any) g_off = phone_off;
+	ts += (uint64_t)g_off;
 	if (!mt_prev_any) {   /* a gesture starts: ours only if its first finger is on the picture, now */
 		int first = -1;
 		for (int i = 0; i < MT_MAX && first < 0; i++) if (mt[i].active) first = i;
@@ -728,7 +795,7 @@ static void touch_read(int tf, int fd, aa_tls_t *tls)
 				mt_dropped = 1;                                              /* the frame's end (what follows is partial) */
 			} else if (e->type == EV_SYN && e->code == SYN_REPORT) {
 				if (mt_dropped) mt_resync(tf), mt_dropped = 0;
-				mt_frame(fd, tls, (uint64_t)e->input_event_sec * 1000000u + (uint64_t)e->input_event_usec);
+				mt_frame(fd, tls, ((uint64_t)e->input_event_sec * 1000000u + (uint64_t)e->input_event_usec) * 1000u);   /* ns */
 			}
 		}
 }
@@ -824,6 +891,11 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 			send_msg(fd, tls, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_NAV_FOCUS_RESPONSE, r, o.n);
 		} else if (chan == AA_CH_CONTROL && id == AA_CTL_PING_REQUEST) {
 			uint64_t ts = 0; pb_get_u(body, blen, AA_PING_TS, &ts);
+			/* its clock now, less the ping's way here: the least-delayed ping (the highest) is the closest, kept and let
+			 * sink 1 ms a ping (the two clocks may drift); a ping held up behind a video burst does not drag it down */
+			int64_t smp = (int64_t)ts - now_us() * 1000;
+			phone_off = !phone_off_seen || smp > phone_off - 1000000 ? smp : phone_off - 1000000;
+			if (!phone_off_seen) phone_off_seen = 1, fprintf(stderr, "aa: the phone's clock: %llu ns (its pings)\n", (unsigned long long)ts);
 			uint8_t r[16]; pb_out o = { r, 0, sizeof r, 0 }; pb_u(&o, AA_PING_TS, ts);
 			send_msg(fd, tls, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_PING_RESPONSE, r, o.n);
 		} else if (chan == AA_CH_CONTROL && id == AA_CTL_SHUTDOWN_REQUEST) {
@@ -874,7 +946,14 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 				if (!frames++) fprintf(stderr, "aa: first video frame (%zu bytes)\n", blen);
 				st_frames++; st_bytes += blen;
 				const uint8_t *nal = body; size_t nl = blen;
-				if (id == AA_AV_MEDIA_WITH_TIMESTAMP) { if (nl <= 8) goto acked; nal += 8; nl -= 8; }   // 8-byte timestamp
+				if (id == AA_AV_MEDIA_WITH_TIMESTAMP) {   // 8-byte timestamp (big-endian)
+					if (nl <= 8) goto acked;
+					if (!phone_off_seen && frames <= 3) {   /* the phone's clock until its first ping: microseconds */
+						uint64_t vt = 0; for (int i = 0; i < 8; i++) vt = vt << 8 | nal[i];
+						phone_off = (int64_t)vt * 1000 - now_us() * 1000;
+					}
+					nal += 8; nl -= 8;
+				}
 				// then an access-unit delimiter: the decoder takes a NAL as complete when the next start code
 				// comes, so without it every picture would wait for the following one (a still screen: forever)
 				static const uint8_t aud[] = { 0, 0, 0, 1, 0x09, 0xf0 };
@@ -960,7 +1039,7 @@ static int aa_serve(const char *cert, const char *key)
 	signal(SIGPIPE, SIG_IGN);
 	setvbuf(stderr, NULL, _IOLBF, 0);   // line-buffered: the serve log survives a hard kill (dash-aa stop)
 	signal(SIGCHLD, SIG_IGN);           // the decoder child of each session: no zombies
-	int ls = socket(AF_INET, SOCK_STREAM, 0); if (ls < 0) die("socket: %s", strerror(errno));
+	int ls = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0); if (ls < 0) die("socket: %s", strerror(errno));   /* not the decoder's */
 	int one = 1; setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
 	struct sockaddr_in a = { 0 }; a.sin_family = AF_INET; a.sin_addr.s_addr = INADDR_ANY; a.sin_port = htons(AA_PORT);
 	if (bind(ls, (struct sockaddr *)&a, sizeof a) || listen(ls, 1)) die("bind/listen %d: %s", AA_PORT, strerror(errno));
@@ -969,6 +1048,16 @@ static int aa_serve(const char *cert, const char *key)
 	fprintf(stderr, "aa: listening on %d (phone must be on the AP; cert %s)\n", AA_PORT, cert);
 	for (;;) {
 		int fd = accept(ls, NULL, NULL); if (fd < 0) continue;
+		fcntl(fd, F_SETFD, FD_CLOEXEC);   /* nor the phone's socket */
+		// one phone at a time (PJ_SESSION): held from here to the session's end. aa opens the file nowhere else (closing
+		// another descriptor of it would drop this POSIX lock), and the decoder child does not inherit it
+		int lk = open(PJ_SESSION, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+		struct flock fl = { .l_type = F_WRLCK, .l_whence = SEEK_SET };
+		if (lk >= 0 && fcntl(lk, F_SETLK, &fl)) {
+			fprintf(stderr, "aa: another phone's session is up: this phone refused\n");
+			close(lk), close(fd);
+			continue;
+		}
 		// as aasdk (TCPWrapper) and headunit (hu_tcp): small writes (media ACKs, touches, pings) go out at once,
 		// not held until the phone acknowledges the previous one -- with one frame in flight, that stalls video
 		setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
@@ -984,6 +1073,7 @@ static int aa_serve(const char *cert, const char *key)
 		fprintf(stderr, "aa: version %s\n", ok ? "agreed" : "refused");
 		if (ok && do_ssl_handshake(fd, &t) == 0) {
 			fprintf(stderr, "aa: TLS up (%s, %s), session starting\n", SSL_get_version(t.ssl), SSL_get_cipher(t.ssl));
+			phone_off = 0, phone_off_seen = 0;   /* this phone's clock: learned from its video and pings */
 			rd_deadline = 0;
 			setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &live, sizeof live);   // a frame stalled half-way ends the session
 			// AUTH_COMPLETE is the PLAINTEXT handshake-done signal: the phone activates its SSL context on
@@ -1009,6 +1099,7 @@ static int aa_serve(const char *cert, const char *key)
 			fprintf(stderr, "aa: TLS handshake failed: %s\n", err ? ERR_error_string(err, NULL) : "peer closed or timed out");
 		}
 		tls_free(&t); close(fd);
+		if (lk >= 0) close(lk);   // the next phone's turn
 	}
 }
 
@@ -1083,6 +1174,46 @@ static int bt_selftest(void)
 // (that connection is what gives Android Auto its window to start wireless projection).
 #define HFP_HF_UUID    "0000111e-0000-1000-8000-00805f9b34fb"
 #define HFP_PATH       "/wattline/aa/hfp"
+static bt_extra_t extras[BT_EXTRA_MAX];   /* BT_EXTRA's profiles whose helper runs (registered) */
+static int nextras;
+static char extra_path[BT_EXTRA_MAX][32];
+static GHashTable *extra_dialed[BT_EXTRA_MAX];   /* device paths dialed during their current connection */
+
+// a connected profile socket to its helper (SCM_RIGHTS over the helper's UNIX socket); closed here either way. Never
+// blocks aa bt's main loop (a helper that does not accept: the link is dropped); 0 when the helper has it
+static int hand_fd(int fd, const char *sock)
+{
+	struct sockaddr_un a = { .sun_family = AF_UNIX };
+	snprintf(a.sun_path, sizeof a.sun_path, "%s", sock);
+	int s = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0), ok = 0;
+	char b = 0; struct iovec io = { &b, 1 };
+	union { struct cmsghdr h; char c[CMSG_SPACE(sizeof(int))]; } u;
+	memset(&u, 0, sizeof u);
+	struct msghdr m = { .msg_iov = &io, .msg_iovlen = 1, .msg_control = u.c, .msg_controllen = sizeof u.c };
+	struct cmsghdr *c = CMSG_FIRSTHDR(&m);
+	c->cmsg_level = SOL_SOCKET, c->cmsg_type = SCM_RIGHTS, c->cmsg_len = CMSG_LEN(sizeof(int));
+	memcpy(CMSG_DATA(c), &fd, sizeof fd);
+	if (s < 0 || connect(s, (struct sockaddr *)&a, sizeof a) || sendmsg(s, &m, MSG_NOSIGNAL) != 1)
+		fprintf(stderr, "aa: no helper at %s (%s): the link is closed\n", sock, strerror(errno));
+	else ok = 1;
+	if (s >= 0) close(s);
+	close(fd);
+	return ok ? 0 : -1;
+}
+// a dial or hand-off that failed: tried again at the next tick, up to 3 times per connection (a dead helper does not
+// make it redial every 5 s); the device's next connection starts afresh
+static GHashTable *extra_fails[BT_EXTRA_MAX];   /* device path -> failures during its current connection */
+static void extra_retry(int x, const char *dev)
+{
+	int n = GPOINTER_TO_INT(g_hash_table_lookup(extra_fails[x], dev)) + 1;
+	g_hash_table_insert(extra_fails[x], g_strdup(dev), GINT_TO_POINTER(n));
+	if (n < 3) g_hash_table_remove(extra_dialed[x], dev);
+}
+// in a forked child: every inherited fd but stdio and its own link (the D-Bus socket, other links that arrived)
+static void close_inherited(int keep)
+{
+	for (int f = 3; f < 1024; f++) if (f != keep) close(f);
+}
 
 typedef struct { const char *ip, *ssid, *key, *bssid; int port; } bt_creds;
 
@@ -1139,13 +1270,18 @@ static void profile_method(GDBusConnection *conn, const char *sender, const char
 		if (!dev_bonded(conn, dev)) { fprintf(stderr, "aa: %s is not bonded: refused\n", dev); close(fd); return; }
 		// BlueZ hands the socket over non-blocking; our readn/writen expect blocking I/O
 		fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
-		if (!strcmp(path, HFP_PATH)) {
+		int x = -1;
+		for (int i = 0; i < nextras; i++) if (!strcmp(path, extra_path[i])) x = i;
+		if (x >= 0) {
+			fprintf(stderr, "aa: %s on %s: to %s\n", dev, extras[x].name, extras[x].sock);
+			if (hand_fd(fd, extras[x].sock) && extras[x].dial) extra_retry(x, dev);
+		} else if (!strcmp(path, HFP_PATH)) {
 			// HFP link lives for the whole BT session -> handle in a child so the main loop keeps serving
 			fprintf(stderr, "aa: phone %s connected HFP; establishing SLC\n", dev);
 			pid_t c = fork();
-			if (c == 0) { hfp_handle(fd); _exit(0); }
+			if (c == 0) { close_inherited(fd); hfp_handle(fd); _exit(0); }
 			close(fd);
-		} else {
+		} else if (!strcmp(path, PROFILE_PATH)) {
 			// RFCOMM lives for the whole wireless session: after the creds, the phone sends WifiConnectStatus here
 			// and keeps this link as its "car present" signal while projecting. Closing it right after the creds
 			// makes the phone see CAR_BLUETOOTH_DISAPPEAR and tear the session down. So hold it open (forked, like
@@ -1153,6 +1289,7 @@ static void profile_method(GDBusConnection *conn, const char *sender, const char
 			fprintf(stderr, "aa: phone %s connected over RFCOMM; handing AP creds\n", dev);
 			pid_t c = fork();
 			if (c == 0) {
+				close_inherited(fd);
 				struct timeval tv = { 10, 0 };
 				setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
 				if (aa_bt_handshake(fd, cr->ip, cr->port, cr->ssid, cr->key, cr->bssid)) {
@@ -1166,6 +1303,9 @@ static void profile_method(GDBusConnection *conn, const char *sender, const char
 				fprintf(stderr, "aa: RFCOMM closed by phone\n");
 				_exit(0);
 			}
+			close(fd);
+		} else {   /* a path of ours that is no profile (one whose RegisterProfile failed): nothing is sent there */
+			fprintf(stderr, "aa: %s on %s: no such profile, closed\n", dev, path);
 			close(fd);
 		}
 	} else { // Release / RequestDisconnection: just ack
@@ -1273,18 +1413,143 @@ static int reg_profile(GDBusConnection *bus, GDBusNodeInfo *ni, const char *obj_
 {
 	GError *e = NULL;
 	GDBusInterfaceVTable vt = { profile_method, NULL, NULL, { 0 } };
-	if (!g_dbus_connection_register_object(bus, obj_path, ni->interfaces[0], &vt, cr, NULL, &e)) {
-		fprintf(stderr, "aa: register_object %s: %s\n", obj_path, e->message); return -1;
-	}
+	guint id = g_dbus_connection_register_object(bus, obj_path, ni->interfaces[0], &vt, cr, NULL, &e);
+	if (!id) { fprintf(stderr, "aa: register_object %s: %s\n", obj_path, e->message); return -1; }
 	GVariant *r = g_dbus_connection_call_sync(bus, BLUEZ_BUS, "/org/bluez", PROFILE_MGR_IF, "RegisterProfile",
 		g_variant_new("(os@a{sv})", obj_path, uuid, opts),
 		NULL, G_DBUS_CALL_FLAGS_NONE, -1, NULL, &e);
-	if (!r) { fprintf(stderr, "aa: RegisterProfile %s: %s\n", uuid, e->message); return -1; }
+	if (!r) { fprintf(stderr, "aa: RegisterProfile %s: %s\n", uuid, e->message); g_dbus_connection_unregister_object(bus, id); return -1; }
 	g_variant_unref(r);
 	return 0;
 }
 
 // aa bt <ip> <ssid> <key> <bssid>: register the AA + HFP profiles and serve connections until killed
+// every 5 s, for each "dial" profile: open it once per Bluetooth connection of each connected device that offers it.
+// Once only: the device may close it itself and reopen it from its side; a redial would start it over. A dial that
+// fails (other than AlreadyConnected/InProgress) is tried again at the next tick.
+typedef struct { int x; char *dev; } dial_t;
+static void extra_dial_done(GObject *o, GAsyncResult *res, gpointer user)
+{
+	dial_t *d = user; GError *e = NULL;
+	GVariant *r = g_dbus_connection_call_finish(G_DBUS_CONNECTION(o), res, &e);
+	if (r) { fprintf(stderr, "aa: %s open to %s\n", extras[d->x].name, d->dev); g_variant_unref(r); }
+	else {
+		if (!strstr(e->message, "AlreadyConnected") && !strstr(e->message, "InProgress")) {
+			fprintf(stderr, "aa: %s to %s: %s\n", extras[d->x].name, d->dev, e->message);
+			extra_retry(d->x, d->dev);
+		}
+		g_error_free(e);
+	}
+	g_free(d->dev); g_free(d);
+}
+static ino_t extra_ino[BT_EXTRA_MAX];   /* each helper's socket as last seen: a new one (the helper restarted) dials afresh */
+static gboolean extra_dial(gpointer user)
+{
+	GDBusConnection *bus = user;
+	int up[BT_EXTRA_MAX] = { 0 };   /* the helper runs: its socket is there (a link handed to none would only be closed) */
+	for (int x = 0; x < nextras; x++) {
+		struct stat st;
+		if (!(up[x] = stat(extras[x].sock, &st) == 0)) continue;
+		if (st.st_ino != extra_ino[x])   /* restarted, e.g. after another phone's session: its devices are dialed again */
+			extra_ino[x] = st.st_ino, g_hash_table_remove_all(extra_dialed[x]), g_hash_table_remove_all(extra_fails[x]);
+	}
+	GVariant *r = g_dbus_connection_call_sync(bus, BLUEZ_BUS, "/", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects",
+		NULL, G_VARIANT_TYPE("(a{oa{sa{sv}}})"), G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
+	if (!r) return G_SOURCE_CONTINUE;
+	GVariantIter *objs; const char *path; GVariant *ifs;
+	GHashTable *seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);   /* connected now */
+	g_variant_get(r, "(a{oa{sa{sv}}})", &objs);
+	while (g_variant_iter_loop(objs, "{&o@a{sa{sv}}}", &path, &ifs)) {
+		GVariant *dv = g_variant_lookup_value(ifs, "org.bluez.Device1", G_VARIANT_TYPE("a{sv}"));
+		if (!dv) continue;
+		gboolean conn = FALSE, bonded = FALSE;
+		g_variant_lookup(dv, "Connected", "b", &conn);
+		g_variant_lookup(dv, "Bonded", "b", &bonded);   /* only a bonded device's links reach a helper anyway */
+		if (conn) g_hash_table_add(seen, g_strdup(path));
+		conn = conn && bonded;
+		GVariant *uu = g_variant_lookup_value(dv, "UUIDs", G_VARIANT_TYPE("as"));
+		const char **v = uu ? g_variant_get_strv(uu, NULL) : NULL;
+		for (int x = 0; x < nextras; x++) {
+			if (!extras[x].dial || !up[x]) continue;
+			if (!conn) continue;
+			int has = 0;
+			for (int i = 0; v && v[i]; i++) has |= !g_ascii_strcasecmp(v[i], extras[x].uuid);
+			if (!has || g_hash_table_contains(extra_dialed[x], path)) continue;
+			g_hash_table_add(extra_dialed[x], g_strdup(path));
+			dial_t *d = g_new(dial_t, 1); d->x = x; d->dev = g_strdup(path);
+			g_dbus_connection_call(bus, BLUEZ_BUS, path, "org.bluez.Device1", "ConnectProfile", g_variant_new("(s)", extras[x].uuid),
+				NULL, G_DBUS_CALL_FLAGS_NONE, 20000, NULL, extra_dial_done, d);
+		}
+		g_free(v); if (uu) g_variant_unref(uu);
+		g_variant_unref(dv);
+	}
+	g_variant_iter_free(objs);
+	g_variant_unref(r);
+	/* a device not connected now (gone or removed): its next connection starts afresh. A drop and reconnect between two
+	 * ticks is caught by dev_changed, which clears it at the drop */
+	GHashTableIter it; gpointer k;
+	for (int x = 0; x < nextras; x++)
+		for (GHashTable *t = extra_dialed[x]; t; t = t == extra_dialed[x] ? extra_fails[x] : NULL) {
+			g_hash_table_iter_init(&it, t);
+			while (g_hash_table_iter_next(&it, &k, NULL)) if (!g_hash_table_contains(seen, k)) g_hash_table_iter_remove(&it);
+		}
+	g_hash_table_destroy(seen);
+	return G_SOURCE_CONTINUE;
+}
+
+// a device's Connected going false (BlueZ's PropertiesChanged): its next connection is dialed afresh, even when it
+// comes back before the next tick
+static void dev_changed(GDBusConnection *c, const char *sender, const char *path, const char *iface, const char *sig,
+			GVariant *params, gpointer user)
+{
+	(void)c; (void)sender; (void)iface; (void)sig; (void)user;
+	const char *ifn; GVariant *changed = NULL; gboolean conn;
+	g_variant_get(params, "(&s@a{sv}@as)", &ifn, &changed, NULL);
+	if (!strcmp(ifn, "org.bluez.Device1") && g_variant_lookup(changed, "Connected", "b", &conn) && !conn)
+		for (int x = 0; x < nextras; x++) { g_hash_table_remove(extra_dialed[x], path); g_hash_table_remove(extra_fails[x], path); }
+	g_variant_unref(changed);
+}
+
+// BT_EXTRA's profiles whose helper runs: registered; returns how many
+static int extras_register(GDBusConnection *bus, GDBusNodeInfo *ni, bt_creds *cr)
+{
+	FILE *f = fopen(BT_EXTRA, "r");
+	if (!f) return 0;
+	char l[256]; int dial = 0, ln = 0;
+	while (fgets(l, sizeof l, f)) {
+		ln++;
+		if (!strchr(l, '\n') && !feof(f)) {   /* longer than the buffer: skipped whole (its tail is no line of its own) */
+			int c; while ((c = fgetc(f)) != EOF && c != '\n') {}
+			fprintf(stderr, "aa: %s line %d: too long, skipped\n", BT_EXTRA, ln);
+			continue;
+		}
+		bt_extra_t e; int r = bt_extra_line(l, &e);
+		if (r < 0) { fprintf(stderr, "aa: %s line %d: not \"UUID /SOCKET [dial] [NAME]\": skipped\n", BT_EXTRA, ln); continue; }
+		if (!r) continue;
+		if (nextras == BT_EXTRA_MAX) { fprintf(stderr, "aa: %s line %d: more than %d profiles, not offered\n", BT_EXTRA, ln, BT_EXTRA_MAX); continue; }
+		if (access(e.sock, F_OK)) { fprintf(stderr, "aa: %s: no helper at %s: not offered\n", e.name, e.sock); continue; }
+		int x = nextras;
+		snprintf(extra_path[x], sizeof extra_path[x], "/wattline/aa/x%d", ln);   /* by line: a failed one leaves no clash */
+		GVariantBuilder o; g_variant_builder_init(&o, G_VARIANT_TYPE("a{sv}"));
+		g_variant_builder_add(&o, "{sv}", "Name", g_variant_new_string(e.name));
+		g_variant_builder_add(&o, "{sv}", "RequireAuthentication", g_variant_new_boolean(TRUE));
+		g_variant_builder_add(&o, "{sv}", "RequireAuthorization", g_variant_new_boolean(FALSE));
+		extras[x] = e;   /* before registering: a connection may come at once */
+		nextras++;
+		if (reg_profile(bus, ni, extra_path[x], e.uuid, g_variant_builder_end(&o), cr)) { nextras--; continue; }
+		extra_dialed[x] = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+		extra_fails[x] = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+		dial |= e.dial;
+	}
+	fclose(f);
+	if (dial) {
+		g_dbus_connection_signal_subscribe(bus, BLUEZ_BUS, "org.freedesktop.DBus.Properties", "PropertiesChanged", NULL,
+			"org.bluez.Device1", G_DBUS_SIGNAL_FLAGS_NONE, dev_changed, NULL, NULL);
+		g_timeout_add_seconds(5, extra_dial, bus);
+	}
+	return nextras;
+}
+
 static int aa_bt_serve(const char *ip, const char *ssid, const char *key, const char *bssid)
 {
 	signal(SIGCHLD, SIG_IGN);   // auto-reap the forked HFP handlers
@@ -1314,8 +1579,9 @@ static int aa_bt_serve(const char *ip, const char *ssid, const char *key, const 
 	g_variant_builder_add(&ho, "{sv}", "Features", g_variant_new_uint16(0));
 	if (reg_profile(bus, ni, HFP_PATH, HFP_HF_UUID, g_variant_builder_end(&ho), &cr)) return -1;
 
-	fprintf(stderr, "aa: profiles up (AA %s ch %d + HFP); waiting for the phone\n",
-		AA_BT_UUID, AA_BT_RFCOMM_CHANNEL);
+	int nx = extras_register(bus, ni, &cr);
+	fprintf(stderr, "aa: profiles up (AA %s ch %d + HFP%s%.0d%s); waiting for the phone\n",
+		AA_BT_UUID, AA_BT_RFCOMM_CHANNEL, nx ? " + " : "", nx, nx ? " more" : "");
 	g_main_loop_run(g_main_loop_new(NULL, FALSE));
 	return 0;
 }
