@@ -58,7 +58,7 @@ typedef struct {
   int port;
   int bl_max;
   bright_t bright;
-  int frame_ms;                 // the frame period now: dash.conf's (33 ms: 30 a second), 16 with the settings' 60
+  int frame_ms;                 // the frame period: dash.conf's frame_ms (33 ms: 30 a second, the panel's most)
   const ui_hooks_t *ui;
 } dash_t;
 
@@ -227,8 +227,7 @@ static void backlight(dash_t *d, int64_t now, int64_t idle) {
 // The settings screen's brightness: following the car, or the slider's level (until the switch is on again).
 static bool started;   // the car and the link set up: the settings' car and polling can be applied to them
 static void apply_settings(dash_t *d, int64_t now) {
-  int base = d->cf->frame_ms >= 10 && d->cf->frame_ms <= 200 ? d->cf->frame_ms : 33;   // dash.conf's, when sane
-  int fm = base;   // 30 a second: the panel shows no more
+  int fm = d->cf->frame_ms >= 10 && d->cf->frame_ms <= 200 ? d->cf->frame_ms : 33;   // dash.conf's, when sane
   if (fm != d->frame_ms) {
     d->frame_ms = fm;
     if (d->ui && d->ui->frame_ms) d->ui->frame_ms(d->ui->ctx, fm);   // LVGL's redraw alike

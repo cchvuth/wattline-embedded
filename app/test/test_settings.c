@@ -105,6 +105,10 @@ int main(void) {
   CHECK(settings_save(&back) == 0);
   CHECK(strstr(slurp("settings.conf"), "\naa_low_res = 1\n") != NULL);   // aa reads this exact form
   { dash_settings_t again; settings_load(&again, &cf); CHECK(again.aa_low_res); }
+  { char p[256]; snprintf(p, sizeof p, "%s/settings.conf", root);   // the old 60 frames a second switch's line:
+    FILE *f = fopen(p, "a"); CHECK(f && fputs("fps60 = 1\n", f) >= 0); if (f) fclose(f); }
+  { dash_settings_t again; settings_load(&again, &cf); CHECK(again.aa_low_res && settings_save(&again) == 0); }
+  CHECK(!strstr(slurp("settings.conf"), "fps60") && strstr(slurp("settings.conf"), "\naa_low_res = 1\n"));   // ignored, then dropped
   CHECK(!settings_aa_kept());                                                // Android Auto: off until dash-aa says up
   fclose(fopen("build/settings_test/aa-on", "w"));                           // dash-aa start, once up
   CHECK(settings_aa_kept());                                                 // left on: up again at the next start

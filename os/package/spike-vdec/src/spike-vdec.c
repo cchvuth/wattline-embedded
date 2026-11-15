@@ -695,7 +695,7 @@ typedef struct {
 	struct buf out[NOUT], cap[MAXCAP];
 	uint8_t *fb_cram;	/* an uncached picture's copy in cached RAM, for the rotate */
 	int cached;		/* the capture buffers are cached (the kernel took V4L2_MEMORY_FLAG_NON_COHERENT): shown from in place */
-	int show_each;		/* the file path: show every picture. The live stream shows only the newest (fb_show) */
+	int show_each;		/* the file path: show every picture. The live stream paces them (pend, show_next) */
 	int cw, ch;		/* the coded size the engine was set up for: a later SPS must not change it */
 	int last_ci;		/* the capture buffer fb_show shows next, or -1 */
 	int pend[2], npend;	/* the live stream's pictures decoded and not shown yet, oldest first (decode_stream paces them) */
@@ -972,8 +972,9 @@ static size_t stream_nals(uint8_t *buf, size_t len, dec_t *D, int *set, int eof,
 #define PJ_VISIBLE "/run/dash-pj-visible"
 #define PJ_FPS "/run/dash-pj-fps"   /* the pictures shown each second, for the dash (ui/project_region.h: under the AA word) */
 /* The least time between two pictures shown: about the panel's own frame (its glass shows 30 a second, whatever the
- * display link's 60), so each picture is seen. WiFi often delivers a clump of them together: shown this far apart rather
- * than all but the newest dropped; a 30 fps stream keeps up with a little room for its jitter. */
+ * display link's 60), so nearly every picture is seen: a backlog drains by the glass skipping about one in ten. WiFi
+ * often delivers a clump of them together: shown this far apart rather than all but the newest dropped; a 30 fps stream
+ * keeps up with a little room for its jitter. */
 #define SHOW_GAP 0.030
 static void show_next(dec_t *D, double *last_show_t, int *vis, double *reshow_at)   /* the oldest waiting, in its turn */
 {
