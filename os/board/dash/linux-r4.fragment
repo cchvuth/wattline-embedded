@@ -12,3 +12,8 @@ CONFIG_CMA_SIZE_MBYTES=64
 # RFCOMM: Android Auto's wireless handshake and the Hands-Free profile both run over it; without it bluetoothd
 # cannot open the listener and publishes no SDP record, so the phone never sees either service.
 CONFIG_BT_RFCOMM=m
+# IPv6, link-local only (rootfs_overlay_r4/etc/sysctl.d/ipv6.conf): helpers that serve the phone on the access point
+# may need IPv6 sockets; no tunnels. A change in any linux-r*.fragment: make linux-reconfigure rtl8733bs-dirclean
+# rtl8733bs-cc-dirclean, or the old Wi-Fi modules still load against the new kernel and Wi-Fi dies.
+CONFIG_IPV6=y
+# CONFIG_IPV6_SIT is not set

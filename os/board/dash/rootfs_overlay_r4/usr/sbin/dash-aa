@@ -17,6 +17,7 @@ PSK=${PSK:-$(od -An -tx1 -N10 /dev/urandom 2>/dev/null | tr -d ' \n')}   # 20 he
 IP=${IP:-192.168.53.1}
 CERT=/etc/wattline/aa.crt
 MARK=/run/dash-aa
+IFACE=wlan1; ip link show wlan1 >/dev/null 2>&1 || IFACE=wlan0   # the AP's interface (wlan1 when the driver makes one)
 
 # bluetoothctl, given up after 5 s: without bluetoothd it waits for ever (stop would never bring Wi-Fi back). Its own
 # --timeout is no use: set, it holds every command for that long.
@@ -25,7 +26,23 @@ btc() {
 	( sleep 5; kill $_bp ) >/dev/null 2>&1 & _bk=$!
 	wait $_bp; _br=$?; kill $_bk 2>/dev/null; return $_br
 }
+# Hooks for additions kept outside this repository (absent on a plain image), output in /data/log/hook-<name>.log:
+#  - /data/hooks/aa-start: once the access point is up, before aa bt (which offers the extra Bluetooth profiles of
+#    /etc/wattline/bt-profiles whose helper's socket exists by then). Gets IFACE, SSID, PSK and IP.
+#  - /data/hooks/aa-stop: at every stop (also after a failed start, or with no session up), so it must be safe to
+#    repeat. Gets IFACE and IP.
+# Each has 10 s, then SIGTERM, and SIGKILL 2 s later (the hook's own process: a daemon it started lives on). A helper's
+# socket belongs in a root-only directory such as /run; the profile's socket reaches it in blocking mode.
+hook() {
+	[ -x "/data/hooks/$1" ] || return 0
+	if [ "$1" = aa-start ]; then IFACE=$IFACE SSID=$SSID PSK=$PSK IP=$IP "/data/hooks/$1" >"/data/log/hook-$1.log" 2>&1 & _hp=$!
+	else IFACE=$IFACE IP=$IP "/data/hooks/$1" >"/data/log/hook-$1.log" 2>&1 & _hp=$!; fi
+	( sleep 10; kill $_hp; sleep 2; kill -9 $_hp ) >/dev/null 2>&1 & _hk=$!
+	wait $_hp; kill $_hk 2>/dev/null; return 0
+}
 stop() {
+	killall spike-vdec 2>/dev/null   # the picture off at once, whatever the hook takes (and again below: a helper may restart it)
+	hook aa-stop
 	[ -f /run/aa-pair-timer ] && kill "$(cat /run/aa-pair-timer)" 2>/dev/null; rm -f /run/aa-pair-timer   # an old window's end
 	killall spike-vdec aa hostapd udhcpd 2>/dev/null   # the decoder first, so its last picture stops being drawn
 	# gone before anything else (a quick stop -> start would meet the old hostapd on the interface)
@@ -59,7 +76,6 @@ start|restore)
 	echo $$ > $L/pid
 	trap 'rm -rf /run/dash-aa.starting' EXIT
 	[ -f "$MARK" ] && exit 0   # up by the start that held the lock
-	IFACE=wlan1; ip link show wlan1 >/dev/null 2>&1 || IFACE=wlan0
 	BSSID=$(cat /sys/class/net/"$IFACE"/address)
 	# Prepare for AA: drop the Wi-Fi link to the Commander/home so the radio is free for the AP's own channel (single
 	# radio can't host the AP on the station's channel, esp. a DFS one). During AA the car link rides the Commander's
@@ -85,6 +101,7 @@ start|restore)
 		( sleep 120; btc pairable off; btc discoverable off; rm -f /run/aa-pair-timer ) >/dev/null 2>&1 &
 		echo $! > /run/aa-pair-timer
 	fi
+	hook aa-start
 	aa bt "$IP" "$SSID" "$PSK" "$BSSID" >/data/log/aa-bt.log 2>&1 &
 	aa serve >/data/log/aa-serve.log 2>&1 &
 	touch /data/aa-on 2>/dev/null && sync   # up: on again at the next start (the dash restores it), until stopped
