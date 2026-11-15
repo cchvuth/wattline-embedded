@@ -558,8 +558,8 @@ static void test_brightness(void) {   // the Dash's own: 0x273 UI_displayBrightn
   NEAR(car_display_brightness(&C, now), 70, 1e-9);
   now += 60000; NEAR(car_display_brightness(&C, now), 70, 1e-9);
   BT(&C, {24, 180}); NEAR(car_display_brightness(&C, now), 70, 1e-9); CHECK(C.p.bt_bright_bad == 180);
-  L.state = LINK_LIVE; C.wifi_live = true;   // WiFi live: its own frame, not the push
-  ISNUL(car_display_brightness(&C, now));
+  L.state = LINK_LIVE; C.wifi_live = true;   // WiFi live: the push held until its own frame comes
+  NEAR(car_display_brightness(&C, now), 70, 1e-9);
   FR(0x273, 0, 0, 0, 0, 0, 100, 0, 0, 0); NEAR(car_display_brightness(&C, now), 50, 1e-9);
   car_from_bt(&C, NULL, now);
   NEAR(car_display_brightness(&C, now), 50, 1e-9);

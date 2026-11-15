@@ -28,6 +28,7 @@ void cmdr_hook_start(const conf_t *cf, int wifi_first) {
   cfg.rejoin_ms = cf->bt_data_ms, cfg.back_ms = cf->bt_back_ms;
   B = ble_start(&cfg, "/org/bluez/hci0");
   if (!B) { log_msg("bluetooth: no system bus, no Commander session"); return; }
+  post(BLE_WIFI, 0, 1, 0);   // the link's first try is just starting: the session must not open with "not trying"
   post(BLE_CONNECT, 0, 0, 0);
 }
 
@@ -76,7 +77,13 @@ static dash_bt_t link_of(const cmdr_t *c) {
 
 void cmdr_hook_sync(car_t *car, const link_t *l, bt_view_t *bt, int64_t now) {
   if (!B) return;
-  int live = car->wifi_live, trying = link_trying(l);
+  // trying: the link's hello, or wpa_supplicant joining (associated / getting an address, which the link cannot see:
+  // its connects fail meanwhile), for 20 s at most (a network that never gives an address must not hold Bluetooth)
+  static int64_t join_from = -1;
+  const char *jw;
+  if (wifi_join(now, &jw) != WIFI_JOINING) join_from = -1;
+  else if (join_from < 0) join_from = now;
+  int live = car->wifi_live, trying = link_trying(l) || (join_from >= 0 && now - join_from < 20000);
   if (live != last_live || trying != last_trying || now - wifi_sent >= 1000) {   // main.dart _linksChanged
     post(BLE_WIFI, live, trying, 0);
     last_live = live, last_trying = trying, wifi_sent = now;

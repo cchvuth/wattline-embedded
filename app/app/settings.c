@@ -31,7 +31,8 @@ static void run(const char *cmd, const char *arg, const char *arg2) {
   if (!cmd) return;
   char *argv[] = {(char *)cmd, (char *)arg, (char *)(arg ? arg2 : NULL), NULL};
   pid_t pid;
-  if (posix_spawn(&pid, cmd, NULL, NULL, argv, environ)) { log_msg("settings: %s: %s", cmd, strerror(errno)); return; }
+  int e = posix_spawn(&pid, cmd, NULL, NULL, argv, environ);   // its error comes back, not in errno
+  if (e) { log_msg("settings: %s: %s", cmd, strerror(e)); return; }
   log_msg("settings: ran %s%s%s%s", cmd, arg ? " " : "", arg ? arg : "", arg && arg2 ? " <network>" : "");   // no SSID in the log
   // reaped by the loop (dash.c)
 }

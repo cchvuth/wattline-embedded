@@ -542,7 +542,9 @@ bool car_any_belt_unbuckled(const car_t *c) {
 double car_display_brightness(const car_t *c, int64_t now) {
   double v = c->display_brightness;
   if (isnan(v)) return NUL;
-  if (c->p.bright_bt) return car_via_bt(c) ? v : NUL;   // pushed on a change: any age while the session is up
+  // pushed on a change: any age while the session is up, also once WiFi went live, until its own 0x273 replaces it
+  // (else the lamps' day level would flash in between)
+  if (c->p.bright_bt) return c->p.bt_up ? v : NUL;
   return now >= c->p.bright_at && now - c->p.bright_at <= c->cfg.bright_stale_ms ? v : NUL;
 }
 
