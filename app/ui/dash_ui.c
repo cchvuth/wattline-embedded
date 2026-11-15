@@ -1798,7 +1798,8 @@ static void tip_at(const char *t, float x, float y, bool left)
 }
 static bool tip_released(lv_event_t *e)
 {
-	if (lv_event_get_code(e) != LV_EVENT_RELEASED) return false;
+	lv_event_code_t c = lv_event_get_code(e);
+	if (c != LV_EVENT_RELEASED && c != LV_EVENT_PRESS_LOST) return false;   /* lifted, or slid off first */
 	lv_timer_reset(tip_timer);
 	lv_timer_resume(tip_timer);
 	return true;
@@ -2320,8 +2321,16 @@ static void slider_look(void)
 	set_text(set_bl_note, "%s", ST.follow_car ? "following the car" : "");
 	if (!ST.follow_car) lv_slider_set_value(set_slider, ST.brightness_pct, LV_ANIM_OFF);
 }
+/* A page scroll that began on a slider releases it too (nothing moved then): saved only after a drag of its own. */
+static bool slider_released(lv_event_t *e)
+{
+	if (lv_event_get_code(e) != LV_EVENT_RELEASED) return false;
+	if (!lv_indev_get_scroll_obj(lv_indev_active())) save(DASH_SETTINGS_SAVE);
+	return true;
+}
 static void slider_changed(lv_event_t *e)
 {
+	if (slider_released(e)) return;   /* the takeover: only on a value it moved to */
 	if (ST.follow_car) {
 		ST.follow_car = false;
 		lv_obj_set_state(set_sw[3], LV_STATE_CHECKED, false);
@@ -2329,15 +2338,14 @@ static void slider_changed(lv_event_t *e)
 		slider_look();
 	}
 	ST.brightness_pct = lv_slider_get_value(lv_event_get_target(e));
-	if (lv_event_get_code(e) == LV_EVENT_RELEASED) save(DASH_SETTINGS_SAVE);
 }
 /* The follow-car brightness bias: %, shown signed; applied only while following (does not turn following off). */
 static void offset_note(void) { set_text(set_offset_note, "%+d%%", ST.follow_offset); }
 static void offset_changed(lv_event_t *e)
 {
+	if (slider_released(e)) return;
 	ST.follow_offset = lv_slider_get_value(lv_event_get_target(e));
 	offset_note();
-	if (lv_event_get_code(e) == LV_EVENT_RELEASED) save(DASH_SETTINGS_SAVE);
 }
 static lv_obj_t *m3_switch(lv_obj_t *parent, int i)
 {
@@ -2975,6 +2983,9 @@ void dash_ui_show(int v)
 	show(net_edit, v == DASH_VIEW_NETWORK);
 	show(pair_view, v == DASH_VIEW_PAIR);
 	show(project, v == DASH_VIEW_PROJECT);
+	/* under the split and the opaque pages the dash is hidden: else each change in the strip or the page draws the whole
+	 * dash beneath it too (the settings' barrier is see-through: drawn there) */
+	show(root, v == DASH_VIEW_DASH || v == DASH_VIEW_SETTINGS);
 	show(tip, false);
 	lv_obj_t *sp = v == DASH_VIEW_SETTINGS ? lv_layer_top() : root; /* the snackbar (a failed save) over the settings too */
 	if (lv_obj_get_parent(snack) != sp) lv_obj_set_parent(snack, sp);
@@ -3136,11 +3147,11 @@ static void set_snack(const dash_state_t *s)
 }
 
 /* ---- the car's path either side, dotted (widgets.dart _CarLights, steerLines): under the car ---- */
-static void steer_draw(lv_event_t *e)
+/* The path lines' dots: drawn on LAYER (NULL: none), their bounding box into BOX; false when there are none. */
+static bool steer_dots(const dash_state_t *s, lv_layer_t *layer, lv_area_t *box)
 {
-	const dash_state_t *s = &S;
-	if (!s->live || !s->wifi_live || !s->steer_lines || isnan(s->steer_deg) || s->no_cabin) return;
-	lv_layer_t *layer = lv_event_get_layer(e);
+	if (!s->live || !s->wifi_live || !s->steer_lines || isnan(s->steer_deg) || s->no_cabin) return false;
+	lv_area_t bb = {INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN};
 	const ui_car_pics_t *p = &ui_car_pics[s->car];
 	float w = cab.w, h = cab.h, ox = cab.x, oy = cab.y;
 	float road = fmaxf(-max_road[s->car], fminf(max_road[s->car], s->steer_deg / steer_ratio[s->car])) * (float)M_PI / 180;
@@ -3168,9 +3179,24 @@ static void steer_draw(lv_event_t *e)
 			float x = ox + qx, y = oy + (rev ? h - qy : qy);
 			rd.bg_opa = (lv_opa_t)(0.8f * 255 * (1 - d / len));
 			lv_area_t a = {ri(x - dot), ri(y - dot), ri(x + dot) - 1, ri(y + dot) - 1};
-			lv_draw_rect(layer, &rd, &a);
+			if (layer) lv_draw_rect(layer, &rd, &a);
+			bb.x1 = LV_MIN(bb.x1, a.x1), bb.y1 = LV_MIN(bb.y1, a.y1), bb.x2 = LV_MAX(bb.x2, a.x2), bb.y2 = LV_MAX(bb.y2, a.y2);
 		}
 	}
+	if (box) *box = bb;
+	return true;
+}
+static lv_area_t steer_drawn; /* the dots as last drawn (steer_on: any), whatever came between (the split, a page) */
+static bool steer_on;
+static void steer_draw(lv_event_t *e) { steer_on = steer_dots(&S, lv_event_get_layer(e), &steer_drawn); }
+/* Each frame: where the dots are drawn and where they go now are repainted when they differ (or CHANGED says so). */
+static void steer_dirty(const dash_state_t *s, bool changed)
+{
+	lv_area_t a;
+	bool has = steer_dots(s, NULL, &a);
+	if (!changed && has == steer_on && (!has || !memcmp(&a, &steer_drawn, sizeof a))) return;
+	if (steer_on) lv_obj_invalidate_area(steer, &steer_drawn);
+	if (has) lv_obj_invalidate_area(steer, &a);
 }
 
 /* The link icons (main.dart _btStatus): WiFi, its settings; Bluetooth, try the link now (as Approve does), then its
@@ -3197,6 +3223,7 @@ static void touch_init(void)
 		tappable(chips[i].box, chip_tap, i, (PC(48) - PC(42)) / 2);
 		lv_obj_add_event_cb(chips[i].box, chip_hold, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)i);
 		lv_obj_add_event_cb(chips[i].box, chip_hold, LV_EVENT_RELEASED, (void *)(intptr_t)i);
+		lv_obj_add_event_cb(chips[i].box, chip_hold, LV_EVENT_PRESS_LOST, (void *)(intptr_t)i);
 		pressed_look(chips[i].box, 0x4DFFFFFF);
 	}
 	tappable(link_w.box, wifi_tap, 0, PL(4)); /* the app's link icons open its settings */
@@ -3204,8 +3231,9 @@ static void touch_init(void)
 	lv_obj_set_clickable(ap_disc, true);
 	lv_obj_add_event_cb(ap_disc, ap_hold, LV_EVENT_LONG_PRESSED, NULL);
 	lv_obj_add_event_cb(ap_disc, ap_hold, LV_EVENT_RELEASED, NULL);
+	lv_obj_add_event_cb(ap_disc, ap_hold, LV_EVENT_PRESS_LOST, NULL);
 	tappable(car_panel, open_tap, DASH_VIEW_CAR_PANEL, PL(12));
-	tappable(aa_btn, aa_tap, 0, PL(12));
+	tappable(aa_btn, aa_tap, 0, PL(8)); /* half the gap to the car icon: AA sits on top, so it must not reach past it */
 	tip = box(root);
 	fill(tip, 0xE6616161); /* Tooltip: grey 700 at 90 % */
 	lv_obj_set_style_radius(tip, ri(PC(4)), 0);
@@ -3288,7 +3316,7 @@ static void set_touch(const dash_state_t *s)
 		if (set_net_line) set_text(set_net_line, "%s", s->net_line);
 		set_approval(s->bt);
 	}
-	if (CHANGED(steer_deg) || CHANGED(steer_lines) || CHANGED(car) || CHANGED(gear)) lv_obj_invalidate(steer);
+	steer_dirty(s, CHANGED(steer_deg) || CHANGED(car) || CHANGED(gear));
 }
 
 void dash_ui_set(const dash_state_t *s)
