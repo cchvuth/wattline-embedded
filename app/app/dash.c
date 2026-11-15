@@ -227,7 +227,8 @@ static void backlight(dash_t *d, int64_t now, int64_t idle) {
 // The settings screen's brightness: following the car, or the slider's level (until the switch is on again).
 static bool started;   // the car and the link set up: the settings' car and polling can be applied to them
 static void apply_settings(dash_t *d, int64_t now) {
-  int fm = app_settings.fps60 ? 16 : d->cf->frame_ms;   // 60 frames a second, or dash.conf's
+  int base = d->cf->frame_ms >= 10 && d->cf->frame_ms <= 200 ? d->cf->frame_ms : 33;   // dash.conf's, when sane
+  int fm = app_settings.fps60 ? 16 : base;   // 60 frames a second, or that
   if (fm != d->frame_ms) {
     d->frame_ms = fm;
     if (d->ui && d->ui->frame_ms) d->ui->frame_ms(d->ui->ctx, fm);   // LVGL's redraw alike

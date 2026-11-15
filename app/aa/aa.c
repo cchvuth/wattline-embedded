@@ -1002,7 +1002,7 @@ static int aa_serve(const char *cert, const char *key)
 			if (sink >= 0) close(sink);
 			if (sink_pid > 0) { kill(sink_pid, SIGTERM); waitpid(sink_pid, NULL, 0); sink_pid = -1; }   // SIGCHLD ignored: returns once it is gone
 			unlink("/run/dash-project");
-			unlink(PJ_AA_SESSION), unlink(PJ_AA_FOCUS);
+			unlink(PJ_AA_SESSION), unlink(PJ_AA_FOCUS), unlink(PJ_FPS);   // the decoder, killed, leaves its fps behind
 			fprintf(stderr, "aa: session ended\n");
 		} else if (ok) {
 			unsigned long err = ERR_get_error();

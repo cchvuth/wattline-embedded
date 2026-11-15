@@ -28,12 +28,15 @@ static uint32_t frame(void *ctx) {
 static int64_t idle(void *ctx) { (void)ctx; return lv_display_get_inactive_time(NULL); }
 static void show_settings(void *ctx) { (void)ctx; dash_ui_settings(&app_settings); }
 static void ask_car(void *ctx) { (void)ctx; dash_ui_ask_car(); }
-static void frame_ms(void *ctx, int ms) {   // LVGL redraws (and reads the touch) at the dash's frame rate
+// LVGL redraws and reads the touch at the dash's frame rate (its animations keep their own 33 ms). It runs only from the dash's frame,
+// so its timers are set to half the frame: at a full one, every frame that starts a millisecond early is skipped.
+static void frame_ms(void *ctx, int ms) {
   (void)ctx;
+  uint32_t p = ms / 2 > 0 ? (uint32_t)(ms / 2) : 1;
   lv_timer_t *t = lv_display_get_refr_timer(lv_display_get_default());
-  if (t) lv_timer_set_period(t, (uint32_t)ms);
+  if (t) lv_timer_set_period(t, p);
   for (lv_indev_t *i = lv_indev_get_next(NULL); i; i = lv_indev_get_next(i))
-    if (lv_indev_get_read_timer(i)) lv_timer_set_period(lv_indev_get_read_timer(i), (uint32_t)ms);
+    if (lv_indev_get_read_timer(i)) lv_timer_set_period(lv_indev_get_read_timer(i), p);
 }
 
 static void watchdog_off(void) {   // the magic close: a clean stop does not reboot

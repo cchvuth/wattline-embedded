@@ -31,7 +31,7 @@ stop() {
 	# gone before anything else (a quick stop -> start would meet the old hostapd on the interface)
 	i=0; while pidof aa hostapd udhcpd spike-vdec >/dev/null 2>&1 && [ $i -lt 25 ]; do sleep 0.2; i=$((i+1)); done   # <= 5 s
 	killall -9 spike-vdec aa hostapd udhcpd 2>/dev/null
-	rm -f /run/dash-project /run/dash-aa-session /run/dash-aa-focus   # aa serve's markers too, if it was killed mid-session
+	rm -f /run/dash-project /run/dash-aa-session /run/dash-aa-focus /run/dash-pj-fps   # aa serve's and the decoder's, if killed mid-session
 	btc discoverable off >/dev/null 2>&1 || true
 	btc pairable off >/dev/null 2>&1 || true   # no new pairings once AA is off
 	# Reconnect the Wi-Fi link to the Commander/home that start dropped (SSH/OTA/WiFi-CAN return); if wpa_supplicant is
