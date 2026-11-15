@@ -570,7 +570,9 @@ static int send_msg(int fd, aa_tls_t *tls, uint8_t chan, uint8_t msgtype, uint16
 	if (tls) { SSL_write(tls->ssl, msg, mn); int cn = tls_take(tls, cipher, sizeof cipher); if (cn <= 0) return -1; payload = cipher; plen = (size_t)cn; enc = AA_ENC_ENCRYPTED; }
 	int fn = frame_put(frame, sizeof frame, chan, (uint8_t)(enc | msgtype), payload, plen);
 	if (fn < 0) return -1;
-	if (writen(fd, frame, (size_t)fn)) { tx_dead = 1; return -1; }
+	// one write: on this blocking socket a short count comes only from SO_SNDTIMEO (no signal handlers), and writing
+	// the rest would wait the timeout out a second time
+	if (write(fd, frame, (size_t)fn) != (ssize_t)fn) { tx_dead = 1; return -1; }
 	return 0;
 }
 
@@ -1099,6 +1101,7 @@ static int aa_serve(const char *cert, const char *key)
 	fprintf(stderr, "aa: listening on %d (phone must be on the AP; cert %s)\n", AA_PORT, cert);
 	for (;;) {
 		int fd = accept(ls, NULL, NULL); if (fd < 0) continue;
+		while (waitpid(-1, NULL, WNOHANG) > 0) {}   /* a decoder left behind (it would not die) that has died since */
 		fcntl(fd, F_SETFD, FD_CLOEXEC);   /* nor the phone's socket */
 		tx_dead = 0;   /* this phone's: its version and handshake go through send_msg too */
 		// as aasdk (TCPWrapper) and headunit (hu_tcp): small writes (media ACKs, touches, pings) go out at once,
@@ -1132,23 +1135,29 @@ static int aa_serve(const char *cert, const char *key)
 			// receiving it, and only frames AFTER it are encrypted. Sent encrypted, the phone logs "encrypted
 			// frame ... with no ssl context, waiting" and times out. So NULL (plain), like VERSION/SSL_HANDSHAKE.
 			uint8_t ac[8]; pb_out o = { ac, 0, sizeof ac, 0 }; pb_u(&o, AA_AC_STATUS, AA_STATUS_OK);
-			send_msg(fd, NULL, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_AUTH_COMPLETE, ac, o.n);
+			if (send_msg(fd, NULL, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_AUTH_COMPLETE, ac, o.n)) {
+				fprintf(stderr, "aa: the phone left before its session (AUTH_COMPLETE not sent)\n");
+				goto done;   /* no decoder and no split for a session that never starts */
+			}
 			int sink = spawn_sink();
 			close(open("/run/dash-project", O_CREAT | O_WRONLY, 0644));   // the dash UI yields the video region
 			close(open(PJ_AA_SESSION, O_CREAT | O_WRONLY | O_CLOEXEC, 0644));
 			unlink(PJ_AA_FOCUS);   // one left from before
 			aa_session(fd, &t, sink, &touch);
-			for (int k = 0; k < AA_NCHAN; k++) free(rx_asm[k].p), rx_asm[k] = (aa_asm_t){0};   /* the next session starts small */
 			// stop the decoder and wait it out BEFORE dropping the marker: the UI repaints the dash when the marker
 			// goes, and a decoder still drawing would leave its last picture over it
 			if (sink >= 0) close(sink);
 			// reaped only here (SIGCHLD left as it is): a decoder that died mid-session stays a zombie until this waitpid,
 			// so its pid cannot go to another process before the kill
-			if (sink_pid > 0) {   /* 2 s to go, then killed: a stopped or stuck decoder outlasts SIGTERM */
+			if (sink_pid > 0) {   /* 2 s to go, then killed (a stopped decoder outlasts SIGTERM); one stuck in the kernel even
+				                 * then is left behind, never to run again (no picture drawn), and reaped at a later dial */
 				kill(sink_pid, SIGTERM);
 				int r = 0;
-				for (int i = 0; i < 20 && (r = waitpid(sink_pid, NULL, WNOHANG)) == 0; i++) usleep(100000);
-				if (r == 0) kill(sink_pid, SIGKILL), waitpid(sink_pid, NULL, 0);
+				for (int i = 0; i < 40 && (r = waitpid(sink_pid, NULL, WNOHANG)) == 0; i++) {
+					if (i == 20) kill(sink_pid, SIGKILL);
+					usleep(100000);
+				}
+				if (r == 0) fprintf(stderr, "aa: the decoder (pid %d) does not die: left behind\n", (int)sink_pid);
 				sink_pid = -1;
 			}
 			unlink("/run/dash-project");
@@ -1158,6 +1167,8 @@ static int aa_serve(const char *cert, const char *key)
 			unsigned long err = ERR_get_error();
 			fprintf(stderr, "aa: TLS handshake failed: %s\n", err ? ERR_error_string(err, NULL) : "peer closed or timed out");
 		}
+	done:
+		for (int k = 0; k < AA_NCHAN; k++) free(rx_asm[k].p), rx_asm[k] = (aa_asm_t){0};   /* the next phone starts small */
 		tls_free(&t); close(fd);
 		if (lk >= 0) close(lk);   // the next phone's turn
 	}

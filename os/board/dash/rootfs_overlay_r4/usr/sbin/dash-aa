@@ -96,6 +96,7 @@ start|restore)
 	iw dev "$IFACE" set power_save off 2>/dev/null; iw dev wlan0 set power_save off 2>/dev/null
 	btc system-alias Wattline >/dev/null 2>&1 || true   # the name the phone sees (not the default BlueZ x.y)
 	hook aa-start   # before the pairing window: a pairing while it runs (up to 12 s) would find no agent yet
+	aa serve >/data/log/aa-serve.log 2>&1 &   # listening before aa bt sends any phone to it
 	aa bt "$IP" "$SSID" "$PSK" "$BSSID" >/data/log/aa-bt.log 2>&1 &   # its pairing agent up before the window opens
 	# New phones can pair only in the first 2 minutes after the button (someone at the Dash), not for the whole session;
 	# a phone paired before connects at any time. The AA channel itself needs a paired link (aa.c).
@@ -105,7 +106,6 @@ start|restore)
 		( sleep 120; btc pairable off; btc discoverable off; rm -f /run/aa-pair-timer ) >/dev/null 2>&1 &
 		echo $! > /run/aa-pair-timer
 	fi
-	aa serve >/data/log/aa-serve.log 2>&1 &
 	touch /data/aa-on 2>/dev/null && sync   # up: on again at the next start (the dash restores it), until stopped
 	# (touch, not `: >`: a failed redirect on a special builtin would end the script before the marker)
 	: > "$MARK"
