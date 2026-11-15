@@ -3,8 +3,9 @@ cedrus: allow cache hints on the capture queue
 The Dash's decoder (spike-vdec) reads every shown picture with the CPU, to rotate it into the panel's framebuffer.
 Capture buffers are mapped uncached by default, where the CPU reads them at about 100 MB/s: copying a 1280x480
 picture out took 8-9 ms on each core. With cache hints allowed, userspace can ask for cached MMAP buffers
-(V4L2_MEMORY_FLAG_NON_COHERENT at REQBUFS), and vb2 does the cache maintenance at QBUF and DQBUF. A request without the
-flag gets the same buffers as before.
+(V4L2_MEMORY_FLAG_NON_COHERENT at REQBUFS). vb2 keeps them coherent: it prepares a buffer at QBUF, and invalidates it
+for the CPU when the engine hands the picture back (in cedrus's interrupt), before it can be dequeued. A request
+without the flag gets the same buffers as before.
 
 --- a/drivers/staging/media/sunxi/cedrus/cedrus_video.c
 +++ b/drivers/staging/media/sunxi/cedrus/cedrus_video.c

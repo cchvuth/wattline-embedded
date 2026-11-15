@@ -168,7 +168,7 @@ static void parse_pps(br_t *b)
 	if (l0 > 31 || l1 > 31) die("PPS num_ref_idx > 32");
 	pps.num_ref_idx_l0_default_active_minus1 = l0; pps.num_ref_idx_l1_default_active_minus1 = l1;
 	if (u(b, 1)) pps.flags |= V4L2_H264_PPS_FLAG_WEIGHTED_PRED;
-	pps.weighted_bipred_idc = u(b, 2);
+	if ((pps.weighted_bipred_idc = u(b, 2)) > 2) die("PPS weighted_bipred_idc 3");
 	int qp = se(b), qs = se(b), cq = se(b);	/* the spec's ranges, checked before the narrow fields hold them */
 	if (qp < -26 || qp > 25 || qs < -26 || qs > 25 || cq < -12 || cq > 12) die("PPS QP %d / %d / %d out of range", qp, qs, cq);
 	pps.pic_init_qp_minus26 = qp; pps.pic_init_qs_minus26 = qs; pps.chroma_qp_index_offset = cq;
@@ -188,7 +188,7 @@ static void parse_pps(br_t *b)
 typedef struct {
 	struct v4l2_ctrl_h264_slice_params sl;
 	struct v4l2_ctrl_h264_decode_params dp;
-	int idr, ref;
+	int idr, ref, redundant;	/* redundant: a copy (redundant_pic_cnt > 0), skipped */
 	int lt;				/* an IDR's long_term_reference_flag */
 	int adaptive, nmmco;		/* adaptive_ref_pic_marking_mode_flag and its operations (5 is refused) */
 	struct { unsigned op, a, c; } mmco[32];	/* a: difference_of_pic_nums_minus1, long_term_pic_num or
@@ -201,9 +201,12 @@ static void parse_slice(br_t *b, int nal_type, int ref_idc, pic_t *p)
 {
 	memset(p, 0, sizeof *p);
 	p->idr = nal_type == 5; p->ref = ref_idc != 0;
+	if (p->idr && !p->ref) die("an IDR with nal_ref_idc 0");
 	b->pos = 8;	/* header_bit_size counts from the NAL header byte (the buffer starts there: START_CODE_NONE) */
 	if ((p->sl.first_mb_in_slice = ue(b))) die("several slices per picture: not in this spike decoder");
-	unsigned t = ue(b) % 5;
+	unsigned t = ue(b);
+	if (t > 9) die("slice_type %u", t);
+	t %= 5;
 	if (t != V4L2_H264_SLICE_TYPE_P && t != V4L2_H264_SLICE_TYPE_I) die("slice type %u: only I and P here", t);
 	p->sl.slice_type = t;
 	if (ue(b) != pps.pic_parameter_set_id) die("a second PPS: not in this spike decoder");
@@ -217,10 +220,13 @@ static void parse_slice(br_t *b, int nal_type, int ref_idc, pic_t *p)
 		if (pps.flags & V4L2_H264_PPS_FLAG_BOTTOM_FIELD_PIC_ORDER_IN_FRAME_PRESENT) p->dp.delta_pic_order_cnt_bottom = se(b);
 	}
 	p->dp.pic_order_cnt_bit_size = b->pos - poc0;
-	if ((pps.flags & V4L2_H264_PPS_FLAG_REDUNDANT_PIC_CNT_PRESENT) && ue(b)) die("redundant pictures: not in this spike decoder");
+	if ((pps.flags & V4L2_H264_PPS_FLAG_REDUNDANT_PIC_CNT_PRESENT) && ue(b)) {	/* a redundant copy: the primary picture */
+		p->redundant = 1; return;	/* never goes missing over TCP, so the copy is skipped, as the spec allows */
+	}
 	p->sl.num_ref_idx_l0_active_minus1 = pps.num_ref_idx_l0_default_active_minus1;
 	if (t == V4L2_H264_SLICE_TYPE_P) {
 		if (u(b, 1)) { unsigned n = ue(b); if (n > 31) die("slice num_ref_idx > 32"); p->sl.num_ref_idx_l0_active_minus1 = n; }
+		if (p->sl.num_ref_idx_l0_active_minus1 > 15) die("slice num_ref_idx %u > 16: frames take 16 at most", p->sl.num_ref_idx_l0_active_minus1 + 1);
 		if (u(b, 1)) for (;;) {	/* ref_pic_list_modification_flag_l0: at most one per active reference */
 			unsigned idc = ue(b);
 			if (idc == 3) break;
@@ -269,6 +275,7 @@ static void parse_slice(br_t *b, int nal_type, int ref_idc, pic_t *p)
 			p->sl.slice_alpha_c0_offset_div2 = al; p->sl.slice_beta_offset_div2 = be;
 		}
 	}
+	if (b->pos >= b->n * 8) die("slice header runs past the slice's data");	/* the engine would skip bits that are not there */
 	p->sl.header_bit_size = b->pos;
 	p->dp.nal_ref_idc = ref_idc;
 	if (p->idr) p->dp.flags |= V4L2_H264_DECODE_PARAM_FLAG_IDR_PIC;
@@ -281,14 +288,19 @@ static ref_t refs[17];	/* up to 16, and the picture just decoded until the list 
 static int nrefs, max_ltfi = -1, prev_frame_num, frame_num_offset, prev_poc_msb, prev_poc_lsb;	/* max_ltfi -1: none */
 static int prev_ref_fn = -1;	/* PrevRefFrameNum; -1 before the stream's first reference picture */
 
+static void gap_frames(int fn);
 static int calc_poc(pic_t *p)
 {
 	int max_fn = 1 << (sps.log2_max_frame_num_minus4 + 4);
 	if (p->idr) { prev_frame_num = 0; frame_num_offset = 0; prev_poc_msb = prev_poc_lsb = 0; nrefs = 0; }
-	/* frames only, no gaps (no "non-existing" frames are made), MMCO 5 refused: each picture after a reference one
-	 * carries its frame_num + 1 (a non-reference one repeats it for the next) */
-	if (!p->idr && prev_ref_fn >= 0 && p->dp.frame_num != (unsigned)((prev_ref_fn + 1) % max_fn))
-		die("frame_num %u after %d: a gap or a repeat, not in this spike decoder", p->dp.frame_num, prev_ref_fn);
+	/* frames only, MMCO 5 refused: each picture after a reference one carries its frame_num + 1 (a non-reference one
+	 * repeats it for the next). A gap the SPS allows gets its "non-existing" frames (gap_frames); a gap it does not
+	 * allow is a picture lost, and a repeat is wrong: both refused rather than decoded wrongly */
+	if (!p->idr && prev_ref_fn >= 0 && p->dp.frame_num != (unsigned)((prev_ref_fn + 1) % max_fn)) {
+		if (p->dp.frame_num == (unsigned)prev_ref_fn || !(sps.flags & V4L2_H264_SPS_FLAG_GAPS_IN_FRAME_NUM_VALUE_ALLOWED))
+			die("frame_num %u after %d: a repeat, or a gap the SPS does not allow", p->dp.frame_num, prev_ref_fn);
+		gap_frames((int)p->dp.frame_num);
+	}
 	if (p->ref) prev_ref_fn = p->dp.frame_num;
 	if (sps.pic_order_cnt_type == 0) {
 		int max_lsb = 1 << (sps.log2_max_pic_order_cnt_lsb_minus4 + 4), lsb = p->dp.pic_order_cnt_lsb, msb;
@@ -316,19 +328,50 @@ static int pic_num(const ref_t *r, int cur)
 static int find_ref(int lt, int num, int cur) { for (int i = 0; i < nrefs; i++) if (refs[i].lt == lt && pic_num(&refs[i], cur) == num) return i; return -1; }
 static void unmark(int i) { if (i >= 0) refs[i] = refs[--nrefs]; }
 
+/* the sliding window (8.2.5.3), once a frame joined the list: while it holds more than max_num_ref_frames, the oldest
+ * short-term frame (the smallest FrameNumWrap, seen from frame_num cur) goes; with none, a long-term one */
+static void slide(int cur)
+{
+	int max = sps.max_num_ref_frames ? sps.max_num_ref_frames : 1;
+	if (max > 16) max = 16;
+	while (nrefs > max) {
+		int lo = -1;
+		for (int i = 0; i < nrefs; i++) if (!refs[i].lt && (lo < 0 || pic_num(&refs[i], cur) < pic_num(&refs[lo], cur))) lo = i;
+		if (lo < 0) for (int i = 0; i < nrefs; i++) if (lo < 0 || refs[i].ltfi < refs[lo].ltfi) lo = i;
+		unmark(lo);
+	}
+}
+
+/* A frame_num gap the SPS allows (8.2.5.2): the frames it skipped are "non-existing", with no picture, yet each takes
+ * its place in the sliding window as in the encoder, so the frames kept, and their places in the list, stay the
+ * encoder's (one that drops pictures goes on from a long-term frame). In the DPB they are not valid, so the engine
+ * skips them; a conforming stream never refers to one. */
+static void gap_frames(int fn)
+{
+	int max_fn = 1 << (sps.log2_max_frame_num_minus4 + 4);
+	for (int f = (prev_ref_fn + 1) % max_fn; f != fn; f = (f + 1) % max_fn) {
+		refs[nrefs++] = (ref_t){ 0, f, 0, -1, 0, 0 };	/* cap -1: no picture */
+		slide(f);
+		prev_ref_fn = f;
+	}
+}
+
 /* fills dpb[] and ref_pic_list0 for this picture: the initial list (8.2.4.2.1: short-term by PicNum descending, then
  * long-term by LongTermPicNum ascending), then the slice's modifications (8.2.4.3) */
 static void fill_refs(pic_t *p)
 {
 	int max_fn = 1 << (sps.log2_max_frame_num_minus4 + 4), cur = p->dp.frame_num, list[34], n = 0;
+	int real = 0;	/* the frames with a picture (not "non-existing" ones) */
 	for (int i = 0; i < nrefs; i++) {
+		if (!refs[i].lt && refs[i].frame_num == cur) die("a short-term frame already has frame_num %d (kept for MaxFrameNum pictures)", cur);
+		real += refs[i].cap >= 0;
 		struct v4l2_h264_dpb_entry *e = &p->dp.dpb[i];
 		e->reference_ts = refs[i].ts;
 		e->frame_num = refs[i].lt ? refs[i].ltfi : refs[i].frame_num;	/* V4L2: long_term_frame_idx for a long-term one */
 		e->pic_num = pic_num(&refs[i], cur);
 		e->fields = V4L2_H264_FRAME_REF; e->top_field_order_cnt = e->bottom_field_order_cnt = refs[i].poc;
-		e->flags = V4L2_H264_DPB_ENTRY_FLAG_VALID | V4L2_H264_DPB_ENTRY_FLAG_ACTIVE |
-			   (refs[i].lt ? V4L2_H264_DPB_ENTRY_FLAG_LONG_TERM : 0);
+		e->flags = refs[i].cap < 0 ? 0 : V4L2_H264_DPB_ENTRY_FLAG_VALID | V4L2_H264_DPB_ENTRY_FLAG_ACTIVE |	/* non-existing: */
+			   (refs[i].lt ? V4L2_H264_DPB_ENTRY_FLAG_LONG_TERM : 0);	/* not valid, it has no picture */
 		int k = n++, pn = pic_num(&refs[i], cur);
 		while (k > 0) {	/* before list[k - 1]? short-term first, by PicNum down; then long-term, by number up */
 			const ref_t *o = &refs[list[k - 1]];
@@ -338,7 +381,7 @@ static void fill_refs(pic_t *p)
 		list[k] = i;
 	}
 	if (p->sl.slice_type != V4L2_H264_SLICE_TYPE_P) return;
-	if (!n) die("P picture with no reference");
+	if (!real) die("P picture with no reference");
 	int num = p->sl.num_ref_idx_l0_active_minus1 + 1, pred = cur;	/* picNumL0Pred starts at CurrPicNum */
 	for (int k = n; k <= num; k++) list[k] = -1;	/* "no reference picture" */
 	for (int m = 0; m < p->nmod; m++) {
@@ -355,8 +398,10 @@ static void fill_refs(pic_t *p)
 		int w = m + 1;
 		for (int k = m + 1; k <= num; k++) if (list[k] != want) list[w++] = list[k];
 	}
+	int first = -1;	/* the first frame in the list with a picture: what an empty or "non-existing" place names, so the */
+	for (int k = 0; k < n && first < 0; k++) if (refs[list[k]].cap >= 0) first = list[k];	/* engine never reads none */
 	for (int k = 0; k < num; k++) {
-		p->sl.ref_pic_list0[k].index = list[k] >= 0 ? list[k] : list[0];
+		p->sl.ref_pic_list0[k].index = list[k] >= 0 && refs[list[k]].cap >= 0 ? list[k] : first;
 		p->sl.ref_pic_list0[k].fields = V4L2_H264_FRAME_REF;
 	}
 }
@@ -366,22 +411,20 @@ static void fill_refs(pic_t *p)
  * FrameNumWrap), so a stream that marks more than max_num_ref_frames loses its oldest short-term frame, as in ffmpeg */
 static void add_ref(pic_t *p, uint64_t ts, int poc, int cap)
 {
-	int max = sps.max_num_ref_frames ? sps.max_num_ref_frames : 1, cur = p->dp.frame_num;
-	if (max > 16) max = 16;
+	int cur = p->dp.frame_num;
 	ref_t me = { ts, cur, poc, cap, 0, 0 };
 	int keep = 1;	/* the picture stays a reference (an MMCO after its own MMCO 6 may unmark it) */
 	if (p->idr) {	/* calc_poc emptied the list */
 		if (p->lt) me.lt = 1, max_ltfi = 0; else max_ltfi = -1;
 	} else for (int m = 0; m < p->nmmco; m++) {
 		int a = (int)p->mmco[m].a, c = (int)p->mmco[m].c, x = cur - (a + 1);	/* x: picNumX (8-39) */
-		switch (p->mmco[m].op) {
+		switch (p->mmco[m].op) {	/* (MMCO 3 and 6 take an index past MaxLongTermFrameIdx, as ffmpeg does: within 15) */
 		case 1: unmark(find_ref(0, x, cur)); break;
 		case 2:
 			if (me.lt && me.ltfi == a) keep = 0, me.lt = 0;	/* this picture, made long-term by an MMCO 6 before */
 			else unmark(find_ref(1, a, cur));
 			break;
 		case 3: {
-			if (c > max_ltfi) die("MMCO 3: LongTermFrameIdx %d past the maximum %d", c, max_ltfi);
 			if (me.lt && me.ltfi == c) keep = 0, me.lt = 0;	/* the index held by this picture (an MMCO 6 before) */
 			else unmark(find_ref(1, c, cur));
 			int s = find_ref(0, x, cur);	/* looked up after the unmark, which moves entries */
@@ -394,7 +437,6 @@ static void add_ref(pic_t *p, uint64_t ts, int poc, int cap)
 			if (me.lt && me.ltfi > max_ltfi) keep = 0, me.lt = 0;
 			break;
 		case 6:
-			if (c > max_ltfi) die("MMCO 6: LongTermFrameIdx %d past the maximum %d", c, max_ltfi);
 			unmark(find_ref(1, c, cur));
 			me.lt = 1, me.ltfi = c, keep = 1;
 			break;
@@ -402,12 +444,7 @@ static void add_ref(pic_t *p, uint64_t ts, int poc, int cap)
 	}
 	if (!keep) return;	/* unmarked by its own MMCOs: not a reference after all */
 	refs[nrefs++] = me;
-	while (nrefs > max) {	/* the oldest short-term frame (smallest FrameNumWrap) goes; with none, a long-term one */
-		int lo = -1;
-		for (int i = 0; i < nrefs; i++) if (!refs[i].lt && (lo < 0 || pic_num(&refs[i], cur) < pic_num(&refs[lo], cur))) lo = i;
-		if (lo < 0) for (int i = 0; i < nrefs; i++) if (lo < 0 || refs[i].ltfi < refs[lo].ltfi) lo = i;
-		unmark(lo);
-	}
+	slide(cur);
 }
 
 /* ---- the clip ---- */
@@ -437,6 +474,7 @@ static uint8_t rbsp[4096];
 static int next_pic(int i, pic_t *p, nal_t *out)
 {
 	for (; i < nnals; i++) {
+		if (!nals[i].n) continue;	/* a clip that ends in a start code */
 		int t = nals[i].p[0] & 0x1f, r = (nals[i].p[0] >> 5) & 3;
 		size_t full = t == 7 || t == 8;
 		br_t b = { rbsp, unescape(nals[i].p, nals[i].n, rbsp, full ? sizeof rbsp : 512), 8 };
@@ -444,7 +482,8 @@ static int next_pic(int i, pic_t *p, nal_t *out)
 		else if (t == 8) parse_pps(&b);
 		else if (t == 1 || t == 5) {
 			if (!have_sps || !have_pps) die("slice before SPS/PPS");
-			parse_slice(&b, t, r, p); *out = nals[i]; return i + 1;
+			parse_slice(&b, t, r, p); if (p->redundant) continue;
+			*out = nals[i]; return i + 1;
 		}
 	}
 	return -1;
@@ -738,6 +777,7 @@ static void dec_setup(dec_t *D, int show_each)
 		int isout = k < NOUT, i = isout ? k : k - NOUT;
 		struct v4l2_buffer b = { .type = isout ? V4L2_BUF_TYPE_VIDEO_OUTPUT : V4L2_BUF_TYPE_VIDEO_CAPTURE, .memory = V4L2_MEMORY_MMAP, .index = i };
 		if (ioctl(D->vfd, VIDIOC_QUERYBUF, &b)) die("QUERYBUF: %s", strerror(errno));
+		if (!isout && b.length < (size_t)D->stride * D->ah * 3 / 2) die("capture buffer of %u bytes: the NV12 picture needs %d", b.length, D->stride * D->ah * 3 / 2);
 		struct buf *x = isout ? &D->out[i] : &D->cap[i];
 		x->n = b.length; x->p = mmap(NULL, b.length, PROT_READ | PROT_WRITE, MAP_SHARED, D->vfd, b.m.offset);
 		if (x->p == MAP_FAILED) die("mmap: %s", strerror(errno));
@@ -850,13 +890,14 @@ static int dec_one(dec_t *D, pic_t *p, nal_t *s)
 	struct pollfd pf = { .fd = D->rq, .events = POLLPRI };
 	if (poll(&pf, 1, 2000) != 1) die("frame %d: the video engine did not finish within 2 s", D->frames);
 	if (ioctl(D->vfd, VIDIOC_DQBUF, &bo) || ioctl(D->vfd, VIDIOC_DQBUF, &bc)) die("DQBUF: %s", strerror(errno));
-	if (bc.flags & V4L2_BUF_FLAG_ERROR) D->errors++;
+	int bad = !!(bc.flags & V4L2_BUF_FLAG_ERROR);	/* the engine flagged the picture: counted, not shown live */
+	D->errors += bad;
 	if (ioctl(D->rq, MEDIA_REQUEST_IOC_REINIT)) die("MEDIA_REQUEST_IOC_REINIT: %s", strerror(errno));
 	if (p->ref) add_ref(p, ts, poc, ci);
 	D->frames++;
-	D->newest_ci = ci;	/* decode order, not POC order: fine for the display (AA sends IPPP, no reorder) */
+	if (!bad) D->newest_ci = ci;	/* decode order, not POC order: fine for the display (AA sends IPPP, no reorder) */
 	if (fb_fd >= 0 && D->show_each) D->last_ci = ci, fb_show(D);
-	else if (fb_fd >= 0) {   /* the live stream: in the queue to show; when it is full (the screen behind), the oldest is dropped */
+	else if (fb_fd >= 0 && !bad) {   /* the live stream: in the queue to show; when it is full (the screen behind), the oldest is dropped */
 		if (D->npend == 2) D->pend[0] = D->pend[1], D->npend = 1;
 		D->pend[D->npend++] = ci;
 	}
@@ -938,7 +979,7 @@ static void process_nal(const uint8_t *p, size_t n, dec_t *D, int *set)
 		if (!*set) { dec_setup(D, 0); *set = 1; }
 		pic_t p2; nal_t s = { p, n };
 		parse_slice(&b, t, r, &p2);
-		dec_one(D, &p2, &s);
+		if (!p2.redundant) dec_one(D, &p2, &s);
 	}
 }
 
@@ -985,6 +1026,7 @@ static void show_next(dec_t *D, double *last_show_t, int *vis, double *reshow_at
 	if (!v) { D->npend = 0; return; }   /* not on screen: nothing to catch up on (newest_ci is shown when it comes back) */
 	D->last_ci = D->pend[0], D->pend[0] = D->pend[1], D->npend--;
 	*last_show_t = now(), fb_show(D);   /* the gap from this show's start: its own time counts in it */
+	if (*reshow_at && *last_show_t >= *reshow_at) *reshow_at = 0;   /* drawn after the UI's repaint: no reshow needed */
 }
 static int decode_stream(int fd)
 {
