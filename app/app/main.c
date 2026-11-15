@@ -28,7 +28,6 @@ static uint32_t frame(void *ctx) {
 static int64_t idle(void *ctx) { (void)ctx; return lv_display_get_inactive_time(NULL); }
 static void show_settings(void *ctx) { (void)ctx; dash_ui_settings(&app_settings); }
 static void ask_car(void *ctx) { (void)ctx; dash_ui_ask_car(); }
-lv_timer_t *lv_anim_get_timer(void);   // lv_anim.c's: LVGL 9.6 declares it in no header
 // LVGL redraws, reads the touch and steps its animations at the dash's frame rate. It runs only from the dash's frame, so
 // its timers are set to half the frame: at a full one, every frame that starts a millisecond early is skipped.
 static void frame_ms(void *ctx, int ms) {
