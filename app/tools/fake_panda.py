@@ -40,7 +40,7 @@ def load_signals():
     h = os.path.join(ROOT, 'build', 'signals_gen.h')
     if not os.path.exists(h):
         subprocess.run([sys.executable, '-I', os.path.join(ROOT, 'tools', 'gen_signals.py'),
-                        os.path.join(ROOT, '..', 'tesla-dash'), os.path.join(ROOT, 'build')], check=True)
+                        os.path.join(ROOT, '..', 'wattline'), os.path.join(ROOT, 'build')], check=True)
     src = open(h).read()
     src = src[src.index('kSignals[] = {'):src.index('};', src.index('kSignals[] = {'))]
     rows = re.findall(r'\{"(\w+)", 0x([0-9A-F]+), (\d+), (\d+), ([-\d.e]+), ([-\d.e]+), (\d), (-?\d+), (-?\d+), (\d+), (\d+)\}', src)

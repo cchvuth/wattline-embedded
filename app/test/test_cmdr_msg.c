@@ -1,4 +1,4 @@
-// pb + cmdr_msg against the hex vectors of test/commander_test.dart (tesla-dash 1.3.0).
+// pb + cmdr_msg against the hex vectors of test/commander_test.dart (wattline 1.3.0).
 #include "../core/cmdr_msg.h"
 #include "../core/pb.h"
 #include <assert.h>

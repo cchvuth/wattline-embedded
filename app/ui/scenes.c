@@ -1,4 +1,4 @@
-/* The app's demo scenes (tesla-dash test/dash_shot_test.dart), as the values the dash shows. The derived figures
+/* The app's demo scenes (wattline test/dash_shot_test.dart), as the values the dash shows. The derived figures
  * (range in km, kWh, arrival, climate draw, degradation) are what the app works out from each scene's frames. */
 #include "scenes.h"
 #include <math.h>

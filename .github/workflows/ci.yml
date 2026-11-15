@@ -6,7 +6,7 @@ name: CI
 #
 # The app's signal tables are generated from the Flutter app repo (cchvuth/wattline:
 # lib/signals.dart, test/obd_test.dart). CI checks that out next to the repo so app/'s
-# `../tesla-dash` path resolves. If that repo is private, add a repo secret WATTLINE_TOKEN
+# `../wattline` path resolves. If that repo is private, add a repo secret WATTLINE_TOKEN
 # (a PAT with read access); if it is public the default token is enough.
 
 on:
@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: cchvuth/wattline
-          path: tesla-dash            # app/ Makefile reads ../tesla-dash/lib/signals.dart
+          path: wattline              # app/ Makefile reads ../wattline/lib/signals.dart
           token: ${{ secrets.WATTLINE_TOKEN || github.token }}
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential python3

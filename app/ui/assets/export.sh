@@ -4,7 +4,7 @@
 # glyphs, car pictures or lights change. Needs flutter and python3 with Pillow.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-APP=${APP:-$HOME/projs/tesla-dash}
+APP=${APP:-$HOME/projs/wattline}
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 rsync -a --exclude build --exclude .git --exclude android/.gradle --exclude ios/Pods --exclude t113 "$APP"/ "$TMP"/
 cp "$HERE/export_parts.dart" "$TMP/lib/"

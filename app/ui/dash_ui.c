@@ -1,4 +1,4 @@
-/* The dash in LVGL: the tesla-dash app's look (lib/main.dart, widgets.dart, gauge.dart, glyphs.dart), arranged
+/* The dash in LVGL: the wattline app's look (lib/main.dart, widgets.dart, gauge.dart, glyphs.dart), arranged
  * for the Dash's trapezoid screen (PLAN-merged.md 5.2). Sizes are the app's, in dp, through px() (1.25 px per dp
  * at H = 480); the app's names are kept in comments so each piece can be checked against its widget. The icons
  * and car pictures are the app's own renders (ui/assets/export.sh), the text is Roboto through tiny_ttf. */
@@ -1882,7 +1882,7 @@ static void project_build(void)
 	place(div, sx, 0, px(1), G.H);
 	fill(div, W24);
 
-	/* The compact dash (tesla-dash _Compact), fitted to the short strip: the gear and the battery on top, the real
+	/* The compact dash (wattline _Compact), fitted to the short strip: the gear and the battery on top, the real
 	 * ring centred, the assist state and a nav / charge line below. The ring, the assist disc and the air outside are
 	 * the dash's own objects, moved here while projecting (dash_ui_show). */
 	pj_gear = label(project, FS(BOLD, 28, UI_S_RING), WHITE);

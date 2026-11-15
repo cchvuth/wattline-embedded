@@ -30,7 +30,7 @@ No certificate ships with the Dash, and none is generated: the on-screen **Andro
 
 ### Dash app (`app/`)
 
-1. The signal tables are generated from the Flutter app ([cchvuth/wattline](https://github.com/cchvuth/wattline)): clone it as `tesla-dash/` in the repo root (next to `app/`, as CI does), then `make -C app -f app.mk build/signals_gen.h`.
+1. The signal tables are generated from the Flutter app ([cchvuth/wattline](https://github.com/cchvuth/wattline)): clone it as `wattline/` in the repo root (next to `app/`, as CI does), then `make -C app -f app.mk build/signals_gen.h`.
 2. LVGL is vendored but gitignored: `git clone --depth 1 -b v9.6.0 https://github.com/lvgl/lvgl app/third_party/lvgl-9.6.0`.
 3. Host: `mkdir -p app/build && make -C app test` (unit tests) and `make -C app -f app.mk host` (the UI on the desktop).
 4. ARM, with the firmware's Buildroot toolchain: `make -C app -f app.mk ARM_CC=<buildroot>/host/bin/arm-buildroot-linux-gnueabihf-gcc CMDR=1 arm` → `app/build/arm-app-cmdr/dash` (and `dash.stripped`). Use the toolchain of the tree that built it: a copied/relocated Buildroot host tree fails to link libc, even with `--sysroot`.

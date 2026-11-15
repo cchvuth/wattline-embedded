@@ -1,11 +1,11 @@
 #!/bin/sh
-# The Dash UI's reference images: the current tesla-dash app's own dash scenes
+# The Dash UI's reference images: the current wattline app's own dash scenes
 # (test/dash_shot_test.dart), rendered at the Dash canvas 1920x480 px = 1536x384 dp at dpr 1.25.
 # Works on a scratch copy; the app repo is only read. Output: test/goldens/<app-commit>/*.png
 # Rerun whenever the app's UI changes; the native UI is matched against the newest set.
 set -e
 W=${W:-1536}   # canvas width in dp at 1.25 px/dp; set to the visible top width / 1.25 once C-disp measures the trapezoid (5.2)
-APP=${APP:-$HOME/projs/tesla-dash}
+APP=${APP:-$HOME/projs/wattline}
 REV=$(git -C "$APP" describe --always --dirty)
 OUT=$(cd "$(dirname "$0")/.." && pwd)/test/goldens/$REV-w$W
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
