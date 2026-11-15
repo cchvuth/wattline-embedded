@@ -60,13 +60,14 @@ newer() { echo "$1 $2" | awk '{ n = split($1, a, "."); split($2, b, "."); for (i
 p1_dev() { [ -n "${DASH_UPDATE_P1:-}" ] && echo "$DASH_UPDATE_P1" && return; for d in /sys/block/mmcblk[0-9]; do [ "$(cat $d/device/type 2>/dev/null)" = SD ] && echo /dev/${d##*/}p1 && return; done; return 1; }
 ota_read() {   # ota.txt -> the variables slot good trial bootcount failed
 	slot=; good=; trial=; bootcount=; failed=
-	D=$(p1_dev) || return 1; mkdir -p $P1MNT; mount -o ro "$D" $P1MNT 2>/dev/null || return 1
+	D=$(p1_dev) || return 1; mkdir -p $P1MNT; mount -o ro "$D" $P1MNT 2>/dev/null || { sleep 1; mount -o ro "$D" $P1MNT 2>/dev/null; } || return 1
 	# U-Boot's env export -t may end the file with a NUL (grep would call it binary): strip NULs and CRs first
 	[ -f $P1MNT/ota.txt ] && eval "$(tr -d '\r\000' < $P1MNT/ota.txt | grep -E '^(slot|good|trial|bootcount|failed)=[A-Za-z0-9]*$')"
 	umount $P1MNT
 }
 ota_write() {  # ota_write SLOT GOOD TRIAL BOOTCOUNT: rewrite ota.txt on p1 (U-Boot's env import -t format)
-	D=$(p1_dev) || return 1; mkdir -p $P1MNT; mount -o rw "$D" $P1MNT || return 1
+	# a read-only mount of p1 beside it (dash-update watch takes no lock) makes the kernel refuse this one for a moment
+	D=$(p1_dev) || return 1; mkdir -p $P1MNT; mount -o rw "$D" $P1MNT 2>/dev/null || { sleep 1; mount -o rw "$D" $P1MNT; } || return 1
 	{ [ -n "$1" ] && echo "slot=$1"; [ -n "$2" ] && echo "good=$2"; [ -n "$3" ] && echo "trial=$3"; echo "bootcount=$4"; } > $P1MNT/ota.txt.new &&
 		mv $P1MNT/ota.txt.new $P1MNT/ota.txt
 	r=$?; sync; umount $P1MNT; return $r
@@ -218,8 +219,9 @@ cmd_confirm() {
 	fi
 	if [ "$slot" = "$B" ]; then   # this start is the trial: it ran healthy, keep it, if it found its /data (else it
 		grep -q '^[^ ]* /data ext4 ' $MOUNTS || { status trial "this version did not mount /data: not kept"; return 0; }   # rolls back)
-		ota_write "$B" "$B" "" 0 && log "slot $B confirmed ($(current_version))" && status ok "updated to $(current_version)"
-		[ -f $OTA/failed ] && grep -vx "$(current_version)" $OTA/failed > $OTA/failed.new; mv -f $OTA/failed.new $OTA/failed 2>/dev/null   # it starts after all
+		ota_write "$B" "$B" "" 0 || fail "cannot write ota.txt: this start not confirmed yet"   # S99ota tries again
+		log "slot $B confirmed ($(current_version))"; status ok "updated to $(current_version)"
+		if [ -f $OTA/failed ]; then grep -vx "$(current_version)" $OTA/failed > $OTA/failed.new; mv -f $OTA/failed.new $OTA/failed; fi   # it starts after all
 	elif [ "${bootcount:-0}" = 0 ]; then   # armed just now (Install in the first half minute): the next power-up
 		LATEST=$(cat "$SLOTS/$slot/version" 2>/dev/null); status armed "starts at the next power-up"
 	else                          # the trial slot did not start this time (factory fell in): U-Boot keeps counting
@@ -228,13 +230,17 @@ cmd_confirm() {
 }
 
 # A version that hangs before the dash comes up, or never runs healthy, would leave a dark screen for 3 drives before
-# U-Boot rolls it back: a start still on trial this long after it began is restarted, and U-Boot counts it. Its own
-# mount point: it takes no lock (a hung dash-update holding it must not keep this from acting).
+# U-Boot rolls it back: a start still on trial this long after it began, its dash not running healthy, is restarted,
+# and U-Boot counts it. A healthy one that could not be confirmed (no /data, a card dropping writes) is left running:
+# U-Boot counts it at the next power-up. Its own mount point and no lock (a hung dash-update must not stop this).
+dash_starts() { grep -c " start$" /data/log/dash.out 2>/dev/null; }   # the supervisor logs each (re)start of the dash
 cmd_watch() {
 	P1MNT=$P1MNT.watch; B=$(booted_slot)
 	[ -n "$B" ] && ota_read && [ -n "$trial" ] && [ "$slot" = "$B" ] || return 0
-	log "slot $B ($(current_version)) not confirmed 4 min after its start: restarting (U-Boot counts the start)"
-	(sync &); sleep 2; reboot -f
+	r=$(dash_starts); sleep 15
+	pidof dash >/dev/null && [ "$(dash_starts)" = "$r" ] && { log "slot $B on trial, unconfirmed, but its dash runs: left be"; return 0; }
+	log "slot $B ($(current_version)) not confirmed 4 min after its start, its dash not running healthy: restarting (U-Boot counts the start)"
+	(sync &); sleep 2; reboot -nf   # -n: a sync stuck on a failing card must not hold the restart
 }
 
 # only the newest release itself: a slot left holding another version (one that failed, from a release pulled since)

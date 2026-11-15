@@ -15,12 +15,14 @@ cp "$EXT/board/dash/rootfs_overlay_r4/usr/sbin/dash-update" $W/dash-update
 # shims: p1 is a folder; the Wi-Fi network is $SSID; nothing touches a real clock or reboots
 cat > $W/bin/mount <<'EOF'
 #!/bin/sh
+case "$*" in *"-o rw"*) [ -n "${RW_FAIL:-}" ] && exit 32 ;; esac   # RW_FAIL: p1 cannot be mounted to write
 eval "dir=\${$#}"; eval "dev=\${$(($# - 1))}"; rmdir "$dir" 2>/dev/null; ln -sfn "$dev" "$dir"
 EOF
 printf '#!/bin/sh\nrm -f "$1"\n' > $W/bin/umount
 printf '#!/bin/sh\necho "wpa_state=COMPLETED"; echo "ssid=${SSID:-home}"\n' > $W/bin/wpa_cli
 printf '#!/bin/sh\nexit 0\n' > $W/bin/hwclock
 printf '#!/bin/sh\necho REBOOT >> /tmp/dut/rebooted\n' > $W/bin/reboot
+printf '#!/bin/sh\n[ -n "${DASH_UP:-}" ]\n' > $W/bin/pidof   # the dash runs when DASH_UP is set
 chmod +x $W/bin/*
 
 # a throwaway signing key (the image's public half where dash-update looks for it)
@@ -130,8 +132,10 @@ upd install
 check "a lock left by a dead run: taken over"       "$(state) $([ -d /run/dash-update.lock ] && echo left)" "armed "
 
 reset "slot=B good=A trial=1 bootcount=1" "dash.slot=B"
-upd confirm
-check "confirm: the trial start kept"               "$(state) $(ota)" "ok bootcount=0 good=B slot=B "
+RW_FAIL=1 upd confirm; R=$?
+check "confirm with ota.txt unwritable: says it did not" "$R $(state) $(ota)" "1 error bootcount=1 good=A slot=B trial=1 "
+upd confirm; R=$?
+check "confirm: the trial start kept"               "$(state) $(ota) $R" "ok bootcount=0 good=B slot=B  0"
 
 reset "slot=A good=A bootcount=0 failed=B" "dash.slot=A"; mkdir -p /data/boot/B; echo 0.4.0 > /data/boot/B/version
 upd confirm
@@ -195,6 +199,9 @@ check "a retry of a failed version: fetched and checked anew" "$(state) $(cat /d
 reset "slot=B good=A trial=1 bootcount=1" "dash.slot=B"
 upd watch
 check "watch: this start on trial, unconfirmed: restarted" "$(cat $W/rebooted 2>/dev/null) $(ota)" "REBOOT bootcount=1 good=A slot=B trial=1 "
+reset "slot=B good=A trial=1 bootcount=1" "dash.slot=B"
+DASH_UP=1 upd watch
+check "watch: on trial, unconfirmed, the dash running: left be" "[$(cat $W/rebooted 2>/dev/null)]" "[]"
 reset "slot=B good=B bootcount=0" "dash.slot=B"
 upd watch
 check "watch: a confirmed start: left be"            "[$(cat $W/rebooted 2>/dev/null)]" "[]"

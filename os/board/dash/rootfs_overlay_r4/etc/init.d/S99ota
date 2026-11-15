@@ -11,9 +11,8 @@ healthy() { r=$(starts); sleep 15; pidof dash >/dev/null && [ "$(starts)" = "$r"
 	# looked at for up to 1.5 min (a dash that crashed once at the start may settle), well before S00trial's 4 min
 	for t in 1 2 3 4 5 6; do
 		healthy || continue
-		for i in 1 2 3 4 5 6; do   # a Check or Install the user tapped may hold the lock: confirm once it is free
+		for i in 1 2 3 4 5 6; do   # until it says so: a Check the user tapped may hold the lock, a write may fail once
 			dash-update confirm && break
-			[ -d /run/dash-update.lock ] || break
 			sleep 10
 		done
 		break

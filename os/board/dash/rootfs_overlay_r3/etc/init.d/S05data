@@ -18,7 +18,8 @@ if [ -n "$D" ] && [ -b ${D}p3 ]; then
 	if [ ${#m} = 4 ] && [ "$m" != 53ef ] && { e2fsck -fy ${D}p3 >/dev/null 2>&1; [ $? -ge 4 ]; }; then
 		mkfs.ext4 -F -q -L DASHDATA2 ${D}p3 </dev/null && echo "data: ${D}p3 had no filesystem: made one"
 	fi
-	fsck.ext4 -p ${D}p3; r=$?   # 0 clean, 1/2 fixed, 4+ not fixed: leave it alone
+	fsck.ext4 -p ${D}p3; r=$?   # 0 clean, 1/2 fixed, 4+ not fixed by preen: then answered yes (as dash-mkdata does),
+	[ $r -ge 4 ] && { e2fsck -fy ${D}p3 </dev/null; r=$?; }   # else /data would stay in RAM at every start for good
 	if [ $r -lt 4 ] && mount -t ext4 -o noatime ${D}p3 /data; then echo "data: ${D}p3 on /data (fsck $r)"
 	else echo "data: ${D}p3 not mounted (fsck $r): /data in RAM"; fi
 else
