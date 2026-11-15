@@ -4,8 +4,9 @@
 // plus a CPU estimate of the projection's rotate (NV12 1280x480 -> the portrait panel's BGRA, 90 degrees).
 //
 // Not a general decoder (Phase 1 needs one): one slice per picture, I and P only (no B), frames only, no
-// ref list modification, no MMCO, no weighted prediction, no scaling matrices, POC types 0 and 2. The spike
-// clips are encoded to fit (br-r4.sh). Anything else is refused with a message, never decoded wrongly.
+// weighted prediction, no scaling matrices, POC types 0 and 2. Long-term references, their MMCOs (all but 5) and
+// list modifications are in (some phones' encoders use them for error resilience). The spike clips are encoded to
+// fit (br-r4.sh). Anything else is refused with a message, never decoded wrongly.
 //
 //   spike-vdec                   every /usr/share/spike/*.h264: timed decode, verify, then the rotate estimate
 //   spike-vdec FILE.h264 ...     the same for these clips (FILE.crc next to it: per-frame CRC-32 reference)
@@ -81,18 +82,33 @@ static struct v4l2_ctrl_h264_sps sps;
 static struct v4l2_ctrl_h264_pps pps;
 static int have_sps, have_pps, crop_w, crop_h, crop_x, crop_y;
 
+/* YUV -> RGB in 8.8 fixed point, R = cy (Y - oy) + crv V', G = cy (Y - oy) - cgu U' - cgv V', B = cy (Y - oy) + cbu U':
+ * as the SPS's VUI says (limited range and BT.601 when it says nothing; some phones send full-range BT.601) */
+static int cy = 298, oy = 16, crv = 409, cgu = 100, cgv = 208, cbu = 516;
+static void yuv_coef(int full, int bt709)
+{
+	static const int k[4][6] = {
+		{ 298, 16, 409, 100, 208, 516 },	/* BT.601, limited */
+		{ 256,  0, 359,  88, 183, 454 },	/* BT.601, full */
+		{ 298, 16, 459,  55, 136, 541 },	/* BT.709, limited */
+		{ 256,  0, 403,  48, 120, 475 },	/* BT.709, full */
+	};
+	const int *c = k[2 * !!bt709 + !!full];
+	cy = c[0], oy = c[1], crv = c[2], cgu = c[3], cgv = c[4], cbu = c[5];
+}
+
 static void parse_sps(br_t *b)
 {
 	memset(&sps, 0, sizeof sps);
 	sps.profile_idc = u(b, 8); sps.constraint_set_flags = u(b, 8); sps.level_idc = u(b, 8);
-	sps.seq_parameter_set_id = ue(b);
+	unsigned id = ue(b);	/* each value range-checked before a narrow field holds it (stored, 256 would read as 0) */
+	if (id > 31) die("SPS id %u > 31", id);
+	sps.seq_parameter_set_id = id;
 	sps.chroma_format_idc = 1;
 	switch (sps.profile_idc) {
 	case 100: case 110: case 122: case 244: case 44: case 83: case 86: case 118: case 128: case 138: case 139: case 134: case 135:
-		sps.chroma_format_idc = ue(b);
-		if (sps.chroma_format_idc != 1) die("only 4:2:0");
-		sps.bit_depth_luma_minus8 = ue(b); sps.bit_depth_chroma_minus8 = ue(b);
-		if (sps.bit_depth_luma_minus8 || sps.bit_depth_chroma_minus8) die("only 8-bit");
+		if (ue(b) != 1) die("only 4:2:0");	/* (chroma_format_idc 1 as set above) */
+		if (ue(b) || ue(b)) die("only 8-bit");	/* bit_depth_luma_minus8, bit_depth_chroma_minus8 (left 0) */
 		if (u(b, 1)) sps.flags |= V4L2_H264_SPS_FLAG_QPPRIME_Y_ZERO_TRANSFORM_BYPASS;
 		if (u(b, 1)) die("SPS scaling matrices: not in this spike decoder");
 	}
@@ -101,7 +117,8 @@ static void parse_sps(br_t *b)
 	unsigned v;
 	if ((v = ue(b)) > 12) die("SPS log2_max_frame_num_minus4 %u > 12", v);
 	sps.log2_max_frame_num_minus4 = v;
-	sps.pic_order_cnt_type = ue(b);
+	if ((v = ue(b)) > 2) die("SPS pic_order_cnt_type %u", v);
+	sps.pic_order_cnt_type = v;
 	if (sps.pic_order_cnt_type == 0) {
 		if ((v = ue(b)) > 12) die("SPS log2_max_pic_order_cnt_lsb_minus4 %u > 12", v);
 		sps.log2_max_pic_order_cnt_lsb_minus4 = v;
@@ -122,22 +139,36 @@ static void parse_sps(br_t *b)
 	if (cl >= fw || cr >= fw || ct >= fh || cb >= fh || 2 * (cl + cr) >= fw || 2 * (ct + cb) >= fh) die("SPS crop outside the frame");
 	crop_x = (int)(2 * cl); crop_y = (int)(2 * ct);
 	crop_w = (int)(fw - 2 * (cl + cr)); crop_h = (int)(fh - 2 * (ct + cb));
+	int full = 0, bt709 = 0;
+	if (u(b, 1)) {	/* vui_parameters_present_flag: read up to the video signal type */
+		if (u(b, 1) && u(b, 8) == 255) u(b, 16), u(b, 16);	/* aspect_ratio_idc, Extended_SAR's width and height */
+		if (u(b, 1)) u(b, 1);					/* overscan_appropriate_flag */
+		if (u(b, 1)) {						/* video_signal_type_present_flag */
+			u(b, 3); full = u(b, 1);			/* video_format, video_full_range_flag */
+			if (u(b, 1)) { u(b, 8); u(b, 8); bt709 = u(b, 8) == 1; }	/* primaries, transfer, matrix_coefficients */
+		}
+	}
+	yuv_coef(full, bt709);
 	have_sps = 1;
 }
 
 static void parse_pps(br_t *b)
 {
 	memset(&pps, 0, sizeof pps);
-	pps.pic_parameter_set_id = ue(b); pps.seq_parameter_set_id = ue(b);
+	unsigned pid = ue(b), sid = ue(b), v, l0, l1;	/* range-checked before the narrow fields hold them */
+	if (pid > 255 || sid > 31) die("PPS id %u / SPS id %u out of range", pid, sid);
+	pps.pic_parameter_set_id = pid; pps.seq_parameter_set_id = sid;
 	if (u(b, 1)) pps.flags |= V4L2_H264_PPS_FLAG_ENTROPY_CODING_MODE;
 	if (u(b, 1)) pps.flags |= V4L2_H264_PPS_FLAG_BOTTOM_FIELD_PIC_ORDER_IN_FRAME_PRESENT;
-	if ((pps.num_slice_groups_minus1 = ue(b))) die("slice groups: not in this spike decoder");
-	pps.num_ref_idx_l0_default_active_minus1 = ue(b); pps.num_ref_idx_l1_default_active_minus1 = ue(b);
-	if (pps.num_ref_idx_l0_default_active_minus1 > 31 || pps.num_ref_idx_l1_default_active_minus1 > 31) die("PPS num_ref_idx > 32");
+	if ((v = ue(b))) die("slice groups: not in this spike decoder");
+	l0 = ue(b); l1 = ue(b);
+	if (l0 > 31 || l1 > 31) die("PPS num_ref_idx > 32");
+	pps.num_ref_idx_l0_default_active_minus1 = l0; pps.num_ref_idx_l1_default_active_minus1 = l1;
 	if (u(b, 1)) pps.flags |= V4L2_H264_PPS_FLAG_WEIGHTED_PRED;
 	pps.weighted_bipred_idc = u(b, 2);
-	pps.pic_init_qp_minus26 = se(b); pps.pic_init_qs_minus26 = se(b);
-	pps.chroma_qp_index_offset = se(b);
+	int qp = se(b), qs = se(b), cq = se(b);	/* the spec's ranges, checked before the narrow fields hold them */
+	if (qp < -26 || qp > 25 || qs < -26 || qs > 25 || cq < -12 || cq > 12) die("PPS QP %d / %d / %d out of range", qp, qs, cq);
+	pps.pic_init_qp_minus26 = qp; pps.pic_init_qs_minus26 = qs; pps.chroma_qp_index_offset = cq;
 	if (u(b, 1)) pps.flags |= V4L2_H264_PPS_FLAG_DEBLOCKING_FILTER_CONTROL_PRESENT;
 	if (u(b, 1)) pps.flags |= V4L2_H264_PPS_FLAG_CONSTRAINED_INTRA_PRED;
 	if (u(b, 1)) pps.flags |= V4L2_H264_PPS_FLAG_REDUNDANT_PIC_CNT_PRESENT;
@@ -145,7 +176,8 @@ static void parse_pps(br_t *b)
 	if (more_rbsp_data(b)) {
 		if (u(b, 1)) pps.flags |= V4L2_H264_PPS_FLAG_TRANSFORM_8X8_MODE;
 		if (u(b, 1)) die("PPS scaling matrices: not in this spike decoder");
-		pps.second_chroma_qp_index_offset = se(b);
+		if ((cq = se(b)) < -12 || cq > 12) die("PPS second_chroma_qp_index_offset %d out of range", cq);
+		pps.second_chroma_qp_index_offset = cq;
 	}
 	have_pps = 1;
 }
@@ -154,6 +186,12 @@ typedef struct {
 	struct v4l2_ctrl_h264_slice_params sl;
 	struct v4l2_ctrl_h264_decode_params dp;
 	int idr, ref;
+	int lt;				/* an IDR's long_term_reference_flag */
+	int adaptive, nmmco;		/* adaptive_ref_pic_marking_mode_flag and its operations (5 is refused) */
+	struct { unsigned op, a, c; } mmco[32];	/* a: difference_of_pic_nums_minus1, long_term_pic_num or
+						 * max_long_term_frame_idx_plus1; c: long_term_frame_idx */
+	int nmod;			/* ref_pic_list_modification, list 0 */
+	struct { unsigned idc, v; } mod[33];	/* v: abs_diff_pic_num_minus1 (idc 0, 1) or long_term_pic_num (2) */
 } pic_t;
 
 static void parse_slice(br_t *b, int nal_type, int ref_idc, pic_t *p)
@@ -166,35 +204,66 @@ static void parse_slice(br_t *b, int nal_type, int ref_idc, pic_t *p)
 	if (t != V4L2_H264_SLICE_TYPE_P && t != V4L2_H264_SLICE_TYPE_I) die("slice type %u: only I and P here", t);
 	p->sl.slice_type = t;
 	if (ue(b) != pps.pic_parameter_set_id) die("a second PPS: not in this spike decoder");
+	if (pps.seq_parameter_set_id != sps.seq_parameter_set_id) die("the PPS names SPS %u, the stream's is %u: not in this spike decoder",
+		pps.seq_parameter_set_id, sps.seq_parameter_set_id);
 	p->dp.frame_num = u(b, sps.log2_max_frame_num_minus4 + 4);
-	if (p->idr) p->dp.idr_pic_id = ue(b);
+	if (p->idr) { unsigned id = ue(b); if (id > 65535) die("idr_pic_id %u > 65535", id); p->dp.idr_pic_id = id; }
 	size_t poc0 = b->pos;
 	if (sps.pic_order_cnt_type == 0) {
 		p->dp.pic_order_cnt_lsb = u(b, sps.log2_max_pic_order_cnt_lsb_minus4 + 4);
 		if (pps.flags & V4L2_H264_PPS_FLAG_BOTTOM_FIELD_PIC_ORDER_IN_FRAME_PRESENT) p->dp.delta_pic_order_cnt_bottom = se(b);
 	}
 	p->dp.pic_order_cnt_bit_size = b->pos - poc0;
-	if (pps.flags & V4L2_H264_PPS_FLAG_REDUNDANT_PIC_CNT_PRESENT) p->sl.redundant_pic_cnt = ue(b);
+	if ((pps.flags & V4L2_H264_PPS_FLAG_REDUNDANT_PIC_CNT_PRESENT) && ue(b)) die("redundant pictures: not in this spike decoder");
 	p->sl.num_ref_idx_l0_active_minus1 = pps.num_ref_idx_l0_default_active_minus1;
 	if (t == V4L2_H264_SLICE_TYPE_P) {
 		if (u(b, 1)) { unsigned n = ue(b); if (n > 31) die("slice num_ref_idx > 32"); p->sl.num_ref_idx_l0_active_minus1 = n; }
-		if (u(b, 1)) die("ref pic list modification: not in this spike decoder");
+		if (u(b, 1)) for (;;) {	/* ref_pic_list_modification_flag_l0: at most one per active reference */
+			unsigned idc = ue(b);
+			if (idc == 3) break;
+			if (idc > 2) die("modification_of_pic_nums_idc %u", idc);
+			if (p->nmod > (int)p->sl.num_ref_idx_l0_active_minus1) die("more list modifications than references");
+			unsigned v = ue(b);	/* abs_diff_pic_num_minus1 < MaxPicNum; a frame's LongTermPicNum <= 15 */
+			if (idc < 2 ? v >= 1u << (sps.log2_max_frame_num_minus4 + 4) : v > 15) die("list modification %u: %u out of range", idc, v);
+			p->mod[p->nmod].idc = idc, p->mod[p->nmod++].v = v;
+		}
 		if (pps.flags & V4L2_H264_PPS_FLAG_WEIGHTED_PRED) die("weighted prediction: not in this spike decoder");
 	}
 	if (p->ref) {
 		size_t m0 = b->pos;
-		if (p->idr) { u(b, 1); if (u(b, 1)) die("long-term references: not in this spike decoder"); }
-		else if (u(b, 1)) die("MMCO: not in this spike decoder");
+		if (p->idr) { u(b, 1); p->lt = u(b, 1); }	/* no_output_of_prior_pics_flag, long_term_reference_flag */
+		else if ((p->adaptive = u(b, 1))) for (;;) {
+			unsigned op = ue(b), a = 0, c = 0;
+			if (!op) break;
+			if (op == 5) die("MMCO 5: not in this spike decoder");
+			if (op > 6) die("MMCO %u", op);
+			if (p->nmmco == 32) die("more than 32 MMCOs in a slice");
+			if (op != 6) a = ue(b);			/* 1, 3: difference_of_pic_nums_minus1; 2: long_term_pic_num; 4: max + 1 */
+			if (op == 3 || op == 6) c = ue(b);	/* long_term_frame_idx */
+			if ((op == 1 || op == 3) && a >= 1u << (sps.log2_max_frame_num_minus4 + 4)) die("MMCO %u: difference %u out of range", op, a);
+			if ((op == 2 && a > 15) || (op == 4 && a > 16) || c > 15) die("MMCO %u: %u/%u out of range", op, a, c);
+			p->mmco[p->nmmco].op = op, p->mmco[p->nmmco].a = a, p->mmco[p->nmmco++].c = c;
+		}
 		p->dp.dec_ref_pic_marking_bit_size = b->pos - m0;
 	}
 	if ((pps.flags & V4L2_H264_PPS_FLAG_ENTROPY_CODING_MODE) && t != V4L2_H264_SLICE_TYPE_I) {
-		if ((p->sl.cabac_init_idc = ue(b)) > 2) die("cabac_init_idc > 2");
+		unsigned ci = ue(b);
+		if (ci > 2) die("cabac_init_idc %u > 2", ci);
+		p->sl.cabac_init_idc = ci;
 	}
-	p->sl.slice_qp_delta = se(b);
+	int qd = se(b);
+	/* SliceQPY 0..51; the delta's own bound first, so the sum cannot overflow */
+	if (qd < -51 || qd > 51 || 26 + pps.pic_init_qp_minus26 + qd < 0 || 26 + pps.pic_init_qp_minus26 + qd > 51)
+		die("slice_qp_delta %d out of range", qd);
+	p->sl.slice_qp_delta = qd;
 	if (pps.flags & V4L2_H264_PPS_FLAG_DEBLOCKING_FILTER_CONTROL_PRESENT) {
-		if ((p->sl.disable_deblocking_filter_idc = ue(b)) > 2) die("disable_deblocking_filter_idc > 2");
+		unsigned dd = ue(b);
+		if (dd > 2) die("disable_deblocking_filter_idc %u > 2", dd);
+		p->sl.disable_deblocking_filter_idc = dd;
 		if (p->sl.disable_deblocking_filter_idc != 1) {
-			p->sl.slice_alpha_c0_offset_div2 = se(b); p->sl.slice_beta_offset_div2 = se(b);
+			int al = se(b), be = se(b);
+			if (al < -6 || al > 6 || be < -6 || be > 6) die("deblocking offsets %d / %d out of range", al, be);
+			p->sl.slice_alpha_c0_offset_div2 = al; p->sl.slice_beta_offset_div2 = be;
 		}
 	}
 	p->sl.header_bit_size = b->pos;
@@ -203,65 +272,139 @@ static void parse_slice(br_t *b, int nal_type, int ref_idc, pic_t *p)
 	if (t == V4L2_H264_SLICE_TYPE_P) p->dp.flags |= V4L2_H264_DECODE_PARAM_FLAG_PFRAME;
 }
 
-/* ---- POC and the short-term reference list (sliding window, frames) ---- */
-typedef struct { uint64_t ts; int frame_num, poc, cap; } ref_t;
-static ref_t refs[16];
-static int nrefs, prev_frame_num, frame_num_offset, prev_poc_msb, prev_poc_lsb;
+/* ---- POC and the reference frames: short-term and long-term (8.2.4, 8.2.5; frames only) ---- */
+typedef struct { uint64_t ts; int frame_num, poc, cap, lt, ltfi; } ref_t;	/* lt: long-term, at LongTermFrameIdx ltfi */
+static ref_t refs[17];	/* up to 16, and the picture just decoded until the list is trimmed */
+static int nrefs, max_ltfi = -1, prev_frame_num, frame_num_offset, prev_poc_msb, prev_poc_lsb;	/* max_ltfi -1: none */
+static int prev_ref_fn = -1;	/* PrevRefFrameNum; -1 before the stream's first reference picture */
 
 static int calc_poc(pic_t *p)
 {
 	int max_fn = 1 << (sps.log2_max_frame_num_minus4 + 4);
 	if (p->idr) { prev_frame_num = 0; frame_num_offset = 0; prev_poc_msb = prev_poc_lsb = 0; nrefs = 0; }
+	/* frames only, no gaps (no "non-existing" frames are made), MMCO 5 refused: each picture after a reference one
+	 * carries its frame_num + 1 (a non-reference one repeats it for the next) */
+	if (!p->idr && prev_ref_fn >= 0 && p->dp.frame_num != (unsigned)((prev_ref_fn + 1) % max_fn))
+		die("frame_num %u after %d: a gap or a repeat, not in this spike decoder", p->dp.frame_num, prev_ref_fn);
+	if (p->ref) prev_ref_fn = p->dp.frame_num;
 	if (sps.pic_order_cnt_type == 0) {
 		int max_lsb = 1 << (sps.log2_max_pic_order_cnt_lsb_minus4 + 4), lsb = p->dp.pic_order_cnt_lsb, msb;
 		if (lsb < prev_poc_lsb && prev_poc_lsb - lsb >= max_lsb / 2) msb = prev_poc_msb + max_lsb;
 		else if (lsb > prev_poc_lsb && lsb - prev_poc_lsb > max_lsb / 2) msb = prev_poc_msb - max_lsb;
 		else msb = prev_poc_msb;
+		if (msb > (1 << 28) || msb < -(1 << 28)) die("POC past 2^28 (no IDR for that long): not in this spike decoder");
 		if (p->ref) { prev_poc_msb = msb; prev_poc_lsb = lsb; }
 		prev_frame_num = p->dp.frame_num;
 		return msb + lsb;
 	}
 	if (!p->idr && prev_frame_num > p->dp.frame_num) frame_num_offset += max_fn;
+	if (frame_num_offset > (1 << 28)) die("POC past 2^28 (no IDR for that long): not in this spike decoder");
 	prev_frame_num = p->dp.frame_num;
 	return p->idr ? 0 : 2 * (frame_num_offset + p->dp.frame_num) - !p->ref;
 }
 
-/* fills dpb[] and ref_pic_list0 (PicNum descending) for this picture */
+/* PicNum (FrameNumWrap) of a short-term frame, or LongTermPicNum (= LongTermFrameIdx) of a long-term one, as seen
+ * from the picture with frame_num cur */
+static int pic_num(const ref_t *r, int cur)
+{
+	int max_fn = 1 << (sps.log2_max_frame_num_minus4 + 4);
+	return r->lt ? r->ltfi : r->frame_num > cur ? r->frame_num - max_fn : r->frame_num;
+}
+static int find_ref(int lt, int num, int cur) { for (int i = 0; i < nrefs; i++) if (refs[i].lt == lt && pic_num(&refs[i], cur) == num) return i; return -1; }
+static void unmark(int i) { if (i >= 0) refs[i] = refs[--nrefs]; }
+
+/* fills dpb[] and ref_pic_list0 for this picture: the initial list (8.2.4.2.1: short-term by PicNum descending, then
+ * long-term by LongTermPicNum ascending), then the slice's modifications (8.2.4.3) */
 static void fill_refs(pic_t *p)
 {
-	int max_fn = 1 << (sps.log2_max_frame_num_minus4 + 4), order[16], n = 0;
+	int max_fn = 1 << (sps.log2_max_frame_num_minus4 + 4), cur = p->dp.frame_num, list[34], n = 0;
 	for (int i = 0; i < nrefs; i++) {
 		struct v4l2_h264_dpb_entry *e = &p->dp.dpb[i];
-		int wrap = refs[i].frame_num > p->dp.frame_num ? refs[i].frame_num - max_fn : refs[i].frame_num;
-		e->reference_ts = refs[i].ts; e->frame_num = refs[i].frame_num; e->pic_num = wrap;
+		e->reference_ts = refs[i].ts;
+		e->frame_num = refs[i].lt ? refs[i].ltfi : refs[i].frame_num;	/* V4L2: long_term_frame_idx for a long-term one */
+		e->pic_num = pic_num(&refs[i], cur);
 		e->fields = V4L2_H264_FRAME_REF; e->top_field_order_cnt = e->bottom_field_order_cnt = refs[i].poc;
-		e->flags = V4L2_H264_DPB_ENTRY_FLAG_VALID | V4L2_H264_DPB_ENTRY_FLAG_ACTIVE;
-		int k = n++;
-		while (k > 0 && (int)p->dp.dpb[order[k - 1]].pic_num < wrap) { order[k] = order[k - 1]; k--; }
-		order[k] = i;
-	}
-	if (p->sl.slice_type == V4L2_H264_SLICE_TYPE_P) {
-		if (!n) die("P picture with no reference");
-		for (int k = 0; k <= p->sl.num_ref_idx_l0_active_minus1; k++) {
-			p->sl.ref_pic_list0[k].index = order[k < n ? k : n - 1];
-			p->sl.ref_pic_list0[k].fields = V4L2_H264_FRAME_REF;
+		e->flags = V4L2_H264_DPB_ENTRY_FLAG_VALID | V4L2_H264_DPB_ENTRY_FLAG_ACTIVE |
+			   (refs[i].lt ? V4L2_H264_DPB_ENTRY_FLAG_LONG_TERM : 0);
+		int k = n++, pn = pic_num(&refs[i], cur);
+		while (k > 0) {	/* before list[k - 1]? short-term first, by PicNum down; then long-term, by number up */
+			const ref_t *o = &refs[list[k - 1]];
+			if (!(refs[i].lt < o->lt || (refs[i].lt == o->lt && (refs[i].lt ? pn < pic_num(o, cur) : pn > pic_num(o, cur))))) break;
+			list[k] = list[k - 1]; k--;
 		}
+		list[k] = i;
+	}
+	if (p->sl.slice_type != V4L2_H264_SLICE_TYPE_P) return;
+	if (!n) die("P picture with no reference");
+	int num = p->sl.num_ref_idx_l0_active_minus1 + 1, pred = cur;	/* picNumL0Pred starts at CurrPicNum */
+	for (int k = n; k <= num; k++) list[k] = -1;	/* "no reference picture" */
+	for (int m = 0; m < p->nmod; m++) {
+		int want;
+		if (p->mod[m].idc < 2) {	/* a short-term frame, by its PicNum's difference to the previous one */
+			int d = (int)p->mod[m].v + 1;
+			if (d > max_fn) die("abs_diff_pic_num_minus1 %u past MaxPicNum", p->mod[m].v);
+			pred = p->mod[m].idc == 0 ? (pred - d < 0 ? pred - d + max_fn : pred - d) : (pred + d >= max_fn ? pred + d - max_fn : pred + d);
+			want = find_ref(0, pred > cur ? pred - max_fn : pred, cur);
+		} else want = find_ref(1, (int)p->mod[m].v, cur);	/* a long-term frame, by its LongTermPicNum */
+		if (want < 0) die("list modification names a frame not held (a picture lost before this one)");
+		for (int k = num; k > m; k--) list[k] = list[k - 1];	/* in at m, the rest one down, its later copy out */
+		list[m] = want;
+		int w = m + 1;
+		for (int k = m + 1; k <= num; k++) if (list[k] != want) list[w++] = list[k];
+	}
+	for (int k = 0; k < num; k++) {
+		p->sl.ref_pic_list0[k].index = list[k] >= 0 ? list[k] : list[0];
+		p->sl.ref_pic_list0[k].fields = V4L2_H264_FRAME_REF;
 	}
 }
 
+/* the reference marking after a picture (8.2.5): an IDR as short- or long-term; otherwise the slice's MMCOs, or the
+ * sliding window. The window runs after adding the picture here (the same frame goes: the new one has the largest
+ * FrameNumWrap), so a stream that marks more than max_num_ref_frames loses its oldest short-term frame, as in ffmpeg */
 static void add_ref(pic_t *p, uint64_t ts, int poc, int cap)
 {
-	int max = sps.max_num_ref_frames ? sps.max_num_ref_frames : 1, max_fn = 1 << (sps.log2_max_frame_num_minus4 + 4);
-	if (max > 16) max = 16;	/* refs[16] */
-	while (nrefs >= max) {	/* sliding window: drop the smallest FrameNumWrap */
-		int lo = 0, low = 1 << 30;
-		for (int i = 0; i < nrefs; i++) {
-			int w = refs[i].frame_num > p->dp.frame_num ? refs[i].frame_num - max_fn : refs[i].frame_num;
-			if (w < low) { low = w; lo = i; }
+	int max = sps.max_num_ref_frames ? sps.max_num_ref_frames : 1, cur = p->dp.frame_num;
+	if (max > 16) max = 16;
+	ref_t me = { ts, cur, poc, cap, 0, 0 };
+	int keep = 1;	/* the picture stays a reference (an MMCO after its own MMCO 6 may unmark it) */
+	if (p->idr) {	/* calc_poc emptied the list */
+		if (p->lt) me.lt = 1, max_ltfi = 0; else max_ltfi = -1;
+	} else for (int m = 0; m < p->nmmco; m++) {
+		int a = (int)p->mmco[m].a, c = (int)p->mmco[m].c, x = cur - (a + 1);	/* x: picNumX (8-39) */
+		switch (p->mmco[m].op) {
+		case 1: unmark(find_ref(0, x, cur)); break;
+		case 2:
+			if (me.lt && me.ltfi == a) keep = 0, me.lt = 0;	/* this picture, made long-term by an MMCO 6 before */
+			else unmark(find_ref(1, a, cur));
+			break;
+		case 3: {
+			if (c > max_ltfi) die("MMCO 3: LongTermFrameIdx %d past the maximum %d", c, max_ltfi);
+			if (me.lt && me.ltfi == c) keep = 0, me.lt = 0;	/* the index held by this picture (an MMCO 6 before) */
+			else unmark(find_ref(1, c, cur));
+			int s = find_ref(0, x, cur);	/* looked up after the unmark, which moves entries */
+			if (s >= 0) refs[s].lt = 1, refs[s].ltfi = c;
+			break;
 		}
-		refs[lo] = refs[--nrefs];
+		case 4:
+			max_ltfi = a - 1;
+			for (int i = 0; i < nrefs;) if (refs[i].lt && refs[i].ltfi > max_ltfi) unmark(i); else i++;
+			if (me.lt && me.ltfi > max_ltfi) keep = 0, me.lt = 0;
+			break;
+		case 6:
+			if (c > max_ltfi) die("MMCO 6: LongTermFrameIdx %d past the maximum %d", c, max_ltfi);
+			unmark(find_ref(1, c, cur));
+			me.lt = 1, me.ltfi = c, keep = 1;
+			break;
+		}
 	}
-	refs[nrefs++] = (ref_t){ ts, p->dp.frame_num, poc, cap };
+	if (!keep) return;	/* unmarked by its own MMCOs: not a reference after all */
+	refs[nrefs++] = me;
+	while (nrefs > max) {	/* the oldest short-term frame (smallest FrameNumWrap) goes; with none, a long-term one */
+		int lo = -1;
+		for (int i = 0; i < nrefs; i++) if (!refs[i].lt && (lo < 0 || pic_num(&refs[i], cur) < pic_num(&refs[lo], cur))) lo = i;
+		if (lo < 0) for (int i = 0; i < nrefs; i++) if (lo < 0 || refs[i].ltfi < refs[lo].ltfi) lo = i;
+		unmark(lo);
+	}
 }
 
 /* ---- the clip ---- */
@@ -401,17 +544,19 @@ static uint8_t clip8(int v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
 static void rotate_nv12_bgra(const uint8_t *y, const uint8_t *uv, int stride, int w, int h, uint32_t *dst, int y0, int y1)
 {
 	/* landscape (x, y) -> panel (h-1-y, x): dst row x, column h-1-y. 16x16 tiles keep the column writes cached.
-	 * Rows y0..y1-1 only (even bounds): two threads each take a band of rows, and their writes never overlap. */
+	 * Rows y0..y1-1 only (even bounds): two threads each take a band of rows, and their writes never overlap.
+	 * The coefficients in locals: a store through dst could alias the globals and reload them for every pixel. */
+	const int Cy = cy, Oy = oy, Crv = crv, Cgu = cgu, Cgv = cgv, Cbu = cbu;
 	for (int ty = y0; ty < y1; ty += 16)
 		for (int tx = 0; tx < w; tx += 16)
 			for (int yy = ty; yy < ty + 16 && yy < y1; yy += 2)
 				for (int xx = tx; xx < tx + 16 && xx < w; xx += 2) {
 					const uint8_t *c = uv + (yy / 2) * stride + xx;
 					int d = c[0] - 128, e = c[1] - 128;
-					int r = 409 * e + 128, g = -100 * d - 208 * e + 128, b = 516 * d + 128;
+					int r = Crv * e + 128, g = -Cgu * d - Cgv * e + 128, b = Cbu * d + 128;
 					for (int k = 0; k < 4; k++) {
 						int px = xx + (k & 1), py = yy + (k >> 1);
-						int l = 298 * (y[py * stride + px] - 16);
+						int l = Cy * (y[py * stride + px] - Oy);
 						dst[px * h + (h - 1 - py)] = 0xff000000u | clip8((l + r) >> 8) << 16 | clip8((l + g) >> 8) << 8 | clip8((l + b) >> 8);
 					}
 				}
@@ -422,6 +567,7 @@ static void rotate_nv12_bgra(const uint8_t *y, const uint8_t *uv, int stride, in
 static void rotate_scale_nv12_bgra(const uint8_t *y, const uint8_t *uv, int stride, int sw, int sh, int w, int h, uint32_t *dst,
 				   int ox0, int ox1)
 {
+	const int Cy = cy, Oy = oy, Crv = crv, Cgu = cgu, Cgv = cgv, Cbu = cbu;	/* (locals: as rotate_nv12_bgra) */
 	for (int ox = ox0; ox < ox1; ox++) {
 		int sx = sw == w ? ox : ox * sw / w;
 		const uint8_t *yr = y + sx, *uvc = uv + (sx & ~1);
@@ -429,8 +575,8 @@ static void rotate_scale_nv12_bgra(const uint8_t *y, const uint8_t *uv, int stri
 			int sy = sh == h ? oy : oy * sh / h;
 			const uint8_t *c = uvc + (sy / 2) * stride;
 			int d = c[0] - 128, e = c[1] - 128;
-			int l = 298 * (yr[sy * stride] - 16);
-			int r = 409 * e + 128, g = -100 * d - 208 * e + 128, b = 516 * d + 128;
+			int l = Cy * (yr[sy * stride] - Oy);
+			int r = Crv * e + 128, g = -Cgu * d - Cgv * e + 128, b = Cbu * d + 128;
 			dst[ox * h + (h - 1 - oy)] = 0xff000000u | clip8((l + r) >> 8) << 16 | clip8((l + g) >> 8) << 8 | clip8((l + b) >> 8);
 		}
 	}
@@ -641,7 +787,7 @@ static void dec_free(dec_t *D)
 static int decode(const char *file, int verify, int do_rotate)
 {
 	size_t n; uint8_t *d = load(file, &n); split(d, n);
-	have_sps = have_pps = 0; nrefs = 0;
+	have_sps = have_pps = 0; nrefs = 0; prev_ref_fn = -1;
 	pic_t p; nal_t s;
 	if (next_pic(0, &p, &s) < 0) die("%s: no picture", file);	/* parse the SPS so dec_setup has the size */
 	dec_t D; dec_setup(&D, 1);
@@ -650,7 +796,7 @@ static int decode(const char *file, int verify, int do_rotate)
 	unsigned long long b0, a0, b1, a1; cpu_sys(&b0, &a0);
 	double t0 = now(), c0s = cpu_self();
 	int i = 0, bad = 0, checked = 0, last_cap = 0;
-	have_sps = have_pps = 0; nrefs = 0;
+	have_sps = have_pps = 0; nrefs = 0; prev_ref_fn = -1;
 	while ((i = next_pic(i, &p, &s)) >= 0) {
 		int ci = dec_one(&D, &p, &s);
 		if (crc) {
@@ -683,6 +829,7 @@ static int decode(const char *file, int verify, int do_rotate)
 }
 
 /* ---- live stream: decode an Annex-B H.264 elementary stream (what the AA video channel carries) to the panel ---- */
+static int need_idr;	/* an SPS changed mid-stream: its pictures wait for the next IDR (held frames are of the old one) */
 static void process_nal(const uint8_t *p, size_t n, dec_t *D, int *set)
 {
 	if (!n) return;
@@ -690,7 +837,9 @@ static void process_nal(const uint8_t *p, size_t n, dec_t *D, int *set)
 	size_t full = t == 7 || t == 8;
 	br_t b = { rbsp, unescape(p, n, rbsp, full ? sizeof rbsp : 512), 8 };
 	if (t == 7) {
+		struct v4l2_ctrl_h264_sps old = sps; int had = have_sps;
 		parse_sps(&b);
+		if (had && memcmp(&old, &sps, sizeof sps)) need_idr = 1;
 		if (*set && (16 * (sps.pic_width_in_mbs_minus1 + 1) != D->cw || 16 * (sps.pic_height_in_map_units_minus1 + 1) != D->ch))
 			die("SPS changed the picture size mid-stream (%dx%d set up)", D->cw, D->ch);   /* the engine's buffers are for it */
 		if (*set && (int)sps.max_num_ref_frames + 3 > D->ncap)
@@ -698,6 +847,7 @@ static void process_nal(const uint8_t *p, size_t n, dec_t *D, int *set)
 	} else if (t == 8) parse_pps(&b);
 	else if (t == 1 || t == 5) {
 		if (!have_sps || !have_pps) return;	/* joined mid-stream: wait for the next SPS/PPS before decoding */
+		if (need_idr) { if (t != 5) return; need_idr = 0; }
 		if (!*set) { dec_setup(D, 0); *set = 1; }
 		pic_t p2; nal_t s = { p, n };
 		parse_slice(&b, t, r, &p2);
@@ -736,7 +886,7 @@ static size_t stream_nals(uint8_t *buf, size_t len, dec_t *D, int *set, int eof,
 #define PJ_FPS "/run/dash-pj-fps"   /* the pictures shown each second, for the dash (ui/project_region.h: under the AA word) */
 static int decode_stream(int fd)
 {
-	have_sps = have_pps = 0; nrefs = 0;
+	have_sps = have_pps = 0; nrefs = 0; prev_ref_fn = -1; need_idr = 0;
 	dec_t D; int set = 0;
 	size_t cap = 1u << 20, len = 0; uint8_t *buf = malloc(cap);
 	if (!buf) die("out of memory");
