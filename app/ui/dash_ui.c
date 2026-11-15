@@ -6,8 +6,7 @@
 #include "gen/assets.h"
 #include "../core/cmdr_msg.h" /* cmdr_action: what a tap asks for */
 #include "project_region.h"    /* the phone picture's rectangle, shared with the AA receiver */
-#include <sys/socket.h>
-#include <sys/un.h>
+#include <fcntl.h>
 #include <arpa/inet.h>
 #include <math.h>
 #include <stdarg.h>
@@ -648,6 +647,7 @@ static void link_make(typeof(link_w) *l)
 
 void dash_ui_init(lv_obj_t *scr)
 {
+	unlink(PJ_VISIBLE); /* a restarted UI starts on the dash, so no touches go to a phone until it shows the picture */
 	lv_display_t *disp = lv_obj_get_display(scr);
 	G.W = lv_display_get_horizontal_resolution(disp);
 	G.H = lv_display_get_vertical_resolution(disp);
@@ -1719,45 +1719,23 @@ void dash_ui_project_region(int *x, int *y, int *w, int *h)
 	if (w) *w = PJ_RGN_W;
 	if (h) *h = PJ_RGN_H;
 }
-/* Touches on the picture go to the AA receiver (it owns the session), in picture pixels (project_region.h).
- * ponytail: one finger, as LVGL's pointer reads it; pinch needs the multi-touch slots read from evdev. */
-static void pj_touch_cb(lv_event_t *e)
-{
-	static int sock = -1;
-	lv_event_code_t c = lv_event_get_code(e);
-	int act = c == LV_EVENT_PRESSED ? PJ_TOUCH_PRESS : c == LV_EVENT_PRESSING ? PJ_TOUCH_DRAG
-		: c == LV_EVENT_RELEASED || c == LV_EVENT_PRESS_LOST ? PJ_TOUCH_RELEASE : -1;
-	lv_indev_t *in = lv_indev_active();
-	if (act < 0 || !in) return;
-	lv_point_t pt; lv_indev_get_point(in, &pt);
-	int x = pt.x - PJ_RGN_X, y = pt.y;
-	x = x < 0 ? 0 : x >= PJ_RGN_W ? PJ_RGN_W - 1 : x; /* a drag that slides off the edge stays on it */
-	y = y < 0 ? 0 : y >= PJ_RGN_H ? PJ_RGN_H - 1 : y;
-	static int lx = -1, ly = -1; /* LVGL repeats PRESSING while a finger rests: forward a drag only when it moved */
-	if (act == PJ_TOUCH_DRAG && x == lx && y == ly) return;
-	lx = x, ly = y;
-	if (sock < 0) sock = socket(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-	if (sock < 0) return;
-	struct sockaddr_un a = { .sun_family = AF_UNIX };
-	snprintf(a.sun_path, sizeof a.sun_path, "%s", PJ_TOUCH_SOCK);
-	pj_touch_t t = { (uint8_t)act, 0, (uint16_t)x, (uint16_t)y };
-	sendto(sock, &t, sizeof t, 0, (struct sockaddr *)&a, sizeof a); /* no receiver (no session): dropped, fine */
-}
 static void project_build(void)
 {
 	float vw = pj_vw(), sw = G.W - vw, sx = vw, pad = px(10);
 	project = box(lv_layer_top());
+	lv_obj_set_clickable(project, true); /* else a tap on the strips falls through to the hidden dash (door chips!) */
 	place(project, 0, 0, G.W, G.H);
 	fill(project, BLACK);
 	/* the video region: black until frames arrive; a hint sits in it meanwhile */
 	project_video = box(project);
 	place(project_video, PJ_RGN_X, 0, PJ_RGN_W, PJ_RGN_H);
 	fill(project_video, 0xFF0A0A0Au);
+	/* touches on the picture: the AA receiver reads them from the touchscreen itself (all fingers); here they only
+	 * have to stop at the picture, not reach anything beneath it */
 	lv_obj_set_clickable(project_video, true);
 	lv_obj_set_scrollable(project_video, false);
 	lv_obj_set_gesture_bubble(project_video, false);
 	lv_obj_set_scroll_chain(project_video, false);
-	lv_obj_add_event_cb(project_video, pj_touch_cb, LV_EVENT_ALL, NULL);
 	pj_hint = label(project_video, F(REGULAR, 20), W54);
 	lv_label_set_text(pj_hint, "Connect the phone for maps");
 	lv_obj_center(pj_hint);
@@ -2691,6 +2669,8 @@ void dash_ui_show(int v)
 		lv_obj_invalidate(lv_screen_active());
 		lv_obj_invalidate(lv_layer_top());
 		if (!now_pj) lv_timer_create(pj_repaint_cb, 600, NULL);
+		if (now_pj) close(open(PJ_VISIBLE, O_CREAT | O_WRONLY | O_CLOEXEC, 0644)); /* the AA receiver sends touches */
+		else unlink(PJ_VISIBLE);
 	}
 	show(panel, v == DASH_VIEW_CAR_PANEL);
 	show(settings, v == DASH_VIEW_SETTINGS);

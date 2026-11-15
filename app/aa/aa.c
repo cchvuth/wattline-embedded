@@ -27,7 +27,9 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
-#include <sys/un.h>
+#include <sys/ioctl.h>
+#include <netinet/tcp.h>
+#include <linux/input.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/x509.h>
@@ -198,7 +200,9 @@ static uint16_t msg_id(const uint8_t *p, size_t n) { return n >= 2 ? (uint16_t)(
 
 // What the phone is asked to render: a 720p frame with margins, so the UI it lays out in the frame's middle is
 // exactly the panel's picture rectangle (PJ_RGN_W x PJ_RGN_H), pixel for pixel: no scaling, so no stretch or blur.
-// The decoder shows that middle window; a touch maps back by adding half the margins.
+// The decoder shows that middle window. Touches are NOT in frame coordinates: a current phone takes them in its UI
+// area (the frame minus the margins; a current phone's AA displays are e.g. an 80x480 rail + 1080x480 = 1160x480). Frame
+// coordinates (headunit's 2018 way, +half the margins) landed every tap that offset low-right on the unit.
 #define AA_FRAME_W 1280
 #define AA_FRAME_H 720
 #define AA_MARGIN_W (AA_FRAME_W - PJ_RGN_W)
@@ -243,8 +247,8 @@ static size_t build_service_discovery_response(uint8_t *buf, size_t cap, int res
 	uint8_t schd[48]; pb_out sc = { schd, 0, sizeof schd, 0 };
 	pb_u(&sc, AA_CHD_CHANNEL_ID, AA_CH_SENSOR);
 	pb_b(&sc, AA_CHD_SENSOR_CHANNEL, sens, s.n);
-	// touch screen in the video frame's coordinates (margins included)
-	uint8_t tc[16]; pb_out t = { tc, 0, sizeof tc, 0 }; pb_u(&t, AA_TC_WIDTH, AA_FRAME_W); pb_u(&t, AA_TC_HEIGHT, AA_FRAME_H);
+	// the touch screen is the phone's UI area: the picture, in its own pixels (see AA_FRAME_W)
+	uint8_t tc[16]; pb_out t = { tc, 0, sizeof tc, 0 }; pb_u(&t, AA_TC_WIDTH, PJ_RGN_W); pb_u(&t, AA_TC_HEIGHT, PJ_RGN_H);
 	uint8_t inp[24]; pb_out ip = { inp, 0, sizeof inp, 0 }; pb_b(&ip, AA_INCH_TOUCH_SCREEN, tc, t.n);
 	uint8_t ichd[40]; pb_out ic = { ichd, 0, sizeof ichd, 0 };
 	pb_u(&ic, AA_CHD_CHANNEL_ID, AA_CH_INPUT); pb_b(&ic, AA_CHD_INPUT_CHANNEL, inp, ip.n);
@@ -322,6 +326,16 @@ static int msg_selftest(void)
 	}
 	if (!found) die("msg: SDR video config roundtrip");
 	if (nch != 7) die("msg: SDR advertises %d channels, want 7 (video, sensor, input, 3 audio, mic)", nch);
+	{   // the touch screen advertised = the picture (the phone's UI area): touches are sent in its pixels
+		pb_in in2 = { sdr, sn, 0 }; pb_val f2; uint64_t tw = 0, th = 0;
+		while (pb_next(&in2, &f2) == 1) {
+			const uint8_t *ic, *tcp; size_t icl, tcl; uint64_t cid;
+			if (f2.field == AA_SDRESP_CHANNELS && f2.wt == 2 && pb_get_u(f2.p, f2.len, AA_CHD_CHANNEL_ID, &cid) && cid == AA_CH_INPUT &&
+			    pb_get_b(f2.p, f2.len, AA_CHD_INPUT_CHANNEL, &ic, &icl) && pb_get_b(ic, icl, AA_INCH_TOUCH_SCREEN, &tcp, &tcl))
+				pb_get_u(tcp, tcl, AA_TC_WIDTH, &tw), pb_get_u(tcp, tcl, AA_TC_HEIGHT, &th);
+		}
+		if (tw != PJ_RGN_W || th != PJ_RGN_H) die("msg: touch screen %llux%llu, want the picture %dx%d", (unsigned long long)tw, (unsigned long long)th, PJ_RGN_W, PJ_RGN_H);
+	}
 
 	uint8_t co[16]; size_t con = build_channel_open_response(co, sizeof co, AA_STATUS_OK);
 	uint64_t cs; if (!con || !pb_get_u(co, con, AA_CORESP_STATUS, &cs) || cs != AA_STATUS_OK) die("msg: channel-open");
@@ -493,47 +507,146 @@ static void send_ping(int fd, aa_tls_t *tls)
 	send_msg(fd, tls, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_PING_REQUEST, r, o.n);
 }
 
-// Touches come from the dash UI (it owns the touchscreen) as datagrams in picture pixels (project_region.h); they
-// go to the phone in the video frame's coordinates, i.e. plus half the margins. ponytail: one finger (LVGL's
-// pointer); pinch needs the multi-touch slots read from evdev here instead.
+// ---- touch: the touchscreen read directly (evdev multi-touch, protocol B), every finger ----
+// Sent only while the UI shows the picture (PJ_VISIBLE) and the phone has its input channel open. A gesture whose
+// first finger lands outside the picture is not sent at all; fingers that wander off it are held at its edge.
+// Positions go in picture pixels (the phone's UI area, the touch screen advertised in service discovery), with the
+// touch's own kernel timestamp in us (as headunit): the phone measures fling speed from those, so send-time stamps
+// (jittery) make swipes overshoot.
+#define MT_MAX 10
+typedef struct { int active, on, moved, x, y; } mt_slot_t;   /* active: finger down (kernel); on: in the phone's list */
+static mt_slot_t mt[MT_MAX];
+static int mt_cur, mt_gesture, mt_prev_any;   /* mt_gesture: 0 none, 1 ours, -1 ignored until every finger is up */
+static int mt_max_x = PJ_PANEL_W - 1, mt_max_y = PJ_RGN_H - 1;
 static int input_open;
-static int touch_listen(void)
+static int touch_open(void)
 {
-	int s = socket(AF_UNIX, SOCK_DGRAM, 0); if (s < 0) return -1;
-	struct sockaddr_un a = { .sun_family = AF_UNIX }; snprintf(a.sun_path, sizeof a.sun_path, "%s", PJ_TOUCH_SOCK);
-	unlink(a.sun_path);
-	if (bind(s, (struct sockaddr *)&a, sizeof a)) { fprintf(stderr, "aa: touch socket %s: %s\n", PJ_TOUCH_SOCK, strerror(errno)); close(s); return -1; }
-	return s;
+	int f = open(PJ_TOUCH_DEV, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+	if (f < 0) { fprintf(stderr, "aa: touchscreen %s: %s\n", PJ_TOUCH_DEV, strerror(errno)); return -1; }
+	struct input_absinfo a;
+	if (!ioctl(f, EVIOCGABS(ABS_MT_POSITION_X), &a) && a.maximum > 0) mt_max_x = a.maximum;
+	if (!ioctl(f, EVIOCGABS(ABS_MT_POSITION_Y), &a) && a.maximum > 0) mt_max_y = a.maximum;
+	return f;
 }
-static void forward_touch(int fd, aa_tls_t *tls, int ts)
+static int mt_panel_x(int raw) { return (int)((int64_t)raw * PJ_PANEL_W / (mt_max_x + 1)); }
+static int mt_panel_y(int raw) { return (int)((int64_t)raw * PJ_RGN_H / (mt_max_y + 1)); }
+static size_t build_mt(uint8_t *buf, size_t cap, uint64_t ts, const int *idx, int n, int action_index, int action)
 {
-	pj_touch_t t;
-	while (recv(ts, &t, sizeof t, MSG_DONTWAIT) == (ssize_t)sizeof t) {
-		if (!tls || !input_open || t.action > PJ_TOUCH_DRAG || t.x >= PJ_RGN_W || t.y >= PJ_RGN_H) continue;
-		uint8_t b[64]; size_t n = build_touch(b, sizeof b, (uint64_t)now_us(), t.x + AA_MARGIN_W / 2, t.y + AA_MARGIN_H / 2, t.action);
-		if (n) send_msg(fd, tls, AA_CH_INPUT, AA_MSG_SPECIFIC, AA_IN_EVENT, b, n);
+	uint8_t te[320]; pb_out t = { te, 0, sizeof te, 0 };
+	for (int k = 0; k < n; k++) {
+		int px = mt_panel_x(mt[idx[k]].x) - PJ_RGN_X, py = mt_panel_y(mt[idx[k]].y);
+		px = px < 0 ? 0 : px >= PJ_RGN_W ? PJ_RGN_W - 1 : px;
+		py = py < 0 ? 0 : py >= PJ_RGN_H ? PJ_RGN_H - 1 : py;
+		uint8_t loc[24]; pb_out l = { loc, 0, sizeof loc, 0 };
+		pb_u(&l, AA_TL_X, (uint64_t)px); pb_u(&l, AA_TL_Y, (uint64_t)py);
+		pb_u(&l, AA_TL_POINTER_ID, (uint64_t)idx[k]);   /* the slot: the same id for a finger's whole stroke */
+		pb_b(&t, AA_TE_TOUCH_LOCATION, loc, l.n);
 	}
+	pb_u(&t, AA_TE_ACTION_INDEX, (uint64_t)action_index);
+	pb_u(&t, AA_TE_TOUCH_ACTION, (uint64_t)action);
+	pb_out o = { buf, 0, cap, 0 };
+	pb_u(&o, AA_IEI_TIMESTAMP, ts);
+	pb_b(&o, AA_IEI_TOUCH_EVENT, te, t.n);
+	return t.bad || o.bad ? 0 : o.n;
+}
+static int mt_force_visible, mt_log[16][3], mt_nlog;   /* the self-test's view: no screen, events recorded */
+static void mt_send(int fd, aa_tls_t *tls, uint64_t ts, int ai, int action, int with)
+{
+	int idx[MT_MAX], n = 0, at = 0;   /* the list: every finger on, plus `with` (one going up) */
+	for (int k = 0; k < MT_MAX; k++) if (mt[k].on || k == with) { if (k == with) at = n; idx[n++] = k; }
+	if (fd < 0) {   /* the self-test records; --touch-test prints what would go to the phone */
+		if (mt_nlog < 16) { mt_log[mt_nlog][0] = action; mt_log[mt_nlog][1] = n; mt_log[mt_nlog][2] = with >= 0 ? at : ai; mt_nlog++; }
+		if (fd == -2) {
+			printf("t=%llu.%06llu action %d index %d:", (unsigned long long)(ts / 1000000), (unsigned long long)(ts % 1000000), action, with >= 0 ? at : ai);
+			for (int k = 0; k < n; k++) {
+				int px = mt_panel_x(mt[idx[k]].x) - PJ_RGN_X, py = mt_panel_y(mt[idx[k]].y);
+				px = px < 0 ? 0 : px >= PJ_RGN_W ? PJ_RGN_W - 1 : px; py = py < 0 ? 0 : py >= PJ_RGN_H ? PJ_RGN_H - 1 : py;
+				printf(" [id %d at %d,%d]", idx[k], px, py);
+			}
+			printf("\n"); fflush(stdout);
+		}
+		return;
+	}
+	uint8_t b[400]; size_t len = build_mt(b, sizeof b, ts, idx, n, with >= 0 ? at : ai, action);
+	if (len) send_msg(fd, tls, AA_CH_INPUT, AA_MSG_SPECIFIC, AA_IN_EVENT, b, len);
+}
+// one SYN_REPORT: turn the slots' changes into Android Auto touch events
+static void mt_frame(int fd, aa_tls_t *tls, uint64_t ts)
+{
+	if (!mt_prev_any) {   /* a gesture starts: ours only if its first finger is on the picture, now */
+		int first = -1;
+		for (int i = 0; i < MT_MAX && first < 0; i++) if (mt[i].active) first = i;
+		if (first >= 0) {
+			int x = mt_panel_x(mt[first].x);
+			mt_gesture = tls && input_open && (mt_force_visible || access(PJ_VISIBLE, F_OK) == 0) && x >= PJ_RGN_X && x < PJ_RGN_X + PJ_RGN_W ? 1 : -1;
+		}
+	}
+	if (mt_gesture == 1) {
+		for (int i = 0; i < MT_MAX; i++) if (mt[i].active && !mt[i].on) {   /* fingers down */
+			int n = 0; for (int k = 0; k < MT_MAX; k++) n += mt[k].on;
+			mt[i].on = 1; mt[i].moved = 0;
+			mt_send(fd, tls, ts, 0, n ? AA_TOUCH_POINTER_DOWN : AA_TOUCH_PRESS, i);
+		}
+		int moved = 0;                                                     /* the fingers that stay on, moving */
+		for (int k = 0; k < MT_MAX; k++) moved |= mt[k].on && mt[k].active && mt[k].moved;
+		if (moved) mt_send(fd, tls, ts, 0, AA_TOUCH_DRAG, -1);
+		for (int i = 0; i < MT_MAX; i++) if (mt[i].on && !mt[i].active) {   /* fingers up: the last one is the UP */
+			mt[i].on = 0;
+			int n = 0; for (int k = 0; k < MT_MAX; k++) n += mt[k].on;
+			mt_send(fd, tls, ts, 0, n ? AA_TOUCH_POINTER_UP : AA_TOUCH_RELEASE, i);
+		}
+	} else for (int i = 0; i < MT_MAX; i++) mt[i].on = 0;
+	mt_prev_any = 0;
+	for (int i = 0; i < MT_MAX; i++) { mt[i].moved = 0; mt_prev_any |= mt[i].active; }
+	if (!mt_prev_any) mt_gesture = 0;
+}
+// read what the touchscreen has; with tls NULL (between sessions) just keep the slots in step, sending nothing
+static void touch_read(int tf, int fd, aa_tls_t *tls)
+{
+	struct input_event ev[64]; ssize_t r;
+	while ((r = read(tf, ev, sizeof ev)) > 0)
+		for (int k = 0; k < (int)(r / (ssize_t)sizeof *ev); k++) {
+			const struct input_event *e = &ev[k];
+			if (e->type == EV_ABS) {
+				if (e->code == ABS_MT_SLOT) { mt_cur = e->value >= 0 && e->value < MT_MAX ? e->value : -1; continue; }
+				if (mt_cur < 0) continue;
+				mt_slot_t *s = &mt[mt_cur];
+				if (e->code == ABS_MT_TRACKING_ID) s->active = e->value >= 0;
+				else if (e->code == ABS_MT_POSITION_X) s->x = e->value, s->moved = 1;
+				else if (e->code == ABS_MT_POSITION_Y) s->y = e->value, s->moved = 1;
+			} else if (e->type == EV_SYN && e->code == SYN_DROPPED) {   /* the kernel lost events: lift every finger */
+				for (int i = 0; i < MT_MAX; i++) mt[i].active = 0;
+			} else if (e->type == EV_SYN && e->code == SYN_REPORT)
+				mt_frame(fd, tls, (uint64_t)e->input_event_sec * 1000000u + (uint64_t)e->input_event_usec);
+		}
 }
 
 // the session after SSL + auth: answer the phone's requests, ping it, route video to the sink, ACK (and drop)
-// audio, pass the UI's touches on
+// audio, send the touchscreen's touches
+#define AA_SILENT_US 6000000   /* the phone answers our 1.5 s pings: this long without a byte, it is gone */
 static void aa_session(int fd, aa_tls_t *tls, int sink, int touch)
 {
-	const uint8_t *m; size_t mn; uint8_t chan; uint32_t frames = 0;
+	const uint8_t *m; size_t mn; uint8_t chan; uint32_t frames = 0, st_frames = 0; uint64_t st_bytes = 0;
 	memset(av_sess, 0, sizeof av_sess); input_open = 0;
-	if (touch >= 0) forward_touch(fd, NULL, touch);   // drop touches left from before this session
+	if (touch >= 0) touch_read(touch, fd, NULL);   // catch up on what happened before this session, sending nothing
 	fprintf(stderr, "aa: session loop: waiting for the phone's first message\n");
-	int64_t next_ping = now_us() + AA_PING_EVERY_US;
+	int64_t next_ping = now_us() + AA_PING_EVERY_US, last_rx = now_us(), next_stat = now_us() + 5000000;
 	for (;;) {
-		int64_t left = next_ping - now_us();
-		if (left <= 0) { send_ping(fd, tls); next_ping = now_us() + AA_PING_EVERY_US; left = AA_PING_EVERY_US; }
+		int64_t t = now_us(), left = next_ping - t;
+		if (t - last_rx > AA_SILENT_US) { fprintf(stderr, "aa: phone silent for %d s, ending the session\n", AA_SILENT_US / 1000000); break; }
+		if (t >= next_stat) {   // what the video path did: frames and data in from the phone
+			fprintf(stderr, "aa: 5 s: %u video frames, %llu KB\n", st_frames, (unsigned long long)(st_bytes >> 10));
+			st_frames = 0; st_bytes = 0; next_stat = t + 5000000;
+		}
+		if (left <= 0) { send_ping(fd, tls); next_ping = t + AA_PING_EVERY_US; left = AA_PING_EVERY_US; }
 		struct pollfd pf[2] = { { fd, POLLIN, 0 }, { touch, POLLIN, 0 } };
 		int pr = poll(pf, touch >= 0 ? 2 : 1, (int)(left / 1000) + 1);
 		if (pr < 0) { if (errno == EINTR) continue; break; }
 		if (pr == 0) continue;
-		if (touch >= 0 && (pf[1].revents & POLLIN)) forward_touch(fd, tls, touch);
+		if (touch >= 0 && (pf[1].revents & POLLIN)) touch_read(touch, fd, tls);
 		if (!(pf[0].revents & POLLIN)) { if (pf[0].revents) break; continue; }   // hung up / error with nothing to read
 		if (recv_msg(fd, tls, &chan, &m, &mn) || mn < 2) break;
+		last_rx = now_us();
 		uint16_t id = msg_id(m, mn); const uint8_t *body = m + 2; size_t blen = mn - 2;
 		if (!(is_av(chan) && is_media(id)) && !(chan == AA_CH_CONTROL && (id == AA_CTL_PING_REQUEST || id == AA_CTL_PING_RESPONSE)))
 			fprintf(stderr, "aa: rx chan %u msg 0x%04x (%zu bytes)\n", chan, id, blen);
@@ -597,6 +710,7 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int touch)
 		} else if (is_av(chan) && is_media(id)) {
 			if (chan == AA_CH_VIDEO) {
 				if (!frames++) fprintf(stderr, "aa: first video frame (%zu bytes)\n", blen);
+				st_frames++; st_bytes += blen;
 				const uint8_t *nal = body; size_t nl = blen;
 				if (id == AA_AV_MEDIA_WITH_TIMESTAMP) { if (nl <= 8) goto acked; nal += 8; nl -= 8; }   // 8-byte timestamp
 				// then an access-unit delimiter: the decoder takes a NAL as complete when the next start code
@@ -609,6 +723,38 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int touch)
 		}
 	}
 	fprintf(stderr, "aa: %u video frames this session\n", frames);
+}
+
+// touch self-test: a two-finger pinch, then a stroke that starts off the picture; checks the Android actions
+static int mt_selftest(void)
+{
+	aa_tls_t *fake = (aa_tls_t *)&mt_nlog;   /* any non-NULL: mt_send records instead of sending when fd < 0 */
+	input_open = 1; mt_force_visible = 1; memset(mt, 0, sizeof mt); mt_prev_any = 0; mt_gesture = 0;
+	#define F(slot, act, X, Y) (mt[slot].active = (act), mt[slot].x = (X), mt[slot].y = (Y), mt[slot].moved = 1)
+	F(0, 1, 500, 200); mt_frame(-1, fake, 1);                       /* finger 0 down on the picture */
+	F(1, 1, 700, 250); mt_frame(-1, fake, 2);                       /* finger 1 down */
+	F(0, 1, 480, 190); F(1, 1, 720, 260); mt_frame(-1, fake, 3);    /* both move */
+	mt[0].active = 0; mt_frame(-1, fake, 4);                        /* finger 0 up */
+	mt[1].active = 0; mt_frame(-1, fake, 5);                        /* finger 1 up */
+	F(0, 1, 1600, 200); mt_frame(-1, fake, 6);                      /* a stroke from the dash strip (x 1600) */
+	F(0, 1, 600, 200); mt_frame(-1, fake, 7); mt[0].active = 0; mt_frame(-1, fake, 8);   /* ...even onto the picture */
+	#undef F
+	static const int want[][3] = { { AA_TOUCH_PRESS, 1, 0 }, { AA_TOUCH_POINTER_DOWN, 2, 1 }, { AA_TOUCH_DRAG, 2, 0 },
+	                               { AA_TOUCH_POINTER_UP, 2, 0 }, { AA_TOUCH_RELEASE, 1, 0 } };
+	int ok = mt_nlog == 5;
+	for (int i = 0; ok && i < 5; i++) ok = !memcmp(mt_log[i], want[i], sizeof want[i]);
+	if (!ok) {
+		for (int i = 0; i < mt_nlog; i++) fprintf(stderr, "  got action %d, %d fingers, index %d\n", mt_log[i][0], mt_log[i][1], mt_log[i][2]);
+		die("touch selftest: wrong event sequence (%d events)", mt_nlog);
+	}
+	uint8_t b[400]; int idx[2] = { 0, 1 }; mt[0].x = 120; mt[1].x = 1279; mt[0].y = 0; mt[1].y = 479;   /* picture corners */
+	size_t n = build_mt(b, sizeof b, 9, idx, 2, 1, AA_TOUCH_POINTER_DOWN);
+	const uint8_t *te; size_t tl; uint64_t act, ai;
+	if (!n || !pb_get_b(b, n, AA_IEI_TOUCH_EVENT, &te, &tl) || !pb_get_u(te, tl, AA_TE_TOUCH_ACTION, &act) || act != AA_TOUCH_POINTER_DOWN ||
+	    !pb_get_u(te, tl, AA_TE_ACTION_INDEX, &ai) || ai != 1) die("touch selftest: event encoding");
+	input_open = 0; mt_force_visible = 0; memset(mt, 0, sizeof mt); mt_prev_any = 0; mt_gesture = 0;
+	printf("AA-TOUCH-SELFTEST OK: pinch = PRESS, POINTER_DOWN, DRAG, POINTER_UP, RELEASE; off-picture stroke ignored\n");
+	return 0;
 }
 
 // receive-path self-test: a 40 KB message split over FIRST/MIDDLE/LAST frames, each frame its own TLS records, with
@@ -652,15 +798,18 @@ static int aa_serve(const char *cert, const char *key)
 	signal(SIGPIPE, SIG_IGN);
 	setvbuf(stderr, NULL, _IOLBF, 0);   // line-buffered: the serve log survives a hard kill (dash-aa stop)
 	signal(SIGCHLD, SIG_IGN);           // the decoder child of each session: no zombies
-	int touch = touch_listen();
 	int ls = socket(AF_INET, SOCK_STREAM, 0); if (ls < 0) die("socket: %s", strerror(errno));
 	int one = 1; setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
 	struct sockaddr_in a = { 0 }; a.sin_family = AF_INET; a.sin_addr.s_addr = INADDR_ANY; a.sin_port = htons(AA_PORT);
 	if (bind(ls, (struct sockaddr *)&a, sizeof a) || listen(ls, 1)) die("bind/listen %d: %s", AA_PORT, strerror(errno));
+	int touch = touch_open();   // after the bind: a second instance dies above, before touching anything
 	SSL_CTX *ctx = tls_ctx(cert, key, 0);   // the head unit is the TLS client: it sends the ClientHello
 	fprintf(stderr, "aa: listening on %d (phone must be on the AP; cert %s)\n", AA_PORT, cert);
 	for (;;) {
 		int fd = accept(ls, NULL, NULL); if (fd < 0) continue;
+		// as aasdk (TCPWrapper) and headunit (hu_tcp): small writes (media ACKs, touches, pings) go out at once,
+		// not held until the phone acknowledges the previous one -- with one frame in flight, that stalls video
+		setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
 		fprintf(stderr, "aa: phone dialled in on %d\n", AA_PORT);
 		struct timeval tmo = { 20, 0 }, none = { 0, 0 };   // a stalled handshake must not wedge the accept loop
 		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tmo, sizeof tmo);
@@ -988,7 +1137,18 @@ static int aa_ap_up(const char *iface, const char *ssid, const char *key, const 
 
 int main(int argc, char **argv)
 {
-	if (argc > 1 && !strcmp(argv[1], "--selftest")) return selftest() | msg_selftest() | rx_selftest() | bt_selftest();
+	if (argc > 1 && !strcmp(argv[1], "--touch-test")) {   /* print the touch events a session would send, for N s */
+		int tf = touch_open(), secs = argc > 2 ? atoi(argv[2]) : 15;
+		if (tf < 0) return 1;
+		input_open = 1; mt_force_visible = 1;
+		printf("touch-test: touchscreen 0..%d x 0..%d, picture x %d..%d; touch now (%d s)\n", mt_max_x, mt_max_y, PJ_RGN_X, PJ_RGN_X + PJ_RGN_W - 1, secs); fflush(stdout);
+		for (int64_t end = now_us() + (int64_t)secs * 1000000; now_us() < end; ) {
+			struct pollfd pf = { tf, POLLIN, 0 };
+			if (poll(&pf, 1, 200) > 0) touch_read(tf, -2, (aa_tls_t *)&mt_nlog);
+		}
+		return 0;
+	}
+	if (argc > 1 && !strcmp(argv[1], "--selftest")) return selftest() | msg_selftest() | rx_selftest() | mt_selftest() | bt_selftest();
 	if (argc == 4 && !strcmp(argv[1], "gencert"))   // gencert <crt> <key>: a self-signed cert, for first boot / placeholder
 		return gen_cert(argv[2], argv[3], 10L * 365 * 86400) ? (fprintf(stderr, "aa: gencert failed\n"), 1) : 0;
 	if ((argc == 4 || argc == 2) && !strcmp(argv[1], "serve")) {
