@@ -2,7 +2,8 @@
 // evdev touch, the loop of dash.c. Display and touch set up as ui/main_dash.c (checked on the unit), from dash.conf.
 // usage: dash [-c dash.conf]     default /run/dashdata/dash.conf; built-in defaults when absent
 // With a writable /data (R3: the card's p3, else RAM) the log and the Commander's files default to it.
-// The hardware watchdog (watchdog = 1) is petted each frame: a hung loop reboots the board; a clean exit disarms it.
+// The hardware watchdog (watchdog = 1), armed once the display is open, is petted each frame: a hung loop reboots the
+// board; a clean exit disarms it.
 #include "app.h"
 #include "settings.h"
 #include "actions.h"
@@ -59,13 +60,6 @@ int main(int argc, char **argv) {
   bool have = conf_load(&cf, path) == 0;
   log_open(cf.log_path, cf.log_kb);
   log_msg("dash.conf %s%s", path, have ? "" : ": absent, built-in defaults");
-  if (cf.watchdog) {
-    wd = open("/dev/watchdog", O_WRONLY | O_CLOEXEC);
-    int t = cf.watchdog_s;
-    if (wd < 0) log_msg("watchdog: %s", strerror(errno));
-    else if (ioctl(wd, WDIOC_SETTIMEOUT, &t)) log_msg("watchdog timeout %d s: %s", cf.watchdog_s, strerror(errno));
-    else log_msg("watchdog %d s", t);
-  }
 
   lv_init();
   lv_display_t *disp = lv_linux_fbdev_create();
@@ -82,6 +76,16 @@ int main(int argc, char **argv) {
     lv_evdev_set_calibration(ts, cf.touch_cal[0], cf.touch_cal[1], cf.touch_cal[2], cf.touch_cal[3]);
   }
   dash_ui_init(lv_screen_active());
+  // Armed only now, with the display open: a panel that never answers makes the open's unblank wait out the display
+  // driver's timeouts (three of 10 s), longer than the watchdog, and the board would restart for ever. A dead display
+  // leaves it up and reachable instead; the frames after the open only write to memory, so a hung loop still reboots.
+  if (cf.watchdog) {
+    wd = open("/dev/watchdog", O_WRONLY | O_CLOEXEC);
+    int t = cf.watchdog_s;
+    if (wd < 0) log_msg("watchdog: %s", strerror(errno));
+    else if (ioctl(wd, WDIOC_SETTIMEOUT, &t)) log_msg("watchdog timeout %d s: %s", cf.watchdog_s, strerror(errno));
+    else log_msg("watchdog %d s", t);
+  }
   for (int fd = 3; fd < 256; fd++) {   // LVGL's framebuffer and touch fds are opened without O_CLOEXEC: the scripts the
     int fl = fcntl(fd, F_GETFD);        // dash starts (Wi-Fi, SSH, Android Auto) must not inherit them
     if (fl >= 0) fcntl(fd, F_SETFD, fl | FD_CLOEXEC);

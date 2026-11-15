@@ -84,8 +84,9 @@ bt_buttons_ms = 500
 bt_data_ms = 2000
 bt_back_ms = 15000
 
-# The hardware watchdog (/dev/watchdog), petted each frame: a dash that hangs this long reboots the board (the T113
-# allows up to 16 s). A clean stop (SIGTERM) disarms it; a crash leaves it running for the supervisor's restart.
+# The hardware watchdog (/dev/watchdog), armed once the display is open and petted each frame: a dash that hangs this
+# long reboots the board (the T113 allows up to 16 s). A clean stop (SIGTERM) disarms it; a crash leaves it running for
+# the supervisor's restart. A display that never opens leaves it unarmed, so the board stays up and reachable.
 watchdog = 1
 watchdog_s = 15
 
