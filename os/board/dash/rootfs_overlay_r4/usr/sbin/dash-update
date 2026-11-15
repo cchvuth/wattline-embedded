@@ -13,7 +13,8 @@
 #   confirm  this start proved itself: keep it (S99ota runs this)
 #   install  fetch and apply the newest release (the Install button; also retries a version that failed before)
 #   auto     the same, but never a version that already failed to start here (S99ota, automatic updates on)
-#   watch    this start still on trial (not confirmed): restart now, so U-Boot counts it (S00trial, 4 min after a start)
+#   watch    this start still on trial (not confirmed) and its dash not running healthy: restart, so U-Boot counts it
+#            (S00trial, 4 min after a start)
 #   status   print the state the UI shows (also in /run/dash-update.status)
 #
 # Trust: the release's SHA256SUMS must carry a valid Ed25519 signature by the project key baked into the image
@@ -212,7 +213,7 @@ cmd_apply() {
 }
 
 cmd_confirm() {
-	B=$(booted_slot); ota_read || return 0
+	B=$(booted_slot); ota_read || { [ -n "$B" ] && fail "cannot read ota.txt: this start not confirmed yet"; return 0; }   # S99ota retries
 	if [ -z "$trial" ]; then
 		if note_failed; then status rolled-back "version $v did not start"; else status ok; fi   # said once
 		return 0
@@ -236,6 +237,7 @@ cmd_confirm() {
 dash_starts() { grep -c " start$" /data/log/dash.out 2>/dev/null; }   # the supervisor logs each (re)start of the dash
 cmd_watch() {
 	P1MNT=$P1MNT.watch; B=$(booted_slot)
+	while pidof e2fsck fsck.ext4 >/dev/null; do sleep 10; done   # S05data still repairing /data: not hung, let it finish
 	[ -n "$B" ] && ota_read && [ -n "$trial" ] && [ "$slot" = "$B" ] || return 0
 	r=$(dash_starts); sleep 15
 	pidof dash >/dev/null && [ "$(dash_starts)" = "$r" ] && { log "slot $B on trial, unconfirmed, but its dash runs: left be"; return 0; }

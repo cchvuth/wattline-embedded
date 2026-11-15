@@ -22,7 +22,7 @@ printf '#!/bin/sh\nrm -f "$1"\n' > $W/bin/umount
 printf '#!/bin/sh\necho "wpa_state=COMPLETED"; echo "ssid=${SSID:-home}"\n' > $W/bin/wpa_cli
 printf '#!/bin/sh\nexit 0\n' > $W/bin/hwclock
 printf '#!/bin/sh\necho REBOOT >> /tmp/dut/rebooted\n' > $W/bin/reboot
-printf '#!/bin/sh\n[ -n "${DASH_UP:-}" ]\n' > $W/bin/pidof   # the dash runs when DASH_UP is set
+printf '#!/bin/sh\n[ -n "${DASH_UP:-}" ] && [ "$1" = dash ]\n' > $W/bin/pidof   # the dash runs when DASH_UP is set; no fsck
 chmod +x $W/bin/*
 
 # a throwaway signing key (the image's public half where dash-update looks for it)
