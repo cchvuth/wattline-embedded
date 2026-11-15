@@ -79,7 +79,7 @@ typedef struct { char last[24]; int fails; } wifi_track_t;   // the last wpa_sta
 // wpa_state, NULL unknown. Two handshakes falling back to DISCONNECTED/SCANNING say "wrong password?".
 int wifi_join_of(wifi_track_t *t, bool exists, const char *oper, bool ipv4, const char *wpa, const char **why);
 int wifi_join(int64_t now, const char **why);   // the system's, looked at every 1.5 s; -1 off Linux
-bool wifi_has_addr(void);   // wlan0 has an IPv4 address now (fresh, not the 1.5 s look)
+bool wifi_has_addr(void);   // wlan0 has an IPv4 address on a running link now (fresh, not the 1.5 s look)
 const char *wifi_net_line(void);                // refreshed by wifi_join(); "" off Linux
 const char *wifi_ssid(void);                    // the joined network's name, "" none
 int wifi_nearby(const char (**list)[33]);       // networks in range (latest SCAN_RESULTS), strongest first; the count
