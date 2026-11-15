@@ -327,6 +327,14 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
       apply_settings(d, now);
     }
     record_sync(app_settings.record, cf, now);   // the switch takes effect here, at once
+    {   // the WiFi join just ended (wlan0 has its address): the link tries now, not after its retry delay, in which
+        // Bluetooth (waiting for WiFi to try) would dial; before cmdr_hook_sync, so it sees the try
+      static int join_was = -1;
+      const char *jw;
+      int j = wifi_join(now, &jw);
+      if (join_was >= 0 && j < 0) link_kick(&d->link, now);
+      join_was = j;
+    }
 #ifdef DASH_CMDR
     cmdr_hook_sync(&d->car, &d->link, &bt, now);
     bool bt_ready = bt.link == BT_BUTTONS || bt.link == BT_LEAN || bt.link == BT_FULL;

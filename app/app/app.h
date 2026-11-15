@@ -105,6 +105,8 @@ typedef struct {
   int src;                      // BRIGHT_*, -1 none yet
   double shown, from, target, logged;
   int64_t live_at, ramp_at;
+  double car_level;             // the car's own level as last in use, at car_at (-1: never): held over a takeover
+  int64_t car_at, car_frame_at; // car_frame_at: its frame's time (car.p.bright_at) then: a frame since ends the hold
 } bright_t;
 void bright_init(bright_t *b, const conf_t *cf, int64_t now);
 int bright_step(bright_t *b, const conf_t *cf, const car_t *c, int64_t now, int64_t idle);   // the % to set now

@@ -64,6 +64,18 @@ int main(void) {
   step(1);
   CHECK(B.src == BRIGHT_LAMPS && step(300) == 30);
 
+  brightness(160);                                // following at 80 %, then WiFi takes over from Bluetooth: the
+  step(0);                                        // car's values forgotten for the step-aside's settle...
+  CHECK(step(300) == 80);
+  C.wifi_live = false, car_from_bt(&C, NULL, now);
+  CHECK(step(1000) == 80 && B.src == BRIGHT_CAR); // ...held, not dimmed to idle
+  C.wifi_live = true;                             // live again, its 0x273 not in yet: still held, not the day level
+  CHECK(step(1000) == 80 && B.src == BRIGHT_CAR);
+  step(cf.bright_stale_ms - 2000 + 1);
+  CHECK(B.src != BRIGHT_CAR);                     // never longer than bright_stale_ms
+  lamps(4);
+  step(0), step(300);
+
   brightness(160);                                // a level set by hand stops following until re-enabled
   bright_manual(&B, 70);
   step(0);

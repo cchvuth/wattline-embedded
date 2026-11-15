@@ -15,6 +15,7 @@ void bright_init(bright_t *b, const conf_t *cf, int64_t now) {
   b->src = -1;
   b->live_at = now;
   b->shown = NAN;
+  b->car_at = -1;
 }
 
 // The settings screen's "Follow car screen brightness" switch and slider (dash.c applies them).
@@ -29,6 +30,13 @@ int bright_step(bright_t *b, const conf_t *cf, const car_t *c, int64_t now, int6
   }
   double car = car_display_brightness(c, now), t;
   int src;
+  // The car's level held for bright_stale_ms when it vanished rather than went stale: WiFi taking over from Bluetooth
+  // forgets the car's values for the step-aside's settle, and 0x273 comes a moment after the hello. Else idle (10 %),
+  // then the day level, would flash in between.
+  if (live && !isnan(car)) b->car_level = car, b->car_at = now, b->car_frame_at = c->p.bright_at;
+  else if ((!live || isnan(c->display_brightness)) && c->p.bright_at == b->car_frame_at && b->car_at >= 0 &&
+           now - b->car_at <= cf->bright_stale_ms)   // not after a frame since (0x273 saying "not available")
+    car = b->car_level, live = true;
   if (live && b->follow && !isnan(car)) t = car * cf->bright_follow_scale + cf->bright_follow_offset + b->offset, src = BRIGHT_CAR;
   else if (b->manual >= 0) t = b->manual, src = BRIGHT_MANUAL;   // a level set by hand: held with or without car data
   else if (live) t = b->night ? cf->bright_night : cf->bright_day, src = BRIGHT_LAMPS;
