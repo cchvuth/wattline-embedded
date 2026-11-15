@@ -762,6 +762,7 @@ void dash_ui_init(lv_obj_t *scr)
 	lv_obj_set_style_bg_grad_color(glow_b, rgb(ALERT), 0);
 	/* the path lines: over the edge glows (as the app paints them, under the whole dash), under the chips, the route
 	 * card and the car; over the whole screen (only the dots' areas are repainted), dots under a chip or the card left out */
+	cab.frame = box(root); /* an unbuckled seat's red frame: the decoration under the picture, so under the dots too */
 	steer = box(root);
 	place(steer, 0, 0, G.W, G.H);
 	lv_obj_add_event_cb(steer, steer_draw, LV_EVENT_DRAW_MAIN, NULL);
@@ -812,7 +813,6 @@ void dash_ui_init(lv_obj_t *scr)
 
 	/* Left: the lights row over the car. */
 	lights_row = box(root);
-	cab.frame = box(root);
 	cab.grp = box(root);
 	lv_obj_set_overflow_visible(cab.grp, true);
 	cab.car_type = -1;
