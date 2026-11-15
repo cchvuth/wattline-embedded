@@ -1,7 +1,7 @@
 # R3 = R2 as a product: the dash program (package dashapp, /usr/bin/dash) started at boot under a supervisor, the hardware
 # watchdog petted by it, the card's p3 (ext4) at /data for what must survive power-off, WiFi to S3XY_OBD and the networks
 # on the card, SSH only when the card brings keys, a quiet console. eMMC stays read-only. No owner credentials in the image.
-# Needs /radio (docker -v ~/dash-ownfw/radio:/radio:ro: the WiFi driver source) and /native (-v ~/projs/dash-native:/native:ro:
+# Needs /radio (docker -v <repo>/os/radio:/radio:ro: the WiFi driver source) and /native (-v <repo>/app:/native:ro:
 # the dash program). No BT firmware in the image: bt-fwcutter + S10bt-firmware cut it on the device at first boot.
 BR2_arm=y
 BR2_cortex_a7=y

@@ -1,5 +1,6 @@
 # R2 = R1 + the RTL8733BS radio: WiFi station (SDIO, 8733bs module, EU/ETSI channel plan) and BT (H5 on UART3, serdev). eMMC stays read-only.
-# Needs the private radio tree mounted at /radio (docker -v ~/dash-ownfw/radio:/radio:ro): driver source /radio/src/work, BT firmware overlay /radio/overlay.
+# Needs a radio tree mounted at /radio: the driver source /radio/src/work (this repository's os/radio: docker -v
+# <repo>/os/radio:/radio:ro) and, for R2 only, a BT firmware overlay /radio/overlay (vendor firmware, not in this repository).
 BR2_arm=y
 BR2_cortex_a7=y
 BR2_ARM_FPU_NEON_VFPV4=y
