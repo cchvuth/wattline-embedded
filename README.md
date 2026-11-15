@@ -24,7 +24,7 @@ How to put the files there:
   ```
 - **Or** power off, take the card out, and mount its data partition (ext4, label `DASHDATA2`) on a computer, then copy the files into `wattline/`.
 
-If no cert is present the Dash generates a self-signed placeholder so the on-screen **Android Auto** button still appears; a real certificate replaces it. The button is in the dashboard's bottom-right — tapping it starts Android Auto.
+No certificate ships with the Dash, and none is generated: the on-screen **Android Auto** button (bottom-right of the dashboard) appears only once a Google-signed certificate is in place. A self-signed one is set aside at boot (`aa.crt.self-signed`), since phones reject it; `aa certcheck /data/wattline/aa.crt` tells you which kind you have. Tapping the button starts Android Auto.
 
 ## How to build
 

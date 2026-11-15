@@ -34,6 +34,7 @@
 #include <openssl/err.h>
 #include <openssl/x509.h>
 #include <openssl/pem.h>
+#include <openssl/x509v3.h>
 #include <fcntl.h>
 #include <sys/time.h>
 #include <poll.h>
@@ -136,6 +137,20 @@ static void pump(aa_tls_t *from, aa_tls_t *to)
 }
 
 // generate a self-signed cert/key to PEM files via the OpenSSL API (no openssl CLI needed; runs on-device)
+// A head-unit certificate a phone can accept: readable and not self-signed (phones pin Google's Android Auto CA, so a
+// self-signed one fails the handshake). 0 usable; 1 self-signed; -1 missing or not a PEM certificate.
+static int cert_check(const char *path)
+{
+	FILE *f = fopen(path, "r");
+	if (!f) return -1;
+	X509 *x = PEM_read_X509(f, NULL, NULL, NULL);
+	fclose(f);
+	if (!x) return -1;
+	int self = X509_check_issued(x, x) == X509_V_OK;
+	X509_free(x);
+	return self;
+}
+
 static int gen_cert(const char *crt, const char *key, long valid_secs)
 {
 	EVP_PKEY *pk = EVP_RSA_gen(2048);
@@ -1264,7 +1279,12 @@ int main(int argc, char **argv)
 		return 0;
 	}
 	if (argc > 1 && !strcmp(argv[1], "--selftest")) return selftest() | msg_selftest() | rx_selftest() | mt_selftest() | bt_selftest();
-	if (argc == 4 && !strcmp(argv[1], "gencert"))   // gencert <crt> <key>: a self-signed cert, for first boot / placeholder
+	if (argc == 3 && !strcmp(argv[1], "certcheck")) {   // certcheck <crt>: 0 if a phone can accept it (not self-signed)
+		int r = cert_check(argv[2]);
+		if (r) fprintf(stderr, "aa: %s: %s\n", argv[2], r > 0 ? "self-signed: phones reject it (a Google-signed head-unit certificate is needed)" : "no PEM certificate");
+		return r ? 1 : 0;
+	}
+	if (argc == 4 && !strcmp(argv[1], "gencert"))   // gencert <crt> <key>: a self-signed cert (tests; phones reject it)
 		return gen_cert(argv[2], argv[3], 10L * 365 * 86400) ? (fprintf(stderr, "aa: gencert failed\n"), 1) : 0;
 	if ((argc == 4 || argc == 2) && !strcmp(argv[1], "serve")) {
 		const char *cert = argc == 4 ? argv[2] : "/etc/wattline/aa.crt";

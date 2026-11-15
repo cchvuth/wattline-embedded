@@ -36,6 +36,7 @@ stop() {
 case "$1" in
 start)
 	[ -f "$CERT" ] || { echo "dash-aa: no head-unit certificate at $CERT" >&2; exit 1; }
+	aa certcheck "$CERT" || exit 1   # self-signed: the phone would refuse the handshake (it says why)
 	[ ${#PSK} -ge 8 ] || { echo "dash-aa: could not make the AP passphrase" >&2; exit 1; }
 	[ -f "$MARK" ] && exit 0   # already up
 	IFACE=wlan1; ip link show wlan1 >/dev/null 2>&1 || IFACE=wlan0
