@@ -512,6 +512,18 @@ int main(void) {
   cmdr_wifi_first(&c, 0, now);
   for (int i = 0; i < 10; i++) cmdr_wifi(&c, 0, 0, now), run(&c, 1000);
   CHECK(c.state == CS_READY);
+  // Off and on again before the next tick (AA let go at once): still stepped aside, as it was.
+  fresh(&c, 1);
+  cmdr_connect(&c, now);
+  cmdr_wifi(&c, 0, 1, now);
+  run(&c, 1000);
+  cmdr_step_aside(&c, now);
+  run(&c, 1000);
+  scans0 = dev.scans;
+  cmdr_wifi_first(&c, 0, now);
+  cmdr_wifi_first(&c, 1, now);
+  for (int i = 0; i < 20; i++) cmdr_wifi(&c, 0, 0, now), run(&c, 1000);
+  CHECK(c.paused && dev.scans == scans0);
 
   remove(ID_PATH);
   remove(PIN_PATH);

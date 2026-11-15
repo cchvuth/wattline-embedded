@@ -87,12 +87,14 @@ start|restore)
 	fi
 	aa bt "$IP" "$SSID" "$PSK" "$BSSID" >/data/log/aa-bt.log 2>&1 &
 	aa serve >/data/log/aa-serve.log 2>&1 &
-	: > /data/aa-on 2>/dev/null && sync   # up: on again at the next start (the dash restores it), until stopped
+	touch /data/aa-on 2>/dev/null && sync   # up: on again at the next start (the dash restores it), until stopped
+	# (touch, not `: >`: a failed redirect on a special builtin would end the script before the marker)
 	: > "$MARK"
 	;;
-stop)   # the owner's stop (the button, the split's Exit): off, and off at the next start too
-	stop
-	rm -f /data/aa-on 2>/dev/null && sync || echo "dash-aa: /data/aa-on not removed: AA comes back at the next start" >&2 ;;
+stop)   # the owner's stop (the button, the split's Exit): off, and off at the next start too (first: a power cut
+	# during the seconds stop takes must not bring it back)
+	rm -f /data/aa-on 2>/dev/null && sync || echo "dash-aa: /data/aa-on not removed: AA comes back at the next start" >&2
+	stop ;;
 forget)   # every phone paired with the Dash (each gets the AP's passphrase whenever AA is on): removed
 	btc devices Paired 2>/dev/null | while read -r _ a _; do
 		case "$a" in ??:??:??:??:??:??) btc remove "$a" >/dev/null 2>&1 && echo "dash-aa: forgot $a" ;; esac
