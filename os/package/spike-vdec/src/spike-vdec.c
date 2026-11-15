@@ -350,6 +350,8 @@ static void gap_frames(int fn)
 {
 	int max_fn = 1 << (sps.log2_max_frame_num_minus4 + 4);
 	for (int f = (prev_ref_fn + 1) % max_fn; f != fn; f = (f + 1) % max_fn) {
+		for (int i = 0; i < nrefs; i++)	/* a stream breaking the spec: two short-term frames would share the number */
+			if (!refs[i].lt && refs[i].frame_num == f) die("a frame_num gap over a short-term frame still held (%d)", f);
 		refs[nrefs++] = (ref_t){ 0, f, 0, -1, 0, 0 };	/* cap -1: no picture */
 		slide(f);
 		prev_ref_fn = f;
@@ -382,6 +384,8 @@ static void fill_refs(pic_t *p)
 	}
 	if (p->sl.slice_type != V4L2_H264_SLICE_TYPE_P) return;
 	if (!real) die("P picture with no reference");
+	int first = -1;	/* the first frame in the list with a picture: what an empty or "non-existing" place names, so the */
+	for (int k = 0; k < n && first < 0; k++) if (refs[list[k]].cap >= 0) first = list[k];	/* engine never reads none */
 	int num = p->sl.num_ref_idx_l0_active_minus1 + 1, pred = cur;	/* picNumL0Pred starts at CurrPicNum */
 	for (int k = n; k <= num; k++) list[k] = -1;	/* "no reference picture" */
 	for (int m = 0; m < p->nmod; m++) {
@@ -398,8 +402,6 @@ static void fill_refs(pic_t *p)
 		int w = m + 1;
 		for (int k = m + 1; k <= num; k++) if (list[k] != want) list[w++] = list[k];
 	}
-	int first = -1;	/* the first frame in the list with a picture: what an empty or "non-existing" place names, so the */
-	for (int k = 0; k < n && first < 0; k++) if (refs[list[k]].cap >= 0) first = list[k];	/* engine never reads none */
 	for (int k = 0; k < num; k++) {
 		p->sl.ref_pic_list0[k].index = list[k] >= 0 && refs[list[k]].cap >= 0 ? list[k] : first;
 		p->sl.ref_pic_list0[k].fields = V4L2_H264_FRAME_REF;
@@ -896,6 +898,7 @@ static int dec_one(dec_t *D, pic_t *p, nal_t *s)
 	if (p->ref) add_ref(p, ts, poc, ci);
 	D->frames++;
 	if (!bad) D->newest_ci = ci;	/* decode order, not POC order: fine for the display (AA sends IPPP, no reorder) */
+	else if (ci == D->newest_ci) D->newest_ci = -1;	/* its buffer now holds the flagged picture */
 	if (fb_fd >= 0 && D->show_each) D->last_ci = ci, fb_show(D);
 	else if (fb_fd >= 0 && !bad) {   /* the live stream: in the queue to show; when it is full (the screen behind), the oldest is dropped */
 		if (D->npend == 2) D->pend[0] = D->pend[1], D->npend = 1;
@@ -975,11 +978,13 @@ static void process_nal(const uint8_t *p, size_t n, dec_t *D, int *set)
 	} else if (t == 8) parse_pps(&b);
 	else if (t == 1 || t == 5) {
 		if (!have_sps || !have_pps) return;	/* joined mid-stream: wait for the next SPS/PPS before decoding */
-		if (need_idr) { if (t != 5) return; need_idr = 0; }
+		if (need_idr && t != 5) return;
 		if (!*set) { dec_setup(D, 0); *set = 1; }
 		pic_t p2; nal_t s = { p, n };
 		parse_slice(&b, t, r, &p2);
-		if (!p2.redundant) dec_one(D, &p2, &s);
+		if (p2.redundant) return;	/* a copy: never the IDR a new SPS waits for */
+		need_idr = 0;
+		dec_one(D, &p2, &s);
 	}
 }
 
