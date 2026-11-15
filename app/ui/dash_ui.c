@@ -1080,7 +1080,7 @@ static void set_links(const dash_state_t *s)
 		wi = &ic_wifi_l, wc = s->ssh > 0 ? REGEN : W70, ww = s->ssh > 0 ? "SSH" : "NET", secs = -1;
 	}
 	if (projecting && s->wifi != WIFI_LIVE) { /* the phone on our AP: the pictures it shows per second, once known */
-		static char fw[12];
+		static char fw[16];   /* any int's "%d fps" */
 		int fps = pj_fps();
 		if (fps >= 0) snprintf(fw, sizeof fw, "%d fps", fps);
 		wi = &ic_wifi_l, wc = REGEN, ww = fps >= 0 ? fw : "AA", secs = -1;
@@ -2721,14 +2721,16 @@ static void settings_build(void)
 	lv_obj_set_width(cnote, ri(w - xp - pad));
 	lv_label_set_text(cnote, "The car's picture, its seats and belts, and a rear-motor car's ring (the pedals on the right) follow it.");
 	/* the display */
-	c = set_page[2]; /* one column, two groups: the dash's figures and clock, the screen's brightness */
+	c = set_page[2]; /* one column, three groups: performance (frame rate, AA's resolution), the dash's figures and clock, the screen's brightness */
 	cw = w - xp - pad;
-	group_title(c, "Dash");
+	group_title(c, "Performance");
+	switch_note_row(c, "60 frames a second", "Smoother, more work for the Dash. Android Auto too, from the next connection", 9, cw);
+	switch_note_row(c, "Android Auto at 480p", "Scaled up to fit: a softer picture, lighter on the WiFi and the phone. From the next connection", 8, cw);
+	lv_obj_set_style_margin_top(group_title(c, "Dash"), ri(PB(14)), 0);
 	switch_row(c, "Show 12 V, other power and cell imbalance", 0, cw);
 	switch_row(c, "24-hour clock", 1, cw); /* the zone's name on a button: a tap, the next */
 	set_tz_btn = button_row(c, text_block(c, "Time zone", "The arrival and charge clocks, summer time included"), "UTC", tz_tap, cw);
 	lv_obj_set_style_margin_top(group_title(c, "Screen"), ri(PB(14)), 0);
-	switch_note_row(c, "60 frames a second", "Smoother, more work for the Dash. Android Auto too, from the next connection", 9, cw);
 	switch_row(c, "Follow car screen brightness", 3, cw);
 	lv_obj_t *br = box(c); /* "Brightness", and what it does now */
 	lv_obj_set_size(br, ri(cw), LV_SIZE_CONTENT);
@@ -2777,7 +2779,8 @@ static void settings_build(void)
 	lv_obj_set_size(net_list, ri(ncw), LV_SIZE_CONTENT); /* as tall as its rows: a box's default height clips them */
 	near_list = column(c, PB(6));
 	lv_obj_set_size(near_list, ri(ncw), LV_SIZE_CONTENT);
-	/* advanced, one column in three groups: the developer's, the links' timing (the phone app's Advanced), software update */
+	/* advanced, one column in four groups: the developer's, the links' timing (the phone app's Advanced), Android Auto's
+	 * paired phones, software update */
 	float aw = w - xp - pad;
 	c = set_page[4];
 	group_title(c, "Developer");
@@ -2793,7 +2796,6 @@ static void settings_build(void)
 	switch_note_row(c, "Sparse polling", "Steadier speed, slower doors and belts", 5, aw);
 	switch_note_row(c, "Bluetooth waits for WiFi", "No Bluetooth until the WiFi stream runs, however long", 6, aw);
 	lv_obj_set_style_margin_top(group_title(c, "Android Auto"), ri(PB(14)), 0);
-	switch_note_row(c, "Lower resolution", "480p from the phone, scaled up: lighter on the WiFi and the phone, a softer picture. From the next connection", 8, aw);
 	lv_obj_t *fw = text_block(c, "Paired phones", "Each one gets Android Auto's WiFi password whenever it is on. Forget them "
 						      "all (a phone sold, a passenger's), then pair yours again from the AA button");
 	fg_aa.btn = button_row(c, fw, "Forget phones", aa_forget_tap, aw);

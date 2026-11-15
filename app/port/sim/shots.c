@@ -162,17 +162,16 @@ int main(int argc, char **argv)
 			bad |= shot(d, out, ends[k].name, &s, DASH_VIEW_SETTINGS);
 			dash_ui_settings_tab(0); /* another tab: back at the top next time */
 		}
-		static const struct { int tab; const char *label, *name; } rows[] = {   /* a row scrolled into view: its group whole */
-			{4, "Lower resolution", "touch-settings-advanced-aa"}, {2, "60 frames a second", "touch-settings-display-fps"}};
-		for (int k = 0; k < 2; k++) {
+		static const struct { int tab; const char *label, *name; } rows[] = {   /* a group's title (unique) at its page's top */
+			{4, "Android Auto", "touch-settings-advanced-aa"}, {2, "Dash", "touch-settings-display-dash"}};
+		for (int k = 0; k < (int)(sizeof rows / sizeof rows[0]); k++) {
 			dash_ui_settings_tab(rows[k].tab);
 			lv_obj_t *l = find_label(lv_layer_top(), rows[k].label);
 			if (!l) printf("no label %s\n", rows[k].label), bad = 1;
 			else {
-				lv_obj_update_layout(lv_layer_top()), lv_obj_scroll_to_view_recursive(l, LV_ANIM_OFF);
 				lv_obj_t *pg = l;
 				do pg = lv_obj_get_parent(pg); while (pg && !lv_obj_is_scrollable(pg));
-				if (pg) lv_obj_scroll_by_bounded(pg, 0, -170, LV_ANIM_OFF); /* the whole group, not its first line at the foot */
+				if (pg) lv_obj_update_layout(pg), lv_obj_scroll_to_y(pg, lv_obj_get_y(l), LV_ANIM_OFF); /* the group whole */
 			}
 			bad |= shot(d, out, rows[k].name, &s, DASH_VIEW_SETTINGS);
 			dash_ui_settings_tab(0); /* another tab: back at the top next time */
