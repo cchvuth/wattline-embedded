@@ -468,6 +468,13 @@ void cmdr_wifi(cmdr_t *c, int live, int trying, int64_t now) {
   c->data_at = now + c->cfg.rejoin_ms;
 }
 
+void cmdr_wifi_first(cmdr_t *c, int on, int64_t now) {
+  c->cfg.wifi_first = on;
+  // stepped aside while it waited for the WiFi stream, which now does not go first (Android Auto took the radio before
+  // the stream came): back at the next tick, as a step-aside without wifi_first would have set it
+  if (!on && c->paused && c->back_at < 0 && c->buttons_at < 0) c->back_at = now;
+}
+
 int cmdr_step_aside(cmdr_t *c, int64_t now) {
   c->back_at = c->buttons_at = c->data_at = -1; // a new WiFi try: none of the last stream's timers fire in it
   cmdr_data_hold(c, 1, now);

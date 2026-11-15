@@ -120,6 +120,7 @@ int64_t cmdr_until(const cmdr_t *c);                 // what the icon counts dow
 // WiFi side (main.dart _linksChanged/_stepAside/_btWaitsFor). Call cmdr_wifi
 // whenever the WiFi link's state is known (each tick is fine).
 void cmdr_wifi(cmdr_t *c, int live, int trying, int64_t now);
+void cmdr_wifi_first(cmdr_t *c, int on, int64_t now);   // "Bluetooth waits for WiFi" set (off while AA holds the radio)
 // Before each WiFi stream starts: returns how long to wait before the hello.
 int cmdr_step_aside(cmdr_t *c, int64_t now);
 int cmdr_pause(cmdr_t *c, int64_t now);              // 1 if a link was up or on its way

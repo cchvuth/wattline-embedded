@@ -479,7 +479,7 @@ static gboolean request(gpointer u) {
     m->b = (int)c->last_status;
     reply(b, m);
     break;
-  case BLE_WIFI_FIRST: c->cfg.wifi_first = m->a; break;
+  case BLE_WIFI_FIRST: cmdr_wifi_first(c, m->a, now); break;
   case BLE_STOP: cmdr_pause(c, now), g_main_loop_quit(b->loop); break;
   }
   publish(b);

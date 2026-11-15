@@ -491,6 +491,28 @@ int main(void) {
   for (int i = 0; i < 40 && c.state != CS_APPROVING; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
   CHECK(c.state == CS_APPROVING);
 
+  // --- Stepped aside for WiFi's first try while it waits for WiFi; Android Auto then takes the radio before the
+  // stream goes live (wifi_first off): back, not paused for the whole session. A ready link stepped aside alike. ---
+  fresh(&c, 1);
+  cmdr_connect(&c, now);
+  cmdr_wifi(&c, 0, 1, now);
+  run(&c, 1000);
+  cmdr_step_aside(&c, now);
+  run(&c, 1000);
+  CHECK(c.paused);
+  int scans0 = dev.scans;
+  cmdr_wifi_first(&c, 0, now);
+  for (int i = 0; i < 10; i++) cmdr_wifi(&c, 0, 0, now), run(&c, 1000);
+  CHECK(!c.paused && dev.scans > scans0 && c.state == CS_READY);
+  fresh(&c, 0);
+  cmdr_connect(&c, now);
+  run(&c, 100);
+  cmdr_wifi_first(&c, 1, now);
+  cmdr_step_aside(&c, now);
+  cmdr_wifi_first(&c, 0, now);
+  for (int i = 0; i < 10; i++) cmdr_wifi(&c, 0, 0, now), run(&c, 1000);
+  CHECK(c.state == CS_READY);
+
   remove(ID_PATH);
   remove(PIN_PATH);
   printf("test_cmdr: %d checks pass\n", checks);
