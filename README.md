@@ -57,6 +57,10 @@ make O=<output dir>
 
 Rebuild single packages in an existing output tree: `make BR2_EXTERNAL=/ext wattline-aa-rebuild spike-vdec-rebuild` (run in the output dir).
 
+### Private additions
+
+The author's own unit runs a few additions kept in a private repository, because they need files that can't be published. They aren't in this repository, its releases or its update bundles. Nothing here depends on them, and a build from this repository is complete without them.
+
 ### Updating a running Dash
 
 The root filesystem is an initramfs: it runs from RAM and is read back from the card at every boot, so a file copied onto a running Dash is gone after a power cycle. To make a change stay:
