@@ -1,5 +1,5 @@
 #!/bin/sh
-# dash-update {status|check|fetch|apply|confirm|auto}: over-the-air updates from the project's GitHub releases.
+# dash-update {status|check|fetch|apply|install|confirm|auto|watch}: over-the-air updates from the project's GitHub releases.
 #
 # The factory image stays on the card's boot partition (p1) and is never rewritten. An update is unpacked into a
 # slot on /data (/data/boot/A or B), and ota.txt on p1 tells U-Boot's dash.scr which slot to start (see dash.cmd
@@ -14,7 +14,7 @@
 #   install  fetch and apply the newest release (the Install button; also retries a version that failed before)
 #   auto     the same, but never a version that already failed to start here (S99ota, automatic updates on)
 #   watch    this start still on trial (not confirmed) and its dash not running healthy: restart, so U-Boot counts it
-#            (S00trial, 4 min after a start)
+#            (S00trial, 4 min after a start, or after a repair of /data then)
 #   status   print the state the UI shows (also in /run/dash-update.status)
 #
 # Trust: the release's SHA256SUMS must carry a valid Ed25519 signature by the project key baked into the image
@@ -213,7 +213,7 @@ cmd_apply() {
 }
 
 cmd_confirm() {
-	B=$(booted_slot); ota_read || { [ -n "$B" ] && fail "cannot read ota.txt: this start not confirmed yet"; return 0; }   # S99ota retries
+	B=$(booted_slot); ota_read || { [ -n "$B" ] && fail "cannot read ota.txt"; return 0; }   # a slot start: S99ota tries again
 	if [ -z "$trial" ]; then
 		if note_failed; then status rolled-back "version $v did not start"; else status ok; fi   # said once
 		return 0
@@ -237,7 +237,9 @@ cmd_confirm() {
 dash_starts() { grep -c " start$" /data/log/dash.out 2>/dev/null; }   # the supervisor logs each (re)start of the dash
 cmd_watch() {
 	P1MNT=$P1MNT.watch; B=$(booted_slot)
-	while pidof e2fsck fsck.ext4 >/dev/null; do sleep 10; done   # S05data still repairing /data: not hung, let it finish
+	# S05data still repairing /data: not hung, let it finish (up to 15 min: a repair stuck on a dying card is), then give
+	# the rest of the boot its 4 min again
+	i=0; w=; while [ $i -lt 90 ] && pidof e2fsck fsck.ext4 >/dev/null; do w=1; i=$((i+1)); sleep 10; done; [ -n "$w" ] && sleep 240
 	[ -n "$B" ] && ota_read && [ -n "$trial" ] && [ "$slot" = "$B" ] || return 0
 	r=$(dash_starts); sleep 15
 	pidof dash >/dev/null && [ "$(dash_starts)" = "$r" ] && { log "slot $B on trial, unconfirmed, but its dash runs: left be"; return 0; }

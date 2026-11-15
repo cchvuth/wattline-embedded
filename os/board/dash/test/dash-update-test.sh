@@ -16,6 +16,7 @@ cp "$EXT/board/dash/rootfs_overlay_r4/usr/sbin/dash-update" $W/dash-update
 cat > $W/bin/mount <<'EOF'
 #!/bin/sh
 case "$*" in *"-o rw"*) [ -n "${RW_FAIL:-}" ] && exit 32 ;; esac   # RW_FAIL: p1 cannot be mounted to write
+[ -n "${P1_FAIL:-}" ] && exit 32   # P1_FAIL: p1 cannot be mounted at all
 eval "dir=\${$#}"; eval "dev=\${$(($# - 1))}"; rmdir "$dir" 2>/dev/null; ln -sfn "$dev" "$dir"
 EOF
 printf '#!/bin/sh\nrm -f "$1"\n' > $W/bin/umount
@@ -211,5 +212,12 @@ check "watch: another slot armed for the next start: left be" "[$(cat $W/reboote
 reset "slot=A trial=1 bootcount=1" "dash.slot="
 upd watch
 check "watch: the factory image (the trial fell through): left be" "[$(cat $W/rebooted 2>/dev/null)]" "[]"
+
+reset "slot=B good=A trial=1 bootcount=1" "dash.slot=B"
+P1_FAIL=1 upd confirm; R=$?
+check "confirm on a slot start, p1 unreadable: says it did not" "$R $(state) $(ota)" "1 error bootcount=1 good=A slot=B trial=1 "
+reset "" "dash.slot="
+P1_FAIL=1 upd confirm; R=$?
+check "confirm on the factory image, p1 unreadable: nothing to confirm" "$R" "0"
 
 [ $FAIL = 0 ] && echo "ALL PASS" || { echo "SOME FAILED"; exit 1; }
