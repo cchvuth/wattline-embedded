@@ -22,6 +22,7 @@
 #include <fcntl.h>
 #include <glob.h>
 #include <poll.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -381,12 +382,13 @@ static void cpu_sys(unsigned long long *busy, unsigned long long *all)
 
 /* ---- the rotate estimate: NV12 W x H landscape -> BGRA H x W portrait (the panel is scanned 480x1920) ---- */
 static uint8_t clip8(int v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
-static void rotate_nv12_bgra(const uint8_t *y, const uint8_t *uv, int stride, int w, int h, uint32_t *dst)
+static void rotate_nv12_bgra(const uint8_t *y, const uint8_t *uv, int stride, int w, int h, uint32_t *dst, int y0, int y1)
 {
-	/* landscape (x, y) -> panel (h-1-y, x): dst row x, column h-1-y. 16x16 tiles keep the column writes cached. */
-	for (int ty = 0; ty < h; ty += 16)
+	/* landscape (x, y) -> panel (h-1-y, x): dst row x, column h-1-y. 16x16 tiles keep the column writes cached.
+	 * Rows y0..y1-1 only (even bounds): two threads each take a band of rows, and their writes never overlap. */
+	for (int ty = y0; ty < y1; ty += 16)
 		for (int tx = 0; tx < w; tx += 16)
-			for (int yy = ty; yy < ty + 16 && yy < h; yy += 2)
+			for (int yy = ty; yy < ty + 16 && yy < y1; yy += 2)
 				for (int xx = tx; xx < tx + 16 && xx < w; xx += 2) {
 					const uint8_t *c = uv + (yy / 2) * stride + xx;
 					int d = c[0] - 128, e = c[1] - 128;
@@ -420,7 +422,7 @@ static void rotate_bench(const char *what, const uint8_t *src, int stride, int w
 {
 	uint32_t *dst = malloc((size_t)w * h * 4); if (!dst) die("out of memory");
 	int n = 30; double t = now(), c = cpu_self();
-	for (int i = 0; i < n; i++) rotate_nv12_bgra(src, src + (size_t)stride * h, stride, w, h, dst);
+	for (int i = 0; i < n; i++) rotate_nv12_bgra(src, src + (size_t)stride * h, stride, w, h, dst, 0, h);
 	t = now() - t; c = cpu_self() - c;
 	printf("ROTATE %s %dx%d NV12 -> %dx%d BGRA: %.1f ms/frame = %.1f fps on one core (CPU %.0f%% of one core)\n",
 	       what, w, h, h, w, t * 1000 / n, n / t, 100 * c / t);
@@ -466,12 +468,16 @@ typedef struct {
 	int vfd, mfd, rq, ncap, stride, ah, frames, errors;
 	struct buf out[NOUT], cap[MAXCAP];
 	uint8_t *fb_cram;	/* cached NV12 copy so the rotate reads fast (the V4L2 mmap is uncached) */
+	int show_each;		/* the file path: show every picture. The live stream shows only the newest (fb_show) */
+	int last_ci;		/* the capture buffer of the newest picture not yet shown, or -1 */
+	int shown; double show_s;	/* stats: pictures shown and the time spent showing them */
 } dec_t;
 
 /* open the video engine and set it up from the current (already-parsed) global sps */
-static void dec_setup(dec_t *D)
+static void dec_setup(dec_t *D, int show_each)
 {
 	memset(D, 0, sizeof *D);
+	D->show_each = show_each; D->last_ci = -1;
 	char vname[64], mname[64];
 	D->vfd = find_dev("/dev/video*", 0, vname); D->mfd = find_dev("/dev/media*", 1, mname);
 	if (D->vfd < 0 || D->mfd < 0) die("no cedrus video/media device (spike-vdec --info)");
@@ -511,7 +517,43 @@ static void dec_setup(dec_t *D)
 	}
 }
 
-/* decode one already-parsed picture (slice bytes in *s); blit to the panel if fb is open; returns its capture index */
+/* show the newest decoded picture on the panel: copy the rows the region needs out of the (uncached) capture
+ * buffer, rotate them into panel order, blit. This is the costly step (the decode itself is ~3 ms in hardware),
+ * so the live stream runs it once per batch of input, on the newest picture only: when the source is faster than
+ * this, older pictures are decoded (they are references) but not shown, and the screen never falls behind. */
+/* one band of the region's rows: copy them (and their chroma rows) out of the uncached capture buffer, rotate them */
+typedef struct { const dec_t *D; const uint8_t *cy, *cuv; uint8_t *yy, *uv; int sx, sy, y0, y1; } band_t;
+static void *band_show(void *arg)
+{
+	const band_t *b = arg; size_t st = (size_t)b->D->stride;
+	memcpy(b->yy + (b->sy + b->y0) * st, b->cy + (b->sy + b->y0) * st, (size_t)(b->y1 - b->y0) * st);
+	memcpy(b->uv + (b->sy + b->y0) / 2 * st, b->cuv + (b->sy + b->y0) / 2 * st, (size_t)(b->y1 - b->y0) / 2 * st);
+	rotate_nv12_bgra(b->yy + b->sy * st + b->sx, b->uv + b->sy / 2 * st + b->sx, (int)st, rgn_w, RGN_H, fb_bgra, b->y0, b->y1);
+	return NULL;
+}
+static void fb_show(dec_t *D)
+{
+	if (D->last_ci < 0) return;
+	double t = now();
+	const uint8_t *cy = D->cap[D->last_ci].p, *cuv = cy + (size_t)D->stride * D->ah;
+	uint8_t *yy = D->fb_cram, *uv = D->fb_cram + (size_t)D->stride * D->ah;
+	if (crop_w >= rgn_w && crop_h >= RGN_H) {   /* the region's window from the frame's middle, unscaled */
+		int sx = ((crop_w - rgn_w) / 2 + crop_x) & ~1, sy = ((crop_h - RGN_H) / 2 + crop_y) & ~1;   /* even: NV12 */
+		/* both cores (the T113 has two): the top band on a thread, the bottom one here. RGN_H / 2 = 240 keeps both
+		 * bands even and tile-aligned. If the thread cannot start, this thread does both bands. */
+		band_t top = { D, cy, cuv, yy, uv, sx, sy, 0, RGN_H / 2 }, bot = { D, cy, cuv, yy, uv, sx, sy, RGN_H / 2, RGN_H };
+		pthread_t th; int threaded = pthread_create(&th, NULL, band_show, &top) == 0;
+		band_show(&bot);
+		if (threaded) pthread_join(th, NULL); else band_show(&top);
+	} else {                                    /* a smaller frame than asked for: scale it into the region */
+		memcpy(D->fb_cram, D->cap[D->last_ci].p, (size_t)D->stride * D->ah * 3 / 2);
+		rotate_scale_nv12_bgra(yy, uv, D->stride, crop_w, crop_h, rgn_w, RGN_H, fb_bgra);
+	}
+	fb_blit(rgn_w, RGN_H);
+	D->last_ci = -1; D->shown++; D->show_s += now() - t;
+}
+
+/* decode one already-parsed picture (slice bytes in *s); show it if this path shows every one; returns its capture index */
 static int dec_one(dec_t *D, pic_t *p, nal_t *s)
 {
 	int poc = calc_poc(p);
@@ -543,18 +585,9 @@ static int dec_one(dec_t *D, pic_t *p, nal_t *s)
 	if (bc.flags & V4L2_BUF_FLAG_ERROR) D->errors++;
 	if (ioctl(D->rq, MEDIA_REQUEST_IOC_REINIT)) die("MEDIA_REQUEST_IOC_REINIT: %s", strerror(errno));
 	if (p->ref) add_ref(p, ts, poc, ci);
-	if (fb_fd >= 0) {	/* decode order, not POC order: fine for the display (AA sends IPPP, no reorder) */
-		size_t sz = (size_t)D->stride * D->ah * 3 / 2;
-		memcpy(D->fb_cram, D->cap[ci].p, sz);
-		const uint8_t *yy = D->fb_cram, *uv = D->fb_cram + (size_t)D->stride * D->ah;
-		if (crop_w >= rgn_w && crop_h >= RGN_H) {   /* the region's window from the frame's middle, unscaled */
-			int sx = ((crop_w - rgn_w) / 2 + crop_x) & ~1, sy = ((crop_h - RGN_H) / 2 + crop_y) & ~1;   /* even: NV12 */
-			rotate_nv12_bgra(yy + (size_t)sy * D->stride + sx, uv + (size_t)(sy / 2) * D->stride + sx, D->stride, rgn_w, RGN_H, fb_bgra);
-		} else                                      /* a smaller frame than asked for: scale it into the region */
-			rotate_scale_nv12_bgra(yy, uv, D->stride, crop_w, crop_h, rgn_w, RGN_H, fb_bgra);
-		fb_blit(rgn_w, RGN_H);
-	}
 	D->frames++;
+	D->last_ci = ci;	/* decode order, not POC order: fine for the display (AA sends IPPP, no reorder) */
+	if (fb_fd >= 0 && D->show_each) fb_show(D);
 	return ci;
 }
 
@@ -572,7 +605,7 @@ static int decode(const char *file, int verify, int do_rotate)
 	have_sps = have_pps = 0; nrefs = 0;
 	pic_t p; nal_t s;
 	if (next_pic(0, &p, &s) < 0) die("%s: no picture", file);	/* parse the SPS so dec_setup has the size */
-	dec_t D; dec_setup(&D);
+	dec_t D; dec_setup(&D, 1);
 	FILE *crc = NULL; char crcname[512];
 	if (verify) { snprintf(crcname, sizeof crcname, "%.*s.crc", (int)(strlen(file) - 5), file); crc = fopen(crcname, "r"); }
 	unsigned long long b0, a0, b1, a1; cpu_sys(&b0, &a0);
@@ -621,7 +654,7 @@ static void process_nal(const uint8_t *p, size_t n, dec_t *D, int *set)
 	else if (t == 8) parse_pps(&b);
 	else if (t == 1 || t == 5) {
 		if (!have_sps || !have_pps) return;	/* joined mid-stream: wait for the next SPS/PPS before decoding */
-		if (!*set) { dec_setup(D); *set = 1; }
+		if (!*set) { dec_setup(D, 0); *set = 1; }
 		pic_t p2; nal_t s = { p, n };
 		parse_slice(&b, t, r, &p2);
 		dec_one(D, &p2, &s);
@@ -655,14 +688,25 @@ static int decode_stream(int fd)
 	dec_t D; int set = 0;
 	size_t cap = 1u << 20, len = 0; uint8_t *buf = malloc(cap);
 	if (!buf) die("out of memory");
+	double next_stat = now() + 5, last_show_t = 0; int last_frames = 0, last_shown = 0; double last_show_s = 0;
 	for (;;) {
 		if (cap - len < 65536) { cap *= 2; buf = realloc(buf, cap); if (!buf) die("out of memory"); }
 		ssize_t r = read(fd, buf + len, cap - len);
 		if (r < 0) { if (errno == EINTR) continue; die("read: %s", strerror(errno)); }
-		if (r == 0) { stream_nals(buf, len, &D, &set, 1); break; }	/* EOF: flush the last NAL */
+		if (r == 0) { stream_nals(buf, len, &D, &set, 1); if (set) fb_show(&D); break; }	/* EOF: the last NAL */
 		len += r;
 		size_t used = stream_nals(buf, len, &D, &set, 0);
 		if (used) { memmove(buf, buf + used, len - used); len -= used; }
+		/* show the newest picture once the input is drained: if more is already waiting, decode that first */
+		struct pollfd pf = { .fd = fd, .events = POLLIN };
+		/* ...but at least every 100 ms, so a burst of input cannot freeze the picture */
+		if (set && D.last_ci >= 0 && (poll(&pf, 1, 0) == 0 || now() - last_show_t >= 0.1)) { fb_show(&D); last_show_t = now(); }
+		if (set && now() >= next_stat) {	/* the live picture's health: decoded vs shown, cost of showing */
+			int sh = D.shown - last_shown;
+			fprintf(stderr, "spike-vdec: 5 s: %d decoded, %d shown, %.1f ms per show\n", D.frames - last_frames, sh,
+				sh ? (D.show_s - last_show_s) * 1000 / sh : 0.0);
+			last_frames = D.frames; last_shown = D.shown; last_show_s = D.show_s; next_stat = now() + 5;
+		}
 	}
 	free(buf);
 	if (set) dec_free(&D);
