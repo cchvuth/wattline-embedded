@@ -772,6 +772,13 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 		if (left <= 0) {
 			send_ping(fd, tls); next_ping = t + AA_PING_EVERY_US; left = AA_PING_EVERY_US;
 			if (night_on) { int n = night_now(); if (n != night_sent) send_night(fd, tls, n), night_sent = n; }   /* dusk, dawn */
+			if (access(PJ_AA_FOCUS, F_OK) == 0) {   /* the dash's AA button after AA's own Exit: the map back (unrequested) */
+				unlink(PJ_AA_FOCUS);
+				uint8_t vf[8]; pb_out o = { vf, 0, sizeof vf, 0 }; pb_u(&o, AA_VFI_FOCUS_MODE, AA_FOCUS_FOCUSED); pb_u(&o, AA_VFI_UNREQUESTED, 1);
+				send_msg(fd, tls, AA_CH_VIDEO, AA_MSG_SPECIFIC, AA_AV_VIDEO_FOCUS_INDICATION, vf, o.n);
+				close(open("/run/dash-project", O_CREAT | O_WRONLY | O_CLOEXEC, 0644));
+				fprintf(stderr, "aa: video focus taken back (the dash's AA button)\n");
+			}
 		}
 		struct pollfd pf[2] = { { fd, POLLIN, 0 }, { touch, POLLIN, 0 } };
 		int pr = poll(pf, touch >= 0 ? 2 : 1, (int)(left / 1000) + 1);
@@ -979,6 +986,8 @@ static int aa_serve(const char *cert, const char *key)
 			send_msg(fd, NULL, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_AUTH_COMPLETE, ac, o.n);
 			int sink = spawn_sink();
 			close(open("/run/dash-project", O_CREAT | O_WRONLY, 0644));   // the dash UI yields the video region
+			close(open(PJ_AA_SESSION, O_CREAT | O_WRONLY | O_CLOEXEC, 0644));
+			unlink(PJ_AA_FOCUS);   // one left from before
 			aa_session(fd, &t, sink, &touch);
 			for (int k = 0; k < AA_NCHAN; k++) free(rx_asm[k].p), rx_asm[k] = (aa_asm_t){0};   /* the next session starts small */
 			// stop the decoder and wait it out BEFORE dropping the marker: the UI repaints the dash when the marker
@@ -986,6 +995,7 @@ static int aa_serve(const char *cert, const char *key)
 			if (sink >= 0) close(sink);
 			if (sink_pid > 0) { kill(sink_pid, SIGTERM); waitpid(sink_pid, NULL, 0); sink_pid = -1; }   // SIGCHLD ignored: returns once it is gone
 			unlink("/run/dash-project");
+			unlink(PJ_AA_SESSION), unlink(PJ_AA_FOCUS);
 			fprintf(stderr, "aa: session ended\n");
 		} else if (ok) {
 			unsigned long err = ERR_get_error();

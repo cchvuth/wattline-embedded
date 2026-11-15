@@ -63,9 +63,11 @@ typedef struct {
 // ---- the link's port: one connected UDP socket per attempt, as the app's RawDatagramSocket ----
 // Before each attempt Bluetooth steps aside, and the hello waits its settle (main.dart: Bluetooth first, then the WiFi
 // stream, took the Commander down). Asked once an attempt; the reply (cmdr_hook_sync) sets how long; 400 ms meanwhile.
+#ifdef DASH_CMDR
 // "Bluetooth waits for the WiFi stream", unless Android Auto holds the radio: WiFi cannot go live then, and a dropped
 // Bluetooth link must redial (during AA the car rides it)
 static int wifi_first_now(void) { return app_settings.wifi_first && access(PJ_AA_RADIO, F_OK) != 0; }
+#endif
 
 static int p_settle(void *x, int64_t now) {
 #ifdef DASH_CMDR
@@ -275,9 +277,9 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
   bright_init(&d->bright, cf, now);
   settings_load(&app_settings, cf);
   apply_settings(d, now);   // the time zone too (dash.conf's until set in the settings)
-  if (settings_aa_kept() && access("/etc/wattline/aa.crt", F_OK) == 0) {   // left on by its button: up again (the
-    log_msg("start: Android Auto was on: brought up again");                // phone rejoins; the car rides Bluetooth)
-    settings_aa(true);
+  if (settings_aa_kept() && access("/etc/wattline/aa.crt", F_OK) == 0) {   // left on: up again (the phone rejoins;
+    log_msg("start: Android Auto was on: brought up again");                // the car rides Bluetooth)
+    settings_aa_restore();
   }
   if (ui->show_settings) ui->show_settings(ui->ctx);
   if (!settings_car_saved && ui->ask_car) ui->ask_car(ui->ctx);   // first boot: which car (main.dart _askCar)

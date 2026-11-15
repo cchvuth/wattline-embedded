@@ -26,4 +26,8 @@
 #define PJ_AA_RADIO "/run/dash-aa-radio"
 /* S06wattline: the head-unit certificate cannot be used this start (its key, or unreadable): no AA button */
 #define PJ_AA_UNUSABLE "/run/dash-aa-unusable"
+/* aa serve: a phone's session is up (its map shown or put away by AA's own Exit); the dash asks for the map back with
+ * PJ_AA_FOCUS (its AA button while the map is put away), aa takes video focus again at its next ping tick */
+#define PJ_AA_SESSION "/run/dash-aa-session"
+#define PJ_AA_FOCUS "/run/dash-aa-focus"
 #define PJ_TOUCH_DEV "/dev/input/event0"

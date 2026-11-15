@@ -24,9 +24,9 @@ void settings_load(dash_settings_t *st, const conf_t *cf);   // what was saved, 
 int settings_save(dash_settings_t *st);
 void settings_refresh(dash_settings_t *st);   // as the screen opens: SSH on if Dropbear runs (the pairing turns it on)
 void settings_aa(bool start);         // the AA button: run settings_aa_cmd start|stop (wireless Android Auto on demand)
-// Android Auto left on by its button (<root>/aa-on): brought up again at the next start; off by the button or Exit
-void settings_aa_keep(bool on);
+// Android Auto left on (dash-aa writes <root>/aa-on once it is up, stop removes it): brought up again at the next start
 bool settings_aa_kept(void);
+void settings_aa_restore(void);   // dash-aa restore: as start, without the pairing window (nobody at the Dash tapped)
 void settings_aa_forget(void);          // dash-aa forget: the phones paired for Android Auto removed
 void settings_ota(const char *what);   // run dash-update <what> (check, auto) in the background
 void settings_reboot(void);            // restart the Dash (an armed update starts)

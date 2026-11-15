@@ -105,11 +105,11 @@ int main(void) {
   CHECK(settings_save(&back) == 0);
   CHECK(strstr(slurp("settings.conf"), "\naa_low_res = 1\n") != NULL);   // aa reads this exact form
   { dash_settings_t again; settings_load(&again, &cf); CHECK(again.aa_low_res); }
-  CHECK(!settings_aa_kept());                                                // Android Auto: off until its button
-  settings_aa_keep(true);
+  CHECK(!settings_aa_kept());                                                // Android Auto: off until dash-aa says up
+  fclose(fopen("build/settings_test/aa-on", "w"));                           // dash-aa start, once up
   CHECK(settings_aa_kept());                                                 // left on: up again at the next start
   CHECK(settings_save(&back) == 0 && settings_aa_kept());                    // the screen's save does not undo it
-  settings_aa_keep(false);
+  remove("build/settings_test/aa-on");                                       // dash-aa stop
   CHECK(!settings_aa_kept());
   CHECK(strstr(slurp("settings.conf"), "car = model3rwd\nsparse = 0\nwifi_first = 0\n") != NULL);
   settings_load(&back, &cf);
