@@ -338,13 +338,15 @@ diff -ruN a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
 diff -ruN a/drivers/gpu/drm/panel/panel-dash-dsi.c b/drivers/gpu/drm/panel/panel-dash-dsi.c
 --- a/drivers/gpu/drm/panel/panel-dash-dsi.c	1970-01-01 01:00:00
 +++ b/drivers/gpu/drm/panel/panel-dash-dsi.c	2026-11-13 13:00:43
-@@ -0,0 +1,222 @@
+@@ -0,0 +1,205 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * S3XY Dash panel: 480x1920 MIPI-DSI, 4 lanes, RGB888, video mode with sync pulses.
 + * The mode is the one the stock unit runs (read from its TCON/DSI registers, our own numbers).
 + * Init: power, an optional DCS list from the DT ("dash,init"), exit sleep, display on.
-+ * The panel's ID (DCS 0x04, 0xDA-0xDC) is read once and logged, to name its controller.
++ * No DCS reads: a panel that never answers one (the bus turned round to it and not handed back) leaves the DSI
++ * host's lane busy, and the video does not start until the next off/on, so a replacement panel that does not do
++ * reads would stay black. (The unit's panel, while it answered, read 0x38 at DCS 0xDA.)
 + *
 + * dash,init: a byte list of records <len cmd args...>; len counts cmd + args; a record
 + * <0xff ms> sleeps ms milliseconds instead. Example: [ 02 b0 04  ff 0a ] = write B0 04, wait 10 ms.
@@ -370,27 +372,11 @@ diff -ruN a/drivers/gpu/drm/panel/panel-dash-dsi.c b/drivers/gpu/drm/panel/panel
 +	struct gpio_desc *reset_gpio;
 +	const u8 *init;
 +	int init_len;
-+	bool id_done;
 +};
 +
 +static inline struct dash_panel *to_dash_panel(struct drm_panel *panel)
 +{
 +	return container_of(panel, struct dash_panel, panel);
-+}
-+
-+static void dash_panel_read_id(struct dash_panel *ctx)
-+{
-+	struct device *dev = &ctx->dsi->dev;
-+	u8 id[3] = {}, da = 0, db = 0, dc = 0;
-+	int r0, r1, r2, r3;
-+
-+	r0 = mipi_dsi_dcs_read(ctx->dsi, MIPI_DCS_GET_DISPLAY_ID, id, sizeof(id));
-+	r1 = mipi_dsi_dcs_read(ctx->dsi, 0xda, &da, 1);
-+	r2 = mipi_dsi_dcs_read(ctx->dsi, 0xdb, &db, 1);
-+	r3 = mipi_dsi_dcs_read(ctx->dsi, 0xdc, &dc, 1);
-+	dev_info(dev, "panel id: 04=%02x %02x %02x (%d) da=%02x (%d) db=%02x (%d) dc=%02x (%d)\n",
-+		 id[0], id[1], id[2], r0, da, r1, db, r2, dc, r3);
-+	ctx->id_done = true;
 +}
 +
 +static void dash_panel_send_init(struct dash_panel *ctx, struct mipi_dsi_multi_context *dsi_ctx)
@@ -439,9 +425,6 @@ diff -ruN a/drivers/gpu/drm/panel/panel-dash-dsi.c b/drivers/gpu/drm/panel/panel
 +
 +	mipi_dsi_dcs_exit_sleep_mode_multi(&dsi_ctx);
 +	mipi_dsi_msleep(&dsi_ctx, 120);
-+
-+	if (!ctx->id_done && !dsi_ctx.accum_err)
-+		dash_panel_read_id(ctx);
 +
 +	mipi_dsi_dcs_set_display_on_multi(&dsi_ctx);
 +	mipi_dsi_msleep(&dsi_ctx, 20);
