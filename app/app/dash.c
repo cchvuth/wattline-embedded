@@ -63,9 +63,14 @@ typedef struct {
 // ---- the link's port: one connected UDP socket per attempt, as the app's RawDatagramSocket ----
 // Before each attempt Bluetooth steps aside, and the hello waits its settle (main.dart: Bluetooth first, then the WiFi
 // stream, took the Commander down). Asked once an attempt; the reply (cmdr_hook_sync) sets how long; 400 ms meanwhile.
+// "Bluetooth waits for the WiFi stream", unless Android Auto holds the radio: WiFi cannot go live then, and a dropped
+// Bluetooth link must redial (during AA the car rides it)
+static int wifi_first_now(void) { return app_settings.wifi_first && access(PJ_AA_RADIO, F_OK) != 0; }
+
 static int p_settle(void *x, int64_t now) {
 #ifdef DASH_CMDR
   dash_t *d = x;
+  if (cmdr_hook_fd() < 0) return 0;   // no Commander session (no system bus): nobody to step aside, no wait for it
   const char *w;
   const char *ss = wifi_ssid();   // "" until wpa_supplicant answers (the first look, or just after a join): not a no
   // the join's look is up to 1.5 s old: an address that came since is a stream about to start (step aside for it)
@@ -233,7 +238,7 @@ static void apply_settings(dash_t *d, int64_t now) {
   if (d->car.car != &kCars[app_settings.car]) car_set_type(&d->car, app_settings.car);   // the picker: at once
   link_set_sparse(&d->link, app_settings.sparse);
 #ifdef DASH_CMDR
-  cmdr_hook_wifi_first(app_settings.wifi_first);
+  cmdr_hook_wifi_first(wifi_first_now());
 #endif
 }
 
@@ -337,6 +342,7 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
       join_was = j;
     }
 #ifdef DASH_CMDR
+    if (now >= next_frame) cmdr_hook_wifi_first(wifi_first_now());   // a frame's look at the AA radio (sent on change)
     cmdr_hook_sync(&d->car, &d->link, &bt, now);
     bool bt_ready = bt.link == BT_BUTTONS || bt.link == BT_LEAN || bt.link == BT_FULL;
     if (bt_ready && !was_ready) link_kick(&d->link, now);   // it still scans: no WiFi with ScanMyTesla off (main.dart)

@@ -22,4 +22,6 @@
 // "1" after dark (the car's headlights on: the dash's own night brightness rule), "0" by day: the AA receiver tells the
 // phone (its night-mode sensor), so Maps darkens with the car.
 #define PJ_NIGHT "/run/dash-night"
+/* dash-aa holds the radio for Android Auto's AP (station disconnected): WiFi cannot go first, the car rides Bluetooth */
+#define PJ_AA_RADIO "/run/dash-aa-radio"
 #define PJ_TOUCH_DEV "/dev/input/event0"
