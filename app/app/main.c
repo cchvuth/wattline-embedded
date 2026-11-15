@@ -3,7 +3,7 @@
 // usage: dash [-c dash.conf]     default /run/dashdata/dash.conf; built-in defaults when absent
 // With a writable /data (R3: the card's p3, else RAM) the log and the Commander's files default to it.
 // The hardware watchdog (watchdog = 1), armed once the display is open, is petted each frame: a hung loop reboots the
-// board; a clean exit disarms it.
+// board; a clean exit disarms it, and one a crashed dash left running is stopped before the open.
 #include "app.h"
 #include "settings.h"
 #include "actions.h"
@@ -61,6 +61,10 @@ int main(int argc, char **argv) {
   log_open(cf.log_path, cf.log_kb);
   log_msg("dash.conf %s%s", path, have ? "" : ": absent, built-in defaults");
 
+  if (cf.watchdog) {   // left running by a dash that crashed (no magic close), it would bite during a slow open below
+    int w = open("/dev/watchdog", O_WRONLY | O_CLOEXEC);   // (the open starts it, the magic close stops it)
+    if (w >= 0) { if (write(w, "V", 1) != 1) log_msg("watchdog: no magic close: %s", strerror(errno)); close(w); }
+  }
   lv_init();
   lv_display_t *disp = lv_linux_fbdev_create();
   int64_t t0 = mono_ms();   // the open is the one call that waits on the display (its unblank)
@@ -91,14 +95,14 @@ int main(int argc, char **argv) {
   // Ready: the display opened in good time and the UI built. An update on trial (S99ota, dash-update watch) counts a
   // start healthy only while this file names the running dash, so one whose display hangs (its open waiting out the
   // driver's timeouts, the watchdog not armed yet) is rolled back rather than confirmed.
-  if (fb_ok && open_ms < 10000) {
+  if (fb_ok && open_ms < 10000 && (!cf.watchdog || wd >= 0)) {   // (a version whose watchdog will not arm: not ready)
     FILE *f = fopen("/run/dash-ready.new", "w");
     bool ok = f && fprintf(f, "%d\n", (int)getpid()) > 0;
     if (f && fclose(f)) ok = false;
     if (!ok || rename("/run/dash-ready.new", "/run/dash-ready"))
       log_msg("ready mark: %s (an update on trial is not confirmed)", strerror(errno));
-  } else log_msg("display %s after %lld ms: not ready (an update on trial is not confirmed)", fb_ok ? "open" : "not open",
-                 (long long)open_ms);
+  } else log_msg("not ready (an update on trial is not confirmed): display %s after %lld ms%s", fb_ok ? "open" : "not open",
+                 (long long)open_ms, cf.watchdog && wd < 0 ? ", watchdog not armed" : "");
   for (int fd = 3; fd < 256; fd++) {   // LVGL's framebuffer and touch fds are opened without O_CLOEXEC: the scripts the
     int fl = fcntl(fd, F_GETFD);        // dash starts (Wi-Fi, SSH, Android Auto) must not inherit them
     if (fl >= 0) fcntl(fd, F_SETFD, fl | FD_CLOEXEC);

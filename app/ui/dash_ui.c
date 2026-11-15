@@ -1025,9 +1025,11 @@ static dash_settings_t ST; /* the settings as shown (defined with the settings s
 static bool projecting;    /* an Android Auto session is up (/run/dash-project, raised by aa serve) */
 const char *dash_ui_pj_marker = "/run/dash-project"; /* the shots harness points these at files of its own */
 const char *dash_ui_aa_cert = "/etc/wattline/aa.crt", *dash_ui_aa_up = "/run/dash-aa", *dash_ui_pj_fps = PJ_FPS;
+static const char *aa_start_lock = "/run/dash-aa.starting";   /* dash-aa start holds it until it ends, up or not */
 static bool aa_pending;    /* tapped start, waiting for /run/dash-aa to appear: shown on at once */
 static bool aa_stopping;   /* tapped stop (or Exit), waiting for /run/dash-aa to go: shown off at once */
 #define AA_STOP_MS 35000   /* dash-aa stop's longest: a sync, its hook 12 s, the kills 5 s, two bluetoothctl calls 5 s each */
+#define AA_START_MS 90000  /* dash-aa start's longest: the Wi-Fi lock 30 s, the AP, its hook 12 s, bluetoothctl, a sync */
 static uint32_t aa_stop_at;
 #define AA_BLUE 0xFF03A9F4u /* Android Auto's blue (its logo's): the button while AA is on */
 static bool pj_left;       /* Exit tapped in the split: stay on the dash until this session's marker is gone */
@@ -1872,11 +1874,18 @@ static void pj_exit_tap(lv_event_t *e)
 }
 /* the dash's Android Auto button (beside the car-panel icon): toggle the on-demand bring-up by its live state */
 static uint32_t aa_pending_at;
+/* a start still running: just tapped (dash-aa takes its lock within moments), or its lock held (a start killed hard
+ * leaves it: AA_START_MS caps that) */
+static bool aa_start_running(void)
+{
+	uint32_t t = lv_tick_elaps(aa_pending_at);
+	return t < 3000 || (t < AA_START_MS && access(aa_start_lock, F_OK) == 0);
+}
 static void aa_tap(lv_event_t *e)
 {
 	(void)e;
 	if (FRESH(dash_at, 700)) return;
-	if (aa_pending && lv_tick_elaps(aa_pending_at) < 15000) return; /* still starting: a second start would race it */
+	if (aa_pending && aa_start_running()) return; /* still starting: a second start would race it */
 	if (aa_stopping && lv_tick_elaps(aa_stop_at) < AA_STOP_MS) return;   /* still stopping: a start now would find it up */
 	if (access(PJ_AA_SESSION, F_OK) == 0 && !projecting) {   /* a phone on it, its map put away by AA's own Exit: */
 		static uint32_t focus_at;                                 /* back (the split's Exit stops AA) */
@@ -3467,7 +3476,7 @@ void dash_ui_set(const dash_state_t *s)
 	show(aa_btn, aa_cert);
 	if (aa_cert) {   /* on: AP up, a tap pending, or projecting */
 		bool up = access(dash_ui_aa_up, F_OK) == 0;
-		if (up || (aa_pending && lv_tick_elaps(aa_pending_at) > 15000)) aa_pending = false;
+		if (up || (aa_pending && !aa_start_running())) aa_pending = false;
 		if (aa_stopping && (!up || lv_tick_elaps(aa_stop_at) > AA_STOP_MS)) aa_stopping = false;
 		/* off: white, as the other icons; on: Android Auto's blue. Off at once on the tap that stops it (dash-aa stop
 		 * takes a few seconds to take the AP and its processes down) */
