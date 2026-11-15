@@ -63,3 +63,4 @@ void dash_ui_show(int view); /* also opened and closed by touch */
 extern const char *dash_ui_pj_marker; /* "/run/dash-project": an AA session is up (aa serve raises it) */
 extern const char *dash_ui_aa_cert;   /* "/etc/wattline/aa.crt": the AA button only with a head-unit certificate */
 extern const char *dash_ui_aa_up;     /* "/run/dash-aa": Android Auto is on (dash-aa start raises it) */
+extern const char *dash_ui_pj_fps;    /* PJ_FPS: the phone's pictures shown per second (spike-vdec writes it) */

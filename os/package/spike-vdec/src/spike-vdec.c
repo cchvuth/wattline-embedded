@@ -733,6 +733,7 @@ static size_t stream_nals(uint8_t *buf, size_t len, dec_t *D, int *set, int eof,
 /* The dash UI raises this while it shows the picture (ui/project_region.h PJ_VISIBLE): over the settings, the car panel
  * or a dash the user went back to, the decoder draws nothing (a tap there must not land on a "map" over other buttons). */
 #define PJ_VISIBLE "/run/dash-pj-visible"
+#define PJ_FPS "/run/dash-pj-fps"   /* the pictures shown each second, for the dash (ui/project_region.h: under the AA word) */
 static int decode_stream(int fd)
 {
 	have_sps = have_pps = 0; nrefs = 0;
@@ -741,7 +742,14 @@ static int decode_stream(int fd)
 	if (!buf) die("out of memory");
 	size_t scan = 0;
 	double next_stat = now() + 5, last_show_t = 0, reshow_at = 0; int last_frames = 0, last_shown = 0, vis = 0; double last_show_s = 0;
+	double next_fps = now() + 1; int fps_shown = 0;
 	for (;;) {
+		if (set && now() >= next_fps) {   /* each second (the loop wakes every 100 ms at least): the pictures shown */
+			FILE *f = fopen(PJ_FPS ".new", "w");
+			if (f) fprintf(f, "%d\n", D.shown - fps_shown), fclose(f), rename(PJ_FPS ".new", PJ_FPS);
+			fps_shown = D.shown, next_fps += 1;
+			if (next_fps < now()) next_fps = now() + 1;
+		}
 		if (cap - len < 65536) {   /* a NAL this large is not a 720p picture: refuse rather than grow without end */
 			if (cap >= (16u << 20)) die("over 16 MB without a complete NAL");
 			cap *= 2; buf = realloc(buf, cap); if (!buf) die("out of memory");
@@ -784,6 +792,7 @@ static int decode_stream(int fd)
 		}
 	}
 	free(buf);
+	unlink(PJ_FPS);
 	if (set) dec_free(&D);
 	return 0;
 }

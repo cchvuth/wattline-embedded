@@ -30,4 +30,6 @@
  * PJ_AA_FOCUS (its AA button while the map is put away), aa takes video focus again at its next ping tick */
 #define PJ_AA_SESSION "/run/dash-aa-session"
 #define PJ_AA_FOCUS "/run/dash-aa-focus"
+/* spike-vdec: the phone's pictures shown in the last second, rewritten each second (the split's WiFi box shows it) */
+#define PJ_FPS "/run/dash-pj-fps"
 #define PJ_TOUCH_DEV "/dev/input/event0"

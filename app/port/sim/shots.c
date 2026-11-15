@@ -267,6 +267,15 @@ int main(int argc, char **argv)
 		bad |= shot(d, out, "edge-project-nothing", &s, DASH_VIEW_PROJECT);
 		scenes[8].fill(&s); /* Bluetooth only (no WiFi stream) beside the phone's map: what the Commander's pushes fill */
 		bad |= shot(d, out, "edge-project-bt-only", &s, DASH_VIEW_PROJECT);
+		{ /* the phone's pictures per second under the WiFi icon, once the decoder writes them */
+			char fps[600];
+			snprintf(fps, sizeof fps, "%s/.dash-pj-fps", out);
+			FILE *f = fopen(fps, "w");
+			if (f) fputs("58\n", f), fclose(f);
+			dash_ui_pj_fps = fps;
+			bad |= shot(d, out, "edge-project-aa-fps", &s, DASH_VIEW_PROJECT);
+			remove(fps);
+		}
 		remove(pjm);
 		dash_ui_set(&s);
 		/* the Network tab with the longest names an SSID can have */

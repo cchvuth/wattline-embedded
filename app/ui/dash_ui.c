@@ -9,6 +9,7 @@
 #include "project_region.h"    /* the phone picture's rectangle, shared with the AA receiver */
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <arpa/inet.h>
 #include <math.h>
 #include <stdarg.h>
@@ -1023,7 +1024,7 @@ static const char *bt_word(dash_bt_t b, uint32_t *c, const lv_image_dsc_t **i)
 static dash_settings_t ST; /* the settings as shown (defined with the settings screen below) */
 static bool projecting;    /* an Android Auto session is up (/run/dash-project, raised by aa serve) */
 const char *dash_ui_pj_marker = "/run/dash-project"; /* the shots harness points these at files of its own */
-const char *dash_ui_aa_cert = "/etc/wattline/aa.crt", *dash_ui_aa_up = "/run/dash-aa";
+const char *dash_ui_aa_cert = "/etc/wattline/aa.crt", *dash_ui_aa_up = "/run/dash-aa", *dash_ui_pj_fps = PJ_FPS;
 static bool aa_pending;    /* tapped start, waiting for /run/dash-aa to appear: shown on at once */
 static bool aa_stopping;   /* tapped stop (or Exit), waiting for /run/dash-aa to go: shown off at once */
 static uint32_t aa_stop_at;
@@ -1037,6 +1038,24 @@ static void pj_repaint_cb(lv_timer_t *t)
 	if (view == DASH_VIEW_PROJECT) return; /* back in the split already: a full repaint would cover the picture */
 	lv_obj_invalidate(lv_screen_active());
 	lv_obj_invalidate(lv_layer_top());
+}
+/* The phone's pictures shown in the last second (spike-vdec, rewritten each second), looked at once a second; -1 none,
+ * or older than 3 s (a decoder gone) */
+static int pj_fps(void)
+{
+	static uint32_t at;
+	static int fps = -1;
+	static const char *path; /* the shots harness points it elsewhere: looked at anew then */
+	if (at && path == dash_ui_pj_fps && lv_tick_elaps(at) < 1000) return fps;
+	at = lv_tick_get() | 1, path = dash_ui_pj_fps;
+	struct stat st;
+	FILE *f;
+	fps = -1;
+	if (stat(dash_ui_pj_fps, &st) == 0 && time(NULL) - st.st_mtime <= 3 && (f = fopen(dash_ui_pj_fps, "r"))) {
+		if (fscanf(f, "%d", &fps) != 1 || fps < 0 || fps > 999) fps = -1;
+		fclose(f);
+	}
+	return fps;
 }
 static void set_links(const dash_state_t *s)
 {
@@ -1060,7 +1079,12 @@ static void set_links(const dash_state_t *s)
 	if (s->wifi != WIFI_LIVE && s->net_ssid[0] && strcmp(s->net_ssid, car_net)) {
 		wi = &ic_wifi_l, wc = s->ssh > 0 ? REGEN : W70, ww = s->ssh > 0 ? "SSH" : "NET", secs = -1;
 	}
-	if (projecting && s->wifi != WIFI_LIVE) wi = &ic_wifi_l, wc = REGEN, ww = "AA", secs = -1; /* the phone on our AP */
+	if (projecting && s->wifi != WIFI_LIVE) { /* the phone on our AP: the pictures it shows per second, once known */
+		static char fw[12];
+		int fps = pj_fps();
+		if (fps >= 0) snprintf(fw, sizeof fw, "%d fps", fps);
+		wi = &ic_wifi_l, wc = REGEN, ww = fps >= 0 ? fw : "AA", secs = -1;
+	}
 	set_link(&link_w, 0, wi, &ic_wifi_s, wc, ww, s->wifi == WIFI_LIVE, s->wifi == WIFI_LIVE ? s->speed_hz : -1, secs,
 		 s->wifi_span);
 	uint32_t bc;
@@ -1854,8 +1878,14 @@ static void aa_tap(lv_event_t *e)
 	if (aa_pending && lv_tick_elaps(aa_pending_at) < 15000) return; /* still starting: a second start would race it */
 	if (aa_stopping && lv_tick_elaps(aa_stop_at) < 15000) return;   /* still stopping: a start now would find it up */
 	if (access(PJ_AA_SESSION, F_OK) == 0 && !projecting) {   /* a phone on it, its map put away by AA's own Exit: */
-		close(open(PJ_AA_FOCUS, O_CREAT | O_WRONLY | O_CLOEXEC, 0644));   /* back (the split's Exit stops AA) */
-		return;
+		static uint32_t focus_at;                                 /* back (the split's Exit stops AA) */
+		if (access(PJ_AA_FOCUS, F_OK) != 0) {
+			close(open(PJ_AA_FOCUS, O_CREAT | O_WRONLY | O_CLOEXEC, 0644));
+			focus_at = lv_tick_get();
+			return;
+		}
+		if (lv_tick_elaps(focus_at) < 3000) return; /* asked a moment ago: aa takes it at its next ping tick */
+		unlink(PJ_AA_FOCUS); /* not taken: aa serve is gone (its session marker left behind): stop AA instead */
 	}
 	bool up = access(dash_ui_aa_up, F_OK) == 0;
 	save(up ? DASH_AA_STOP : DASH_AA_START);
@@ -3014,7 +3044,7 @@ void dash_ui_show(int v)
 	if (v == DASH_VIEW_NETWORK && view != DASH_VIEW_NETWORK) edit_at = lv_tick_get(); /* the tap that opened it: no key */
 	if (v == DASH_VIEW_SETTINGS && (view == DASH_VIEW_NETWORK || view == DASH_VIEW_PAIR)) {
 		set_back_at = lv_tick_get();
-		if (set_guard) show(set_guard, true);
+		if (set_guard) lv_obj_set_clickable(set_guard, true);
 	}
 	view = v;
 	/* The real ring (and the assist disc and the air outside it carries in the full dash) is reused in the strip:
@@ -3329,10 +3359,9 @@ static void touch_init(void)
 	project_build();
 	panel_build();
 	settings_build();
-	set_guard = box(settings); /* over everything in the settings (their last child): see set_back_at */
-	place(set_guard, 0, 0, G.W, G.H);
-	lv_obj_set_clickable(set_guard, true);
-	show(set_guard, false);
+	set_guard = box(settings); /* over everything in the settings (their last child), drawing nothing: it takes */
+	place(set_guard, 0, 0, G.W, G.H); /* the touches only while clickable (see set_back_at): no repaint to turn it */
+	lv_obj_set_clickable(set_guard, false);
 	net_edit_build();
 	pair_build();
 }
@@ -3390,7 +3419,7 @@ static void set_touch(const dash_state_t *s)
 		set_text(set_bt_line, "%s", s->bt_line);
 		if (set_wifi_line) set_text(set_wifi_line, "%s", s->wifi_line);
 		forget_reset(&fg_cmdr, false), forget_reset(&fg_aa, false); /* a second tap's window over: the label again */
-		if (set_guard && !lv_obj_is_hidden(set_guard) && !FRESH(set_back_at, 500)) show(set_guard, false);
+		if (set_guard && lv_obj_is_clickable(set_guard) && !FRESH(set_back_at, 500)) lv_obj_set_clickable(set_guard, false);
 		net_delete_reset(false);
 		bool join_over = joining[0] && lv_tick_elaps(joining_at) >= 20000; /* a join that did not take: Connect again */
 		if (join_over) joining[0] = 0;
