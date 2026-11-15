@@ -555,12 +555,14 @@ static int recv_msg(int fd, aa_tls_t *tls, uint8_t *chan, const uint8_t **msg, s
 }
 
 // a write to the phone failed or was cut short (SO_SNDTIMEO: the phone stopped reading): the frame stream is broken,
-// so the session ends at its loop's next turn (callers that ack, ping or send touches don't check each send)
+// so every send fails at once from then on (callers that ack, ping or send touches don't check each send, and each would
+// wait out the timeout again) and the session ends at its loop's next turn. Cleared per phone, at its dial.
 static int tx_dead;
 
 // send a framed message; with tls, the [msgid][pb] is encrypted and the frame flagged ENCRYPTED.
 static int send_msg(int fd, aa_tls_t *tls, uint8_t chan, uint8_t msgtype, uint16_t msgid, const uint8_t *pb, size_t pblen)
 {
+	if (tx_dead) return -1;
 	uint8_t msg[AA_MAX_FRAME_PAYLOAD]; int mn = msg_wrap(msg, sizeof msg, msgid, pb, pblen);
 	if (mn < 0) return -1;
 	uint8_t cipher[AA_MAX_FRAME_PAYLOAD + 512], frame[AA_MAX_FRAME_PAYLOAD + 520];
@@ -623,7 +625,25 @@ static int spawn_sink(void)
 		_exit(127);
 	}
 	close(p[0]);
-	return c < 0 ? (close(p[1]), -1) : p[1];
+	if (c < 0) { close(p[1]); return -1; }
+	fcntl(p[1], F_SETFL, fcntl(p[1], F_GETFL) | O_NONBLOCK);   /* sink_write waits, but not for ever */
+	return p[1];
+}
+
+// all of it into the decoder's pipe, waiting at most 2 s in all for room: a decoder stuck (in the driver, or stopped)
+// counts as dead, rather than holding the session, the phone's link, the markers and the lock for good
+static int sink_write(int fd, const uint8_t *b, size_t n)
+{
+	int64_t end = now_us() + 2000000;
+	for (size_t w = 0; w < n; ) {
+		ssize_t r = write(fd, b + w, n - w);
+		if (r > 0) { w += (size_t)r; continue; }
+		int64_t left = end - now_us();
+		if (r == 0 || (errno != EAGAIN && errno != EINTR) || left <= 0) return -1;
+		struct pollfd pf = { .fd = fd, .events = POLLOUT };
+		poll(&pf, 1, (int)(left / 1000) + 1);
+	}
+	return 0;
 }
 
 static uint32_t av_sess[16];   // per-AV-channel session id from AV_START, echoed in media ACKs
@@ -975,7 +995,7 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 				// then an access-unit delimiter: the decoder takes a NAL as complete when the next start code
 				// comes, so without it every picture would wait for the following one (a still screen: forever)
 				static const uint8_t aud[] = { 0, 0, 0, 1, 0x09, 0xf0 };
-				if (sink >= 0 && (writen(sink, nal, nl) || writen(sink, aud, sizeof aud))) { fprintf(stderr, "aa: video sink died\n"); sink = -2; }   /* aa_serve, its owner, closes it */
+				if (sink >= 0 && (sink_write(sink, nal, nl) || sink_write(sink, aud, sizeof aud))) { fprintf(stderr, "aa: video sink died or stuck\n"); sink = -2; }   /* aa_serve, its owner, closes it */
 			}   // ponytail: audio is ACKed and dropped — no sound out yet; pipe to ALSA when the Dash gets a speaker path
 		acked:
 			ack(fd, tls, chan);
@@ -1080,6 +1100,7 @@ static int aa_serve(const char *cert, const char *key)
 	for (;;) {
 		int fd = accept(ls, NULL, NULL); if (fd < 0) continue;
 		fcntl(fd, F_SETFD, FD_CLOEXEC);   /* nor the phone's socket */
+		tx_dead = 0;   /* this phone's: its version and handshake go through send_msg too */
 		// as aasdk (TCPWrapper) and headunit (hu_tcp): small writes (media ACKs, touches, pings) go out at once,
 		// not held until the phone acknowledges the previous one -- with one frame in flight, that stalls video
 		setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
@@ -1104,7 +1125,6 @@ static int aa_serve(const char *cert, const char *key)
 		if (up == 1) {
 			fprintf(stderr, "aa: TLS up (%s, %s), session starting\n", SSL_get_version(t.ssl), SSL_get_cipher(t.ssl));
 			phone_off = 0, phone_off_seen = phone_off_ok = 0;   /* this phone's clock: learned from its video and pings */
-			tx_dead = 0;
 			rd_deadline = 0;
 			setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &live, sizeof live);   // a frame stalled half-way ends the session
 			setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &live, sizeof live);   // and so does a phone that stops reading
@@ -1124,7 +1144,13 @@ static int aa_serve(const char *cert, const char *key)
 			if (sink >= 0) close(sink);
 			// reaped only here (SIGCHLD left as it is): a decoder that died mid-session stays a zombie until this waitpid,
 			// so its pid cannot go to another process before the kill
-			if (sink_pid > 0) { kill(sink_pid, SIGTERM); waitpid(sink_pid, NULL, 0); sink_pid = -1; }
+			if (sink_pid > 0) {   /* 2 s to go, then killed: a stopped or stuck decoder outlasts SIGTERM */
+				kill(sink_pid, SIGTERM);
+				int r = 0;
+				for (int i = 0; i < 20 && (r = waitpid(sink_pid, NULL, WNOHANG)) == 0; i++) usleep(100000);
+				if (r == 0) kill(sink_pid, SIGKILL), waitpid(sink_pid, NULL, 0);
+				sink_pid = -1;
+			}
 			unlink("/run/dash-project");
 			unlink(PJ_AA_SESSION), unlink(PJ_AA_FOCUS), unlink(PJ_FPS);   // the decoder, killed, leaves its fps behind
 			fprintf(stderr, "aa: session ended\n");

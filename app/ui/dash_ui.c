@@ -1027,7 +1027,7 @@ const char *dash_ui_pj_marker = "/run/dash-project"; /* the shots harness points
 const char *dash_ui_aa_cert = "/etc/wattline/aa.crt", *dash_ui_aa_up = "/run/dash-aa", *dash_ui_pj_fps = PJ_FPS;
 static bool aa_pending;    /* tapped start, waiting for /run/dash-aa to appear: shown on at once */
 static bool aa_stopping;   /* tapped stop (or Exit), waiting for /run/dash-aa to go: shown off at once */
-#define AA_STOP_MS 30000   /* dash-aa stop's longest: its hook 12 s, the kills 5 s, two bluetoothctl calls 5 s each */
+#define AA_STOP_MS 35000   /* dash-aa stop's longest: a sync, its hook 12 s, the kills 5 s, two bluetoothctl calls 5 s each */
 static uint32_t aa_stop_at;
 #define AA_BLUE 0xFF03A9F4u /* Android Auto's blue (its logo's): the button while AA is on */
 static bool pj_left;       /* Exit tapped in the split: stay on the dash until this session's marker is gone */
