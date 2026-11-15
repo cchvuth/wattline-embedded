@@ -1824,7 +1824,8 @@ static void ap_hold(lv_event_t *e) /* the assist disc's words (widgets.dart _ApI
 }
 
 /* ---- the car panel (car_panel.dart): its own page, an app bar, the groups of outlined buttons, a message line ---- */
-static void close_tap(lv_event_t *e) { (void)e, dash_ui_show(DASH_VIEW_DASH); }
+static uint32_t set_back_at; /* back on the settings from the editor or pairing: that tap's bounce is not the X under it */
+static void close_tap(lv_event_t *e) { if (!FRESH(set_back_at, 500)) (void)e, dash_ui_show(DASH_VIEW_DASH); }
 static void panel_tap(lv_event_t *e) { if (!FRESH(panel_at, 500)) press((intptr_t)lv_event_get_user_data(e)); }
 static void open_tap(lv_event_t *e) { if (!FRESH(dash_at, 700)) dash_ui_show((intptr_t)lv_event_get_user_data(e)); }
 /* the split's Exit: end the Android Auto session (the marker would pull the view straight back otherwise) */
@@ -2051,7 +2052,6 @@ static void set_project(const dash_state_t *s)
 			p[n] = TXT(nf, ec, en); p[n].gap = px(4); n++;
 		}
 	}
-	show(pj_info, n > 0);
 	static char pj_key[640];
 	char key[640] = "", *k = key;
 	k += snprintf(k, sizeof key, "%d;", ri(info_x)); /* the disc coming or going moves it and changes its room */
@@ -2068,6 +2068,10 @@ static void set_project(const dash_state_t *s)
 		}
 		align(pj_info, LV_ALIGN_TOP_LEFT, ri(info_x), ri(bot_c - lv_obj_get_style_height(pj_info, 0) / 2.0f));
 	}
+	/* shown once filled and placed, and laid out: LVGL applies a new place at its next layout pass, so shown before it the
+	 * line would be invalidated at its old spot (at first LVGL's default 130 px box at 0,0: over the picture) */
+	if (n > 0 && lv_obj_is_hidden(pj_info)) lv_obj_update_layout(pj_info);
+	show(pj_info, n > 0);
 }
 
 static lv_obj_t *outlined(lv_obj_t *parent, const lv_image_dsc_t *ic, const char *text, lv_event_cb_t cb, intptr_t arg)
@@ -2446,18 +2450,26 @@ static void net_tap(lv_event_t *e) /* a network's row: replace it */
 	edit_slot = (intptr_t)lv_event_get_user_data(e);
 	dash_ui_show(DASH_VIEW_NETWORK);
 }
+static int del_armed = -1; /* a network's delete: the first tap's row and time, its icon red until 3 s have passed */
+static uint32_t del_armed_at;
+static lv_obj_t *del_armed_ic;
+static void net_delete_reset(bool all) /* all: the list rebuilt (the icon gone with it) */
+{
+	if (del_armed < 0 || (!all && lv_tick_elaps(del_armed_at) <= 3000)) return;
+	if (!all && del_armed_ic) icon_color(del_armed_ic, W70);
+	del_armed = -1, del_armed_ic = NULL;
+}
 static void net_delete(lv_event_t *e)
 {
-	static int armed = -1;
-	static uint32_t armed_at;
 	int i = (intptr_t)lv_event_get_user_data(e);
 	if (i >= ST.net_count) return;
-	if (armed != i || lv_tick_elaps(armed_at) > 3000) { /* a stray tap must not drop the car's WiFi while driving */
-		armed = i, armed_at = lv_tick_get();
-		icon_color(lv_event_get_target(e), ALERT);
+	if (del_armed != i || lv_tick_elaps(del_armed_at) > 3000) { /* a stray tap must not drop the car's WiFi while driving */
+		if (del_armed_ic && del_armed_ic != lv_event_get_target(e)) icon_color(del_armed_ic, W70);
+		del_armed = i, del_armed_at = lv_tick_get(), del_armed_ic = lv_event_get_target(e);
+		icon_color(del_armed_ic, ALERT);
 		return;
 	}
-	armed = -1;
+	del_armed = -1, del_armed_ic = NULL;
 	memmove(&ST.net[i], &ST.net[i + 1], sizeof ST.net[0] * (ST.net_count - i - 1));
 	ST.net_count--;
 	memset(&ST.net[ST.net_count], 0, sizeof ST.net[0]);
@@ -2524,6 +2536,7 @@ static void nearby_row(lv_obj_t *parent, int k, float w, bool room)
 static void settings_fill_nets(void)
 {
 	float w = lv_obj_get_style_width(net_list, 0);
+	net_delete_reset(true);
 	lv_obj_clean(net_list);
 	set_wifi_line = label(net_list, FS(REGULAR, 12, UI_S_PANEL), W70); /* the link's state (main.dart's connection page) */
 	lv_obj_set_width(set_wifi_line, ri(w));
@@ -2982,6 +2995,7 @@ void dash_ui_show(int v)
 	if (v == DASH_VIEW_DASH && view != DASH_VIEW_DASH) dash_at = lv_tick_get();
 	if (v == DASH_VIEW_CAR_PANEL && view != DASH_VIEW_CAR_PANEL) panel_at = lv_tick_get();
 	if (v == DASH_VIEW_NETWORK && view != DASH_VIEW_NETWORK) edit_at = lv_tick_get(); /* the tap that opened it: no key */
+	if (v == DASH_VIEW_SETTINGS && (view == DASH_VIEW_NETWORK || view == DASH_VIEW_PAIR)) set_back_at = lv_tick_get();
 	view = v;
 	/* The real ring (and the assist disc and the air outside it carries in the full dash) is reused in the strip:
 	 * it lives over the full-screen project overlay while projecting, and back on the dash otherwise. */
@@ -3351,10 +3365,14 @@ static void set_touch(const dash_state_t *s)
 		set_text(set_bt_line, "%s", s->bt_line);
 		if (set_wifi_line) set_text(set_wifi_line, "%s", s->wifi_line);
 		forget_reset(&fg_cmdr, false), forget_reset(&fg_aa, false); /* a second tap's window over: the label again */
+		net_delete_reset(false);
 		bool join_over = joining[0] && lv_tick_elaps(joining_at) >= 20000; /* a join that did not take: Connect again */
 		if (join_over) joining[0] = 0;
 		if (net_list && view == DASH_VIEW_SETTINGS && (join_over || CHANGED(nearby_n) || CHANGED(nearby) || CHANGED(net_ssid)))
+		{
 			settings_fill_nets(); /* a network came or went, or the joined one changed */
+			lv_obj_invalidate(set_page[3]); /* its scroll bar: longer when the content shrank, outside the rows' areas */
+		}
 		if (set_net_line) set_text(set_net_line, "%s", s->net_line);
 		set_approval(s->bt);
 	}
