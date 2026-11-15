@@ -12,7 +12,7 @@ test: $(DEPS) test/test_ble.c
 	$(HOST_CC) $(FLAGS) -g -fsanitize=address,undefined -o build/test_ble test/test_ble.c $(BLE) $(shell pkg-config --cflags --libs gio-2.0) && build/test_ble
 
 ARM_CC ?= /work/out-r0/host/bin/arm-buildroot-linux-gnueabihf-gcc
-ARM_GIO = $(shell /work/out-r0/host/bin/pkg-config --cflags --libs gio-2.0)
+ARM_GIO = $(shell $(dir $(lastword $(ARM_CC)))pkg-config --cflags --libs gio-2.0)
 ARM_FLAGS := $(FLAGS) -O2 -mcpu=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard
 build/arm-ble/%: tools/%.c $(DEPS)
 	@mkdir -p $(dir $@)

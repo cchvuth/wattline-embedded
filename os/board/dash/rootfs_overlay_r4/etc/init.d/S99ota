@@ -1,8 +1,9 @@
 #!/bin/sh
-# OTA, after the dash is up: once the same dash process has run for 30 s (looked at from 15 s to ~2 min), confirm this start (keeps a new version, which
-# U-Boot would otherwise roll back after 3 unconfirmed starts). Then, if automatic updates are on
-# (ota_auto in /data/settings.conf, the dash's Advanced settings), look for a newer release while there is internet: download,
-# verify and arm it for the next power-up. Tried every 10 min for the first hour of a drive, quietly.
+# OTA, after the dash is up: once the same dash process has run for 30 s and marked itself ready (looked at from 15 s to
+# ~2 min), confirm this start (keeps a new version, which U-Boot would otherwise roll back after 3 unconfirmed starts).
+# Then, if automatic updates are on (ota_auto in /data/settings.conf, the dash's Advanced settings), look for a newer
+# release while there is internet: download, verify and arm it for the next power-up. Tried every 10 min for the first
+# hour of a drive, quietly.
 case "$1" in start|"") ;; *) exit 0;; esac
 # the same dash for 30 s: a restart is a new pid (a count of the supervisor's start lines missed restarts once dash.out
 # rotated, and one 15 s window let a dash crashing every 20 s through), and ready: its display opened in good time

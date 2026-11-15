@@ -59,7 +59,7 @@ mkrel() {   # mkrel VERSION [bad-sig|wrong-version|big-kernel]: a release's thre
 	printf '[{"assets":[{"browser_download_url": "https://127.0.0.1:8443/rel/%s/%s"}]}]\n' "$1" "$B" > $W/www/api.json
 }
 reset() {   # reset "OTA_TXT" "CMDLINE" [MOUNTS]
-	rm -rf /data/boot /data/ota /run/dash-update.status /run/dash-update.lock $W/p1/* $W/rebooted; mkdir -p /data
+	rm -rf /data/boot /data/ota /run/dash-update.status /run/dash-update.lock /run/dash-ready $W/p1/* $W/rebooted; mkdir -p /data
 	[ -n "$1" ] && printf '%s\n' $1 > $W/p1/ota.txt
 	echo "console=ttyS0,115200 $2" > $W/cmdline
 	echo "${3:-/dev/mmcblk0p3 /data ext4 rw,relatime 0 0}" > $W/mounts
@@ -201,11 +201,14 @@ reset "slot=B good=A trial=1 bootcount=1" "dash.slot=B"
 upd watch
 check "watch: this start on trial, unconfirmed: restarted" "$(cat $W/rebooted 2>/dev/null) $(ota)" "REBOOT bootcount=1 good=A slot=B trial=1 "
 reset "slot=B good=A trial=1 bootcount=1" "dash.slot=B"
-echo 4242 > /run/dash-ready; DASH_UP=1 upd watch; rm -f /run/dash-ready
+echo 4242 > /run/dash-ready; DASH_UP=1 upd watch
 check "watch: on trial, unconfirmed, the dash running: left be" "[$(cat $W/rebooted 2>/dev/null)]" "[]"
 reset "slot=B good=A trial=1 bootcount=1" "dash.slot=B"
 DASH_UP=1 upd watch
 check "watch: the dash running but never ready (its display hung): restarted" "$(cat $W/rebooted 2>/dev/null)" "REBOOT"
+reset "slot=B good=A trial=1 bootcount=1" "dash.slot=B"
+echo 4141 > /run/dash-ready; DASH_UP=1 upd watch
+check "watch: the ready mark an earlier dash left: restarted" "$(cat $W/rebooted 2>/dev/null)" "REBOOT"
 reset "slot=B good=B bootcount=0" "dash.slot=B"
 upd watch
 check "watch: a confirmed start: left be"            "[$(cat $W/rebooted 2>/dev/null)]" "[]"
