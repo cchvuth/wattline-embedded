@@ -376,8 +376,9 @@ void cmdr_tick(cmdr_t *c, int64_t now) {
   }
   if (c->buttons_at >= 0 && now >= c->buttons_at) {
     c->buttons_at = -1;
+    int paused = c->paused, redial = c->redial;
     cmdr_resume(c, now);
-    cmdr_kick(c, 0, now);
+    if (!(paused && redial)) cmdr_kick(c, 0, now); // the resume dialled already: a failed dial waits its backoff
   }
   if (c->data_at >= 0 && now >= c->data_at) {
     c->data_at = -1;
@@ -468,7 +469,7 @@ void cmdr_wifi(cmdr_t *c, int live, int trying, int64_t now) {
 }
 
 int cmdr_step_aside(cmdr_t *c, int64_t now) {
-  c->back_at = c->buttons_at = -1;
+  c->back_at = c->buttons_at = c->data_at = -1; // a new WiFi try: none of the last stream's timers fire in it
   cmdr_data_hold(c, 1, now);
   if (!c->cfg.wifi_first) c->back_at = now + c->cfg.back_ms;
   return cmdr_pause(c, now) ? c->cfg.settle_ms : 0; // a link was up: a moment before the hello

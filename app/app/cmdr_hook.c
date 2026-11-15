@@ -91,7 +91,7 @@ void cmdr_hook_sync(car_t *car, const link_t *l, bt_view_t *bt, int64_t now) {
       record_cmdr(&push, now);
     } else if (m.op == BLE_PRESS) {
       log_msg("bluetooth: press %d: %d", m.a, m.result);
-      app_press_result(m.a, m.result, m.b, m.gear, now);
+      app_press_result(m.a, m.result, m.b, m.gear, m.at, now);
     }
     else if (m.op == BLE_STEP_ASIDE && (aside_asked_at = -1, m.result > 0)) {
       settle_until = now + m.result;   // the WiFi hello waits this out (dash.c p_settle)

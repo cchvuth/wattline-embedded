@@ -132,7 +132,8 @@ void settings_load(dash_settings_t *st, const conf_t *cf) {
       char ssid[160];
       while (st->net_count < DASH_NETS && fgets(ssid, sizeof ssid, f)) {
         if (!fgets(line, sizeof line, f)) line[0] = 0;
-        char *s = trim(ssid), *p = line + strcspn(line, "\r\n");
+        char *s = ssid, *p = line + strcspn(line, "\r\n");
+        s[strcspn(s, "\r\n")] = 0;   // an SSID keeps its spaces, as S45wifi-auto reads it
         *p = 0;   // a passphrase keeps its spaces
         if (!*s || strlen(s) >= sizeof st->net[0].ssid || strlen(line) >= sizeof pass[0]) continue;
         snprintf(st->net[st->net_count].ssid, sizeof st->net[0].ssid, "%s", s);

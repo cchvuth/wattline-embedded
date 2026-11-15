@@ -15,7 +15,7 @@ int cmdr_hook_ready(void);        // cmdr_hook.c: linked, as last taken
 #include <stdio.h>
 #include <string.h>
 
-enum { SAY_MS = 4000, ANSWER_MS = 20000 };  // the snackbar's 4 s; past this a press out is let go
+enum { SAY_MS = 4000, ANSWER_MS = 30000 };  // the snackbar's 4 s; past this a press out is let go (a slow redial: ~21 s)
 
 dash_settings_t app_settings;
 bool app_settings_dirty, app_settings_refresh;
@@ -52,16 +52,16 @@ void app_on_action(int a, void *ctx) {
   }
   pending = a, pending_at = now;
   log_msg("press %s", cmdr_actions[a].label);
-  dash_press(a);  // the session guards it again and sends it once (cmdr_hook_press)
+  dash_press(a, now);  // the session guards it again and sends it once (cmdr_hook_press); `now` is its id
 #else
   log_msg("press %s: no Commander session in this build", cmdr_actions[a].label);
   app_tell("Commander Bluetooth: off", now);
 #endif
 }
 
-void app_press_result(int a, int result, int status, char gear, int64_t now) {
+void app_press_result(int a, int result, int status, char gear, int64_t at, int64_t now) {
   if (a < 0 || a >= ACT_COUNT) return;
-  if (a == pending) pending = -1;
+  if (a == pending && at == pending_at) pending = -1;   // its own answer, not a late one of an earlier press
   const char *label = cmdr_actions[a].label;
   char t[128] = "";
 #ifdef DASH_CMDR
@@ -180,7 +180,7 @@ void app_on_settings(int what, const dash_settings_t *st, void *ctx) {
 static int64_t T; static int presses; int dash_bl_pct = -1;
 int64_t mono_ms(void) { return T; }
 void log_msg(const char *f, ...) { (void)f; }
-void dash_press(int a) { (void)a; presses++; }
+void dash_press(int a, int64_t at) { (void)a, (void)at; presses++; }
 static int ready = 1, asks;
 void cmdr_hook_ask(void) { asks++; } void cmdr_hook_forget(void) {}
 void settings_aa(bool start) { (void)start; }
@@ -195,21 +195,25 @@ int main(void) {
   app_on_action(ACT_FRUNK, 0); app_on_action(ACT_TRUNK, 0);   // the second is dropped
   assert(presses == 1);
   app_actions_fill(&s, T); assert(s.press_pending == ACT_FRUNK && !strcmp(s.toast, "Trunk: waiting for Frunk's answer first"));
-  app_press_result(ACT_FRUNK, CMDR_E_PARK, 0, 'D', T);
+  app_press_result(ACT_FRUNK, CMDR_E_PARK, 0, 'D', pending_at, T);
   app_actions_fill(&s, T); assert(s.press_pending == -1 && !strcmp(s.toast, "Frunk opens in P only"));
-  app_on_action(ACT_MIRROR_TILT, 0); app_press_result(ACT_MIRROR_TILT, CMDR_E_GEAR, 0, 'P', T);
+  app_on_action(ACT_MIRROR_TILT, 0); app_press_result(ACT_MIRROR_TILT, CMDR_E_GEAR, 0, 'P', pending_at, T);
   app_actions_fill(&s, T); assert(!strcmp(s.toast, "Mirror tilt acts in R only"));
-  app_on_action(ACT_UNLOCK, 0); app_press_result(ACT_UNLOCK, CMDR_OK, 0, 'P', T);
+  app_on_action(ACT_UNLOCK, 0); app_press_result(ACT_UNLOCK, CMDR_OK, 0, 'P', pending_at, T);
   app_actions_fill(&s, T); assert(!strcmp(s.toast, "Unlock sent: unlocks with the driver inside"));
   ready = 0; app_on_action(ACT_FLASH, 0); ready = 1;   // not linked: looked for at once, its state said, nothing sent
   app_actions_fill(&s, T); assert(!strcmp(s.toast, "Commander Bluetooth: no Commander advertising") && asks == 1);
   assert(s.press_pending == -1);
-  app_on_action(ACT_FLASH, 0); app_press_result(ACT_FLASH, CMDR_E_STATUS, 5, 'P', T);       // refused: the reason named
+  app_on_action(ACT_FLASH, 0); app_press_result(ACT_FLASH, CMDR_E_STATUS, 5, 'P', pending_at, T);       // refused: the reason named
   app_actions_fill(&s, T); assert(!strcmp(s.toast, "Flash: refused (internal error)"));
-  app_on_action(ACT_TRUNK, 0); app_press_result(ACT_TRUNK, CMDR_OK, 0, 'P', T);   // a chip's success: no line
+  app_on_action(ACT_TRUNK, 0); app_press_result(ACT_TRUNK, CMDR_OK, 0, 'P', pending_at, T);   // a chip's success: no line
   T += 4001; app_actions_fill(&s, T); assert(!s.toast[0]);
-  app_on_action(ACT_HONK, 0); T += 20001; app_actions_fill(&s, T);          // no answer: let go, not resent
+  app_on_action(ACT_HONK, 0); T += 30001; app_actions_fill(&s, T);          // no answer: let go, not resent
   assert(s.press_pending == -1 && strstr(s.toast, "may have gone through") && presses == 6);
+  app_on_action(ACT_HONK, 0); int64_t first = pending_at; T += 30001; app_actions_fill(&s, T);   // let go...
+  app_on_action(ACT_HONK, 0);                                                     // ...the same chip again
+  app_press_result(ACT_HONK, CMDR_E_STALE, 0, 'P', first, T);                     // the first's late answer:
+  app_actions_fill(&s, T); assert(s.press_pending == ACT_HONK);                   // not taken for the new one
   puts("actions ok"); return 0;
 }
 #endif

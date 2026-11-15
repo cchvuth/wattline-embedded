@@ -113,7 +113,7 @@ void bright_follow(bright_t *b);
 extern int dash_bl_pct;         // the backlight as last set, % (-1 not yet)
 int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms);   // run_ms 0: until SIGTERM/SIGINT
 int64_t mono_ms(void);
-void dash_press(int action);   // a chip's tap -> the Commander (cmdr_action; CMDR=1 builds only)
+void dash_press(int action, int64_t at);   // a chip's tap at `at` (its id) -> the Commander (cmdr_action; CMDR=1)
 
 // Called once the loop has ended, before the slow teardown (main.c: disarms the watchdog). NULL: nothing.
 extern void (*app_stopping)(void);

@@ -11,7 +11,8 @@
 
 void app_on_action(int action, void *ctx);                            // a tap: cmdr_action
 void app_on_settings(int what, const dash_settings_t *s, void *ctx);  // DASH_SETTINGS_SAVE, _CMDR_APPROVE/_FORGET, _PAIR_START/_CANCEL
-void app_press_result(int action, int result, int status, char gear, int64_t now); // the session's answer (CMDR_OK /
+void app_press_result(int action, int result, int status, char gear, int64_t at, int64_t now); // the answer to the press
+                                                                                   // tapped at `at` (CMDR_OK /
                                                                                    // CMDR_E_*), the Commander's status
 void app_actions_fill(dash_state_t *s, int64_t now);                   // the press out and the snackbar's line
 void app_tell(const char *text, int64_t now);                         // a line on the snackbar

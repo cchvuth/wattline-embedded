@@ -140,7 +140,7 @@ void record_panda(const uint8_t *d, size_t n, int64_t at) {
 }
 
 void record_cmdr(const bt_map_t *m, int64_t at) {
-  if (!fp) return;
+  if (!fp || (!m && !fc)) return;   // a link drop before any push (a step-aside, a dial) is not a recording
   if (!fc && !(fc = open_in(name, "cmdr", "w"))) { fail(name, strerror(errno)); return; }
   fprintf(fc, "%lld", (long long)ms(at));
   if (!m) fputs(" -", fc);

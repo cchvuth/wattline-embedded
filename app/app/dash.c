@@ -245,7 +245,7 @@ static void stats(const dash_t *d) {
 static dash_t D;
 
 #ifdef DASH_CMDR
-void dash_press(int action) { cmdr_hook_press((cmdr_action)action, &D.car, &D.link, mono_ms()); }
+void dash_press(int action, int64_t at) { cmdr_hook_press((cmdr_action)action, &D.car, &D.link, at); }
 #endif
 
 int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
