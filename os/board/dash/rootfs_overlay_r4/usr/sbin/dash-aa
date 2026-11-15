@@ -27,8 +27,8 @@ btc() {
 	wait $_bp; _br=$?; kill $_bk 2>/dev/null; return $_br
 }
 # Hooks for additions kept outside this repository (absent on a plain image), output in /data/log/hook-<name>.log:
-#  - /data/hooks/aa-start: once the access point is up, before aa bt (which offers the extra Bluetooth profiles of
-#    /etc/wattline/bt-profiles whose helper's socket exists by then). Gets IFACE, SSID, PSK and IP.
+#  - /data/hooks/aa-start: once the access point is up, before the pairing window and aa bt (which offers the extra
+#    Bluetooth profiles of /etc/wattline/bt-profiles whose helper's socket exists by then). Gets IFACE, SSID, PSK and IP.
 #  - /data/hooks/aa-stop: at every stop (also after a failed start, or with no session up), so it must be safe to
 #    repeat. Gets IFACE and IP.
 # Each has 10 s, then SIGTERM, and SIGKILL 2 s later (the hook's own process: a daemon it started lives on). A helper's
@@ -41,7 +41,9 @@ hook() {
 	wait $_hp; kill $_hk 2>/dev/null; return 0
 }
 stop() {
-	killall spike-vdec 2>/dev/null   # the picture off at once, whatever the hook takes (and again below: a helper may restart it)
+	# the picture and the receiver off at once, whatever the hook takes (and again below: a helper may restart them):
+	# aa bt too, so the phone's Bluetooth link goes and it stops redialling the AP's session meanwhile
+	killall spike-vdec aa 2>/dev/null
 	hook aa-stop
 	[ -f /run/aa-pair-timer ] && kill "$(cat /run/aa-pair-timer)" 2>/dev/null; rm -f /run/aa-pair-timer   # an old window's end
 	killall spike-vdec aa hostapd udhcpd 2>/dev/null   # the decoder first, so its last picture stops being drawn
@@ -93,6 +95,7 @@ start|restore)
 	# The AP carries live video: keep the radio out of power save for the session (latency, not a correctness fix).
 	iw dev "$IFACE" set power_save off 2>/dev/null; iw dev wlan0 set power_save off 2>/dev/null
 	btc system-alias Wattline >/dev/null 2>&1 || true   # the name the phone sees (not the default BlueZ x.y)
+	hook aa-start   # before the pairing window: a pairing while it runs (up to 12 s) would find no agent yet
 	# New phones can pair only in the first 2 minutes after the button (someone at the Dash), not for the whole session;
 	# a phone paired before connects at any time. The AA channel itself needs a paired link (aa.c).
 	if [ "$1" = start ]; then   # someone at the Dash tapped it (not a restore at boot)
@@ -101,7 +104,6 @@ start|restore)
 		( sleep 120; btc pairable off; btc discoverable off; rm -f /run/aa-pair-timer ) >/dev/null 2>&1 &
 		echo $! > /run/aa-pair-timer
 	fi
-	hook aa-start
 	aa bt "$IP" "$SSID" "$PSK" "$BSSID" >/data/log/aa-bt.log 2>&1 &
 	aa serve >/data/log/aa-serve.log 2>&1 &
 	touch /data/aa-on 2>/dev/null && sync   # up: on again at the next start (the dash restores it), until stopped

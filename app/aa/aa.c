@@ -554,6 +554,10 @@ static int recv_msg(int fd, aa_tls_t *tls, uint8_t *chan, const uint8_t **msg, s
 	}
 }
 
+// a write to the phone failed or was cut short (SO_SNDTIMEO: the phone stopped reading): the frame stream is broken,
+// so the session ends at its loop's next turn (callers that ack, ping or send touches don't check each send)
+static int tx_dead;
+
 // send a framed message; with tls, the [msgid][pb] is encrypted and the frame flagged ENCRYPTED.
 static int send_msg(int fd, aa_tls_t *tls, uint8_t chan, uint8_t msgtype, uint16_t msgid, const uint8_t *pb, size_t pblen)
 {
@@ -563,7 +567,9 @@ static int send_msg(int fd, aa_tls_t *tls, uint8_t chan, uint8_t msgtype, uint16
 	const uint8_t *payload = msg; size_t plen = (size_t)mn; uint8_t enc = AA_ENC_PLAIN;
 	if (tls) { SSL_write(tls->ssl, msg, mn); int cn = tls_take(tls, cipher, sizeof cipher); if (cn <= 0) return -1; payload = cipher; plen = (size_t)cn; enc = AA_ENC_ENCRYPTED; }
 	int fn = frame_put(frame, sizeof frame, chan, (uint8_t)(enc | msgtype), payload, plen);
-	return fn < 0 ? -1 : writen(fd, frame, (size_t)fn);
+	if (fn < 0) return -1;
+	if (writen(fd, frame, (size_t)fn)) { tx_dead = 1; return -1; }
+	return 0;
 }
 
 // drive the TLS handshake over SSL_HANDSHAKE (msgid 3) PLAIN control messages; we are the server
@@ -849,6 +855,7 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 		// the decoder died (bad or unsupported stream): end the session rather than leave its last picture up as if
 		// live; the phone reconnects and a fresh decoder starts
 		if (sink == -2) { fprintf(stderr, "aa: ending the session: no video decoder\n"); break; }
+		if (tx_dead) { fprintf(stderr, "aa: ending the session: a write to the phone failed (it stopped reading)\n"); break; }
 		int64_t t = now_us(), left = next_ping - t;
 		if (t - last_rx > AA_SILENT_US) { fprintf(stderr, "aa: phone silent for %d s, ending the session\n", AA_SILENT_US / 1000000); break; }
 		if (t >= next_stat) {   // what the video path did: frames and data in from the phone
@@ -884,7 +891,7 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 		}
 		if (chan == AA_CH_CONTROL && id == AA_CTL_SERVICE_DISCOVERY_REQUEST) {
 			vid = video_wanted();
-			fprintf(stderr, "aa: video %dx%d at %d fps, the phone's UI %dx%d\n", vid.fw, vid.fh, vid.fps == AA_FPS_60 ? 60 : 30, vid.uw, vid.uh);
+			if (nlog <= 300) fprintf(stderr, "aa: video %dx%d at %d fps, the phone's UI %dx%d\n", vid.fw, vid.fh, vid.fps == AA_FPS_60 ? 60 : 30, vid.uw, vid.uh);
 			uint8_t sd[512]; size_t sn = build_service_discovery_response(sd, sizeof sd, &vid);
 			send_msg(fd, tls, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_SERVICE_DISCOVERY_RESPONSE, sd, sn);
 		} else if (id == AA_CTL_CHANNEL_OPEN_REQUEST) {
@@ -893,7 +900,7 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 			uint8_t co[16]; size_t cn = build_channel_open_response(co, sizeof co, AA_STATUS_OK);
 			send_msg(fd, tls, chan, AA_MSG_CONTROL, AA_CTL_CHANNEL_OPEN_RESPONSE, co, cn);
 			if (chan == AA_CH_INPUT) input_open = 1;
-			fprintf(stderr, "aa: channel %u opened\n", chan);
+			if (nlog <= 300) fprintf(stderr, "aa: channel %u opened\n", chan);
 		} else if (chan == AA_CH_CONTROL && id == AA_CTL_AUDIO_FOCUS_REQUEST) {
 			uint64_t ty = 0; pb_get_u(body, blen, AA_AFREQ_TYPE, &ty);
 			uint8_t r[8]; pb_out o = { r, 0, sizeof r, 0 }; pb_u(&o, AA_AFRESP_STATE, ty == AA_AF_RELEASE ? AA_AF_LOSS : AA_AF_GAIN);
@@ -932,7 +939,7 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 			if (chan == AA_CH_VIDEO) {   // the HU takes video focus once set up (headunit MediaSetupComplete): unrequested
 				uint8_t vf[8]; pb_out o = { vf, 0, sizeof vf, 0 }; pb_u(&o, AA_VFI_FOCUS_MODE, AA_FOCUS_FOCUSED); pb_u(&o, AA_VFI_UNREQUESTED, 1);
 				send_msg(fd, tls, AA_CH_VIDEO, AA_MSG_SPECIFIC, AA_AV_VIDEO_FOCUS_INDICATION, vf, o.n);
-				fprintf(stderr, "aa: video setup done, focus taken\n");
+				if (nlog <= 300) fprintf(stderr, "aa: video setup done, focus taken\n");
 			}
 		} else if (chan == AA_CH_VIDEO && id == AA_AV_VIDEO_FOCUS_REQUEST) {
 			// as asked, not unrequested (OpenAuto VideoService::onVideoFocusRequest). UNFOCUSED is AA's own Exit (its
@@ -945,13 +952,13 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 			send_msg(fd, tls, AA_CH_VIDEO, AA_MSG_SPECIFIC, AA_AV_VIDEO_FOCUS_INDICATION, vf, o.n);
 			if (off) unlink("/run/dash-project");
 			else close(open("/run/dash-project", O_CREAT | O_WRONLY | O_CLOEXEC, 0644));
-			fprintf(stderr, off ? "aa: video focus released (AA's Exit): the dash back\n" : "aa: video focus granted\n");
+			if (nlog <= 300) fprintf(stderr, off ? "aa: video focus released (AA's Exit): the dash back\n" : "aa: video focus granted\n");
 		} else if (chan == AA_CH_AV_INPUT && id == AA_AV_INPUT_OPEN_REQUEST) {
 			uint8_t r[16]; pb_out o = { r, 0, sizeof r, 0 }; pb_u(&o, AA_AVINRESP_SESSION, av_sess[AA_CH_AV_INPUT]); pb_u(&o, AA_AVINRESP_VALUE, 0);
 			send_msg(fd, tls, AA_CH_AV_INPUT, AA_MSG_SPECIFIC, AA_AV_INPUT_OPEN_RESPONSE, r, o.n);
 		} else if (is_av(chan) && id == AA_AV_START) {
 			uint64_t ss = 0; pb_get_u(body, blen, AA_START_SESSION, &ss); av_sess[chan & 15] = (uint32_t)ss;
-			fprintf(stderr, "aa: av start chan %u session %u\n", chan, av_sess[chan & 15]);
+			if (nlog <= 300) fprintf(stderr, "aa: av start chan %u session %u\n", chan, av_sess[chan & 15]);
 		} else if (is_av(chan) && is_media(id)) {
 			if (chan == AA_CH_VIDEO) {
 				if (!frames++) fprintf(stderr, "aa: first video frame (%zu bytes)\n", blen);
@@ -968,7 +975,7 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 				// then an access-unit delimiter: the decoder takes a NAL as complete when the next start code
 				// comes, so without it every picture would wait for the following one (a still screen: forever)
 				static const uint8_t aud[] = { 0, 0, 0, 1, 0x09, 0xf0 };
-				if (sink >= 0 && (writen(sink, nal, nl) || writen(sink, aud, sizeof aud))) { fprintf(stderr, "aa: video sink died\n"); close(sink); sink = -2; }
+				if (sink >= 0 && (writen(sink, nal, nl) || writen(sink, aud, sizeof aud))) { fprintf(stderr, "aa: video sink died\n"); sink = -2; }   /* aa_serve, its owner, closes it */
 			}   // ponytail: audio is ACKed and dropped — no sound out yet; pipe to ALSA when the Dash gets a speaker path
 		acked:
 			ack(fd, tls, chan);
@@ -1063,7 +1070,6 @@ static int aa_serve(const char *cert, const char *key)
 {
 	signal(SIGPIPE, SIG_IGN);
 	setvbuf(stderr, NULL, _IOLBF, 0);   // line-buffered: the serve log survives a hard kill (dash-aa stop)
-	signal(SIGCHLD, SIG_IGN);           // the decoder child of each session: no zombies
 	int ls = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0); if (ls < 0) die("socket: %s", strerror(errno));   /* not the decoder's */
 	int one = 1; setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
 	struct sockaddr_in a = { 0 }; a.sin_family = AF_INET; a.sin_addr.s_addr = INADDR_ANY; a.sin_port = htons(AA_PORT);
@@ -1098,8 +1104,10 @@ static int aa_serve(const char *cert, const char *key)
 		if (up == 1) {
 			fprintf(stderr, "aa: TLS up (%s, %s), session starting\n", SSL_get_version(t.ssl), SSL_get_cipher(t.ssl));
 			phone_off = 0, phone_off_seen = phone_off_ok = 0;   /* this phone's clock: learned from its video and pings */
+			tx_dead = 0;
 			rd_deadline = 0;
 			setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &live, sizeof live);   // a frame stalled half-way ends the session
+			setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &live, sizeof live);   // and so does a phone that stops reading
 			// AUTH_COMPLETE is the PLAINTEXT handshake-done signal: the phone activates its SSL context on
 			// receiving it, and only frames AFTER it are encrypted. Sent encrypted, the phone logs "encrypted
 			// frame ... with no ssl context, waiting" and times out. So NULL (plain), like VERSION/SSL_HANDSHAKE.
@@ -1114,7 +1122,9 @@ static int aa_serve(const char *cert, const char *key)
 			// stop the decoder and wait it out BEFORE dropping the marker: the UI repaints the dash when the marker
 			// goes, and a decoder still drawing would leave its last picture over it
 			if (sink >= 0) close(sink);
-			if (sink_pid > 0) { kill(sink_pid, SIGTERM); waitpid(sink_pid, NULL, 0); sink_pid = -1; }   // SIGCHLD ignored: returns once it is gone
+			// reaped only here (SIGCHLD left as it is): a decoder that died mid-session stays a zombie until this waitpid,
+			// so its pid cannot go to another process before the kill
+			if (sink_pid > 0) { kill(sink_pid, SIGTERM); waitpid(sink_pid, NULL, 0); sink_pid = -1; }
 			unlink("/run/dash-project");
 			unlink(PJ_AA_SESSION), unlink(PJ_AA_FOCUS), unlink(PJ_FPS);   // the decoder, killed, leaves its fps behind
 			fprintf(stderr, "aa: session ended\n");
@@ -1321,9 +1331,10 @@ static void profile_method(GDBusConnection *conn, const char *sender, const char
 				}
 				struct timeval none = { 0, 0 };   // creds done: block and keep the link alive for the session
 				setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &none, sizeof none);
-				uint16_t id; uint8_t m[256]; size_t mn;
-				while (bt_recv(fd, &id, m, sizeof m, &mn) == 0)
-					fprintf(stderr, "aa: BT rx id %u (%zu bytes) — link held\n", id, mn);
+				uint16_t id; uint8_t m[256]; size_t mn; int nb = 0;
+				while (bt_recv(fd, &id, m, sizeof m, &mn) == 0)   // logged a few times only: a phone could repeat these for hours
+					if (nb++ < 20) fprintf(stderr, "aa: BT rx id %u (%zu bytes) — link held\n", id, mn);
+					else if (nb == 21) fprintf(stderr, "aa: further BT messages not logged\n");
 				fprintf(stderr, "aa: RFCOMM closed by phone\n");
 				_exit(0);
 			}

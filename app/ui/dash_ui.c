@@ -1027,6 +1027,7 @@ const char *dash_ui_pj_marker = "/run/dash-project"; /* the shots harness points
 const char *dash_ui_aa_cert = "/etc/wattline/aa.crt", *dash_ui_aa_up = "/run/dash-aa", *dash_ui_pj_fps = PJ_FPS;
 static bool aa_pending;    /* tapped start, waiting for /run/dash-aa to appear: shown on at once */
 static bool aa_stopping;   /* tapped stop (or Exit), waiting for /run/dash-aa to go: shown off at once */
+#define AA_STOP_MS 30000   /* dash-aa stop's longest: its hook 12 s, the kills 5 s, two bluetoothctl calls 5 s each */
 static uint32_t aa_stop_at;
 #define AA_BLUE 0xFF03A9F4u /* Android Auto's blue (its logo's): the button while AA is on */
 static bool pj_left;       /* Exit tapped in the split: stay on the dash until this session's marker is gone */
@@ -1876,7 +1877,7 @@ static void aa_tap(lv_event_t *e)
 	(void)e;
 	if (FRESH(dash_at, 700)) return;
 	if (aa_pending && lv_tick_elaps(aa_pending_at) < 15000) return; /* still starting: a second start would race it */
-	if (aa_stopping && lv_tick_elaps(aa_stop_at) < 15000) return;   /* still stopping: a start now would find it up */
+	if (aa_stopping && lv_tick_elaps(aa_stop_at) < AA_STOP_MS) return;   /* still stopping: a start now would find it up */
 	if (access(PJ_AA_SESSION, F_OK) == 0 && !projecting) {   /* a phone on it, its map put away by AA's own Exit: */
 		static uint32_t focus_at;                                 /* back (the split's Exit stops AA) */
 		if (access(PJ_AA_FOCUS, F_OK) != 0) {
@@ -3467,7 +3468,7 @@ void dash_ui_set(const dash_state_t *s)
 	if (aa_cert) {   /* on: AP up, a tap pending, or projecting */
 		bool up = access(dash_ui_aa_up, F_OK) == 0;
 		if (up || (aa_pending && lv_tick_elaps(aa_pending_at) > 15000)) aa_pending = false;
-		if (aa_stopping && (!up || lv_tick_elaps(aa_stop_at) > 15000)) aa_stopping = false;
+		if (aa_stopping && (!up || lv_tick_elaps(aa_stop_at) > AA_STOP_MS)) aa_stopping = false;
 		/* off: white, as the other icons; on: Android Auto's blue. Off at once on the tap that stops it (dash-aa stop
 		 * takes a few seconds to take the AP and its processes down) */
 		icon_color(aa_btn, !aa_stopping && (projecting || up || aa_pending) ? AA_BLUE : WHITE);
