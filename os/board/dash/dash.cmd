@@ -32,7 +32,8 @@ if test -n "${trial}"; then
 		setenv bootcount 0
 	fi
 	env export -t ${kernel_addr_r} slot good trial bootcount failed
-	fatwrite mmc 0:1 ${kernel_addr_r} ota.txt ${filesize}
+	# a start that cannot be counted is no trial: a version that never comes up would start for ever, never rolled back
+	fatwrite mmc 0:1 ${kernel_addr_r} ota.txt ${filesize} || setenv slot ${good}
 fi
 
 setenv initrd_high 0xffffffff

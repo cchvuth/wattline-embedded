@@ -13,6 +13,7 @@
 #   confirm  this start proved itself: keep it (S99ota runs this)
 #   install  fetch and apply the newest release (the Install button; also retries a version that failed before)
 #   auto     the same, but never a version that already failed to start here (S99ota, automatic updates on)
+#   watch    this start still on trial (not confirmed): restart now, so U-Boot counts it (S00trial, 4 min after a start)
 #   status   print the state the UI shows (also in /run/dash-update.status)
 #
 # Trust: the release's SHA256SUMS must carry a valid Ed25519 signature by the project key baked into the image
@@ -163,15 +164,16 @@ cmd_fetch() {
 	newer "$LATEST" "$(current_version)" || { status current; log "already on $(current_version)"; return 0; }
 	S=$(free_slot) || fail "no free slot"; W=$OTA/$LATEST; B=wattline-ota-$LATEST.tar.gz
 	for d in $OTA/*/; do [ -d "$d" ] && [ "${d%/}" != "$W" ] && rm -rf "$d"; done   # a superseded release's partial download
+	grep -qx "$LATEST" $OTA/failed 2>/dev/null && rm -rf "$SLOTS/$S"   # a retry of a version that failed here: fetched and checked anew
 	[ "$(cat "$SLOTS/$S/version" 2>/dev/null)" = "$LATEST" ] && { status ready "slot $S"; log "$LATEST already in slot $S"; return 0; }
 	mkdir -p "$W" || fail "cannot write $W"
 	status downloading "$LATEST"
 	rm -f "$W/SHA256SUMS" "$W/SHA256SUMS.sig"   # always anew: a release re-signed since must not be stitched to the old
 	for f in SHA256SUMS SHA256SUMS.sig "$B"; do
-		curl -fsSL --max-time 900 -C - -o "$W/$f" "$BASE/$f"; r=$?
+		curl -fsSL --max-time 900 --speed-limit 1024 --speed-time 60 -C - -o "$W/$f" "$BASE/$f"; r=$?   # a dead link: given up in a minute
 		case $r in
 		0) ;;
-		22|33|36) rm -f "$W/$f"; curl -fsSL --max-time 900 -o "$W/$f" "$BASE/$f" || fail "download $f" ;;   # range refused: anew
+		22|33|36) rm -f "$W/$f"; curl -fsSL --max-time 900 --speed-limit 1024 --speed-time 60 -o "$W/$f" "$BASE/$f" || fail "download $f" ;;   # range refused: anew
 		*) fail "download $f broke off: the next try goes on from there" ;;
 		esac
 	done
@@ -225,6 +227,16 @@ cmd_confirm() {
 	fi
 }
 
+# A version that hangs before the dash comes up, or never runs healthy, would leave a dark screen for 3 drives before
+# U-Boot rolls it back: a start still on trial this long after it began is restarted, and U-Boot counts it. Its own
+# mount point: it takes no lock (a hung dash-update holding it must not keep this from acting).
+cmd_watch() {
+	P1MNT=$P1MNT.watch; B=$(booted_slot)
+	[ -n "$B" ] && ota_read && [ -n "$trial" ] && [ "$slot" = "$B" ] || return 0
+	log "slot $B ($(current_version)) not confirmed 4 min after its start: restarting (U-Boot counts the start)"
+	(sync &); sleep 2; reboot -f
+}
+
 # only the newest release itself: a slot left holding another version (one that failed, from a release pulled since)
 # is never armed by this
 cmd_install() { cmd_fetch && S=$(free_slot) && [ "$(cat "$SLOTS/$S/version" 2>/dev/null)" = "$LATEST" ] && newer "$LATEST" "$(current_version)" && cmd_apply; }
@@ -244,6 +256,7 @@ case "${1:-}" in
 	confirm) cmd_confirm ;;
 	install) cmd_install ;;
 	auto) cmd_auto ;;
+	watch) cmd_watch ;;
 	status) cat $STATUS 2>/dev/null || { status idle; cat $STATUS; } ;;
-	*) echo "usage: dash-update {status|check|fetch|apply [now]|install|confirm|auto}" >&2; exit 2 ;;
+	*) echo "usage: dash-update {status|check|fetch|apply [now]|install|confirm|auto|watch}" >&2; exit 2 ;;
 esac

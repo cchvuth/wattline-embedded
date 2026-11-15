@@ -187,4 +187,22 @@ mkrel 0.4.0; reset "slot=A good=A bootcount=0 failed=B" "dash.slot=A" "tmpfs /da
 upd confirm
 check "a rollback seen without /data: kept for later" "$(ota)" "bootcount=0 failed=B good=A slot=A "
 
+mkrel 0.4.0; reset "slot=A good=A bootcount=0" "dash.slot=A"; mkdir -p /data/ota /data/boot/B; echo 0.4.0 > /data/ota/failed
+echo 0.4.0 > /data/boot/B/version; echo damaged > /data/boot/B/zImage   # what the failed start left in its slot
+upd install
+check "a retry of a failed version: fetched and checked anew" "$(state) $(cat /data/boot/B/zImage)" "armed kernel 0.4.0"
+
+reset "slot=B good=A trial=1 bootcount=1" "dash.slot=B"
+upd watch
+check "watch: this start on trial, unconfirmed: restarted" "$(cat $W/rebooted 2>/dev/null) $(ota)" "REBOOT bootcount=1 good=A slot=B trial=1 "
+reset "slot=B good=B bootcount=0" "dash.slot=B"
+upd watch
+check "watch: a confirmed start: left be"            "[$(cat $W/rebooted 2>/dev/null)]" "[]"
+reset "slot=B good=A trial=1 bootcount=0" "dash.slot=A"
+upd watch
+check "watch: another slot armed for the next start: left be" "[$(cat $W/rebooted 2>/dev/null)]" "[]"
+reset "slot=A trial=1 bootcount=1" "dash.slot="
+upd watch
+check "watch: the factory image (the trial fell through): left be" "[$(cat $W/rebooted 2>/dev/null)]" "[]"
+
 [ $FAIL = 0 ] && echo "ALL PASS" || { echo "SOME FAILED"; exit 1; }

@@ -36,9 +36,10 @@ mkcard() {   # mkcard "OTA_TXT" "SLOTS"  (SLOTS: which of A B have their files)
 	dd if=p1.img of=card.img bs=512 seek=2048 conv=notrunc 2>/dev/null
 	dd if=p3.img of=card.img bs=512 seek=137216 conv=notrunc 2>/dev/null
 }
-run() {   # run NAME "OTA_TXT" "SLOTS" "WANT_RESULT" "WANT_OTA_TXT"
+run() {   # run NAME "OTA_TXT" "SLOTS" "WANT_RESULT" "WANT_OTA_TXT" [ro: the card cannot be written]
 	mkcard "$2" "$3"
-	out=$(u-boot/u-boot -c "host bind 0 card.img; setenv kernel_addr_r 0x1000000; setenv fdt_addr_r 0x1800000; setenv ramdisk_addr_r 0x1C00000; setenv scriptaddr 0x1900000; load host 0:1 \${scriptaddr} dash.scr && source \${scriptaddr}" 2>&1)
+	AS=; [ "${6:-}" = ro ] && { chmod 444 card.img; AS="setpriv --reuid=65534 --regid=65534 --clear-groups"; }   # U-Boot binds it read-only
+	out=$($AS u-boot/u-boot -c "host bind 0 card.img; setenv kernel_addr_r 0x1000000; setenv fdt_addr_r 0x1800000; setenv ramdisk_addr_r 0x1C00000; setenv scriptaddr 0x1900000; load host 0:1 \${scriptaddr} dash.scr && source \${scriptaddr}" 2>&1)
 	got=$(echo "$out" | tr -d '\r' | grep -o 'RESULT .*' | head -1)   # sandbox U-Boot ends lines with CR
 	dd if=card.img of=p1.out bs=512 skip=2048 count=131072 2>/dev/null
 	ota=$(mtype -i p1.out ::ota.txt 2>/dev/null | tr -d '\0\r' | grep -v '^$' | sort | tr '\n' ' ')
@@ -55,4 +56,6 @@ run "trial failed, good=factory"  "slot=A trial=1 bootcount=3"            "A"   
 run "slot files missing: factory" "slot=B good=B bootcount=0"             "A"     "boot factory"   "bootcount=0 good=B slot=B "
 run "trial w/o bootcount"         "slot=A trial=1"                        "A"     "boot slot=A"    "bootcount=1 slot=A trial=1 "
 run "trial keeps failed"          "slot=B good=A trial=1 failed=A"        "A B"   "boot slot=B"    "bootcount=1 failed=A good=A slot=B trial=1 "   # dash-update drops it
+run "trial, ota.txt unwritable"   "slot=B good=A trial=1 bootcount=1"     "A B"   "boot slot=A"    "bootcount=1 good=A slot=B trial=1 " ro   # uncounted: not started
+run "confirmed, unwritable card"  "slot=A good=A bootcount=0"             "A"     "boot slot=A"    "bootcount=0 good=A slot=A " ro
 [ $FAIL = 0 ] && echo "ALL PASS" || { echo "SOME FAILED"; exit 1; }

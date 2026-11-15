@@ -12,6 +12,12 @@ if [ -n "$D" ] && [ ! -b ${D}p3 ]; then
 	dash-mkdata && { blockdev --rereadpt $D 2>/dev/null; i=0; until [ -b ${D}p3 ] || [ $i -ge 5 ]; do sleep 1; i=$((i+1)); done; }
 fi
 if [ -n "$D" ] && [ -b ${D}p3 ]; then
+	# no ext4 magic where it goes (read, but not 0xEF53): the first boot's carve cut short (power gone during mkfs), or
+	# p3 not seen until a reboot. Made now, unless e2fsck finds a filesystem by a backup superblock. Unreadable: left be.
+	m=$(dd if=${D}p3 bs=2 skip=540 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+	if [ ${#m} = 4 ] && [ "$m" != 53ef ] && { e2fsck -fy ${D}p3 >/dev/null 2>&1; [ $? -ge 4 ]; }; then
+		mkfs.ext4 -F -q -L DASHDATA2 ${D}p3 </dev/null && echo "data: ${D}p3 had no filesystem: made one"
+	fi
 	fsck.ext4 -p ${D}p3; r=$?   # 0 clean, 1/2 fixed, 4+ not fixed: leave it alone
 	if [ $r -lt 4 ] && mount -t ext4 -o noatime ${D}p3 /data; then echo "data: ${D}p3 on /data (fsck $r)"
 	else echo "data: ${D}p3 not mounted (fsck $r): /data in RAM"; fi
