@@ -752,6 +752,11 @@ void dash_ui_init(lv_obj_t *scr)
 	lv_image_set_inner_align(glow_l, LV_IMAGE_ALIGN_TOP_LEFT); /* cut to the split's strip, it keeps its bright edge */
 	glow_r = icon(root, &glow_dsc[1], REGEN);
 	lv_obj_set_pos(glow_r, ri(G.W - glow_dsc[1].header.w), 0);
+	/* the path lines: over the whole screen (the app does not clip them; only the dots' areas are repainted), under the
+	 * chips, the route card and the car */
+	steer = box(root);
+	place(steer, 0, 0, G.W, G.H);
+	lv_obj_add_event_cb(steer, steer_draw, LV_EVENT_DRAW_MAIN, NULL);
 	glow_b = box(root);
 	place(glow_b, 0, G.H - px(45), G.W, px(45));
 	lv_obj_set_style_bg_opa(glow_b, LV_OPA_COVER, 0);
@@ -806,8 +811,6 @@ void dash_ui_init(lv_obj_t *scr)
 	}
 
 	/* Left: the lights row over the car. */
-	steer = box(root); /* under the car, as the app paints the path lines */
-	lv_obj_add_event_cb(steer, steer_draw, LV_EVENT_DRAW_MAIN, NULL);
 	lights_row = box(root);
 	cab.frame = box(root);
 	cab.grp = box(root);
@@ -1174,7 +1177,6 @@ static void set_cabin(const dash_state_t *s, float cx, float top)
 	(void)box_h;
 	cab.x = cx - cab.w / 2, cab.y = top + cb(8);
 	lv_obj_set_pos(cab.grp, ri(cab.x - cab.ox), ri(cab.y - cab.oy));
-	place(steer, cab.x - cab.w, 0, 3 * cab.w, G.H); /* the path lines' room: redrawn only as the wheel turns */
 	bool seats = s->wifi_live && s->cabin, belt = false;
 	for (int i = 0; i < DS_SEAT_COUNT; i++)
 		if (seats && s->seat[i] == DS_SEAT_UNBUCKLED && p->seat_red[i].img) belt = true;
@@ -2163,7 +2165,41 @@ static void pair_tap(lv_event_t *e)
 	save(DASH_PAIR_START);
 	dash_ui_show(DASH_VIEW_PAIR);
 }
-static void forget_tap(lv_event_t *e) { (void)e, save(DASH_CMDR_FORGET); }
+/* A forget button: the first tap asks "Tap again to forget" (red), a second within 3 s does it: a stray tap must not. */
+typedef struct {
+	lv_obj_t *btn;
+	const char *word;
+	uint32_t armed; /* the first tap's time, 0 none */
+} forget_t;
+static forget_t fg_cmdr = {NULL, "Forget Commander", 0}, fg_aa = {NULL, "Forget phones", 0};
+static void forget_label(forget_t *f, const char *t, uint32_t c)
+{
+	lv_obj_t *l = lv_obj_get_child(f->btn, -1);
+	set_text(l, "%s", t);
+	text_color(l, c);
+}
+static bool forget_second(forget_t *f)
+{
+	if (!f->armed || lv_tick_elaps(f->armed) > 3000) {
+		f->armed = lv_tick_get();
+		forget_label(f, "Tap again to forget", ALERT);
+		return false;
+	}
+	f->armed = 0;
+	forget_label(f, "Forgotten", WHITE);
+	return true;
+}
+static void forget_reset(forget_t *f, bool all) /* all: the settings opened; else only a second-tap window run out */
+{
+	if (!f->btn || (!all && !(f->armed && lv_tick_elaps(f->armed) > 3000))) return;
+	f->armed = 0;
+	forget_label(f, f->word, WHITE);
+}
+static void forget_tap(lv_event_t *e)
+{
+	(void)e;
+	if (forget_second(&fg_cmdr)) save(DASH_CMDR_FORGET);
+}
 /* The time zones a tap steps through (POSIX TZ: no tzdata on the card); another, from dash.conf, shows as it is. */
 static const char *const tz_name[] = {"UTC", "UK / Ireland", "Central Europe", "Eastern Europe", "US Eastern", "US Central",
 				      "US Mountain", "US Pacific", "Australia East", "Japan", "China", "India"};
@@ -2223,23 +2259,10 @@ static void switch_changed(lv_event_t *e)
 }
 /* ---- software update (Advanced): what dash-update reports in /run/dash-update.status, and its one button ---- */
 static lv_obj_t *set_ota_l, *set_ota_btn;
-static lv_obj_t *set_aa_forget; /* "Forget phones": a second tap within 3 s does it (a stray one must not) */
-static uint32_t aa_forget_armed; /* the first tap's time (0 none); cleared when the settings open, with the label */
 static void aa_forget_tap(lv_event_t *e)
 {
 	(void)e;
-	uint32_t armed_at = aa_forget_armed;
-	lv_obj_t *l = lv_obj_get_child(set_aa_forget, 0);
-	if (!armed_at || lv_tick_elaps(armed_at) > 3000) {
-		aa_forget_armed = lv_tick_get();
-		set_text(l, "Tap again to forget");
-		text_color(l, ALERT);
-		return;
-	}
-	aa_forget_armed = 0;
-	save(DASH_AA_FORGET);
-	set_text(l, "Forgotten");
-	text_color(l, WHITE);
+	if (forget_second(&fg_aa)) save(DASH_AA_FORGET);
 }
 static int ota_next = DASH_OTA_CHECK; /* what the button does now */
 static uint32_t ota_tapped; /* when the button was tapped (and hidden): back after a minute with no news */
@@ -2615,7 +2638,7 @@ static void settings_build(void)
 	lv_obj_t *btns = row(steps); /* side by side: the status line's room */
 	lv_obj_set_style_pad_column(btns, ri(PB(16)), 0);
 	outlined(btns, NULL, "Approve this Dash", approve_tap, 0);
-	outlined(btns, NULL, "Forget Commander", forget_tap, 0);
+	fg_cmdr.btn = outlined(btns, NULL, "Forget Commander", forget_tap, 0);
 	set_step = label(steps, FS(MEDIUM, 16, UI_S_PANEL), W70);
 	lv_obj_set_width(set_step, ri(sw));
 	lv_label_set_long_mode(set_step, LV_LABEL_LONG_MODE_WRAP);
@@ -2662,6 +2685,7 @@ static void settings_build(void)
 	lv_obj_set_style_bg_color(set_slider, rgb(M3_PRIMARY), LV_PART_KNOB);
 	lv_obj_set_style_pad_all(set_slider, ri(PB(7)), LV_PART_KNOB);
 	lv_obj_set_ext_click_area(set_slider, ri(PB(16)));
+	lv_obj_set_adv_hittest(set_slider, true); /* only the knob grabs: a page swipe over the track scrolls */
 	lv_obj_add_event_cb(set_slider, slider_changed, LV_EVENT_VALUE_CHANGED, NULL);
 	lv_obj_add_event_cb(set_slider, slider_changed, LV_EVENT_RELEASED, NULL);
 	lv_obj_t *ob = box(c); /* "Follow offset" and its signed value: the bias used while following the car */
@@ -2680,6 +2704,7 @@ static void settings_build(void)
 	lv_obj_set_style_bg_color(set_offset, rgb(M3_PRIMARY), LV_PART_KNOB);
 	lv_obj_set_style_pad_all(set_offset, ri(PB(7)), LV_PART_KNOB);
 	lv_obj_set_ext_click_area(set_offset, ri(PB(16)));
+	lv_obj_set_adv_hittest(set_offset, true);
 	lv_obj_add_event_cb(set_offset, offset_changed, LV_EVENT_VALUE_CHANGED, NULL);
 	lv_obj_add_event_cb(set_offset, offset_changed, LV_EVENT_RELEASED, NULL);
 	/* the networks, two columns across the page: the status and the saved ones; what is in range (settings_fill_nets) */
@@ -2709,7 +2734,7 @@ static void settings_build(void)
 	lv_obj_set_style_margin_top(group_title(c, "Android Auto"), ri(PB(14)), 0);
 	lv_obj_t *fw = text_block(c, "Paired phones", "Each one gets Android Auto's WiFi password whenever it is on. Forget them "
 						      "all (a phone sold, a passenger's), then pair yours again from the AA button");
-	set_aa_forget = button_row(c, fw, "Forget phones", aa_forget_tap, aw);
+	fg_aa.btn = button_row(c, fw, "Forget phones", aa_forget_tap, aw);
 	lv_obj_set_style_margin_top(group_title(c, "Software update"), ri(PB(14)), 0);
 	switch_note_row(c, "Automatic updates", "With internet (never the car's WiFi): download, check the signature, install at the next start", 7, aw);
 	set_ota_l = label(c, FS(REGULAR, 14, UI_S_PANEL), M3_ON_SURFACE); /* the version, what dash-update says */
@@ -2999,8 +3024,7 @@ void dash_ui_show(int v)
 		lv_obj_set_state(set_sw[5], LV_STATE_CHECKED, ST.sparse);
 		lv_obj_set_state(set_sw[6], LV_STATE_CHECKED, ST.wifi_first);
 		lv_obj_set_state(set_sw[7], LV_STATE_CHECKED, ST.ota_auto);
-		if (set_aa_forget) set_text(lv_obj_get_child(set_aa_forget, 0), "Forget phones"), text_color(lv_obj_get_child(set_aa_forget, 0), WHITE);
-		aa_forget_armed = 0;
+		forget_reset(&fg_cmdr, true), forget_reset(&fg_aa, true);
 		for (int i = 0; i < 6; i++) { /* the chosen car filled, as a selected chip */
 			fill(set_car_btn[i], i == ST.car ? 0xFF4A4458u : 0x00000000u);
 			border(set_car_btn[i], i == ST.car ? 0xFFD0BCFFu : W70, PB(1));
@@ -3304,11 +3328,7 @@ static void set_touch(const dash_state_t *s)
 		text_color(set_status, c == W54 ? W70 : c);
 		set_text(set_bt_line, "%s", s->bt_line);
 		if (set_wifi_line) set_text(set_wifi_line, "%s", s->wifi_line);
-		if (aa_forget_armed && lv_tick_elaps(aa_forget_armed) > 3000) { /* the second tap's window over: the label again */
-			aa_forget_armed = 0;
-			set_text(lv_obj_get_child(set_aa_forget, 0), "Forget phones");
-			text_color(lv_obj_get_child(set_aa_forget, 0), WHITE);
-		}
+		forget_reset(&fg_cmdr, false), forget_reset(&fg_aa, false); /* a second tap's window over: the label again */
 		bool join_over = joining[0] && lv_tick_elaps(joining_at) >= 20000; /* a join that did not take: Connect again */
 		if (join_over) joining[0] = 0;
 		if (net_list && view == DASH_VIEW_SETTINGS && (join_over || CHANGED(nearby_n) || CHANGED(nearby) || CHANGED(net_ssid)))
