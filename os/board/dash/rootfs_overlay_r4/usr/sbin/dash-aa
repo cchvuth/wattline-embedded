@@ -67,7 +67,7 @@ start|restore)
 	aa certcheck "$CERT" "${CERT%.crt}.key" || exit 1   # self-signed, or its key missing/another's: no session (it says why)
 	[ ${#PSK} -ge 8 ] || { echo "dash-aa: could not make the AP passphrase" >&2; exit 1; }
 	[ -f "$MARK" ] && exit 0   # already up
-	# one start at a time (a second tap after the UI's 15 s, while this one still waits on the Wi-Fi lock): the lock
+	# one start at a time (a boot restore, or a tap once the UI stops waiting on this one at 90 s): the lock
 	# holds its start's pid; one whose start died (no such process) is taken over. Not by age: the clock jumps at boot.
 	L=/run/dash-aa.starting
 	if ! mkdir $L 2>/dev/null; then

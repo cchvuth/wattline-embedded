@@ -14,7 +14,7 @@
 #   install  fetch and apply the newest release (the Install button; also retries a version that failed before)
 #   auto     the same, but never a version that already failed to start here (S99ota, automatic updates on)
 #   watch    this start still on trial (not confirmed) and its dash not running healthy: restart, so U-Boot counts it
-#            (S00trial, 4 min after a start, or after a repair of /data then)
+#            (S00trial, 4 min after a start (5 with no dash), or after a repair of /data then)
 #   status   print the state the UI shows (also in /run/dash-update.status)
 #
 # Trust: the release's SHA256SUMS must carry a valid Ed25519 signature by the project key baked into the image
@@ -244,7 +244,7 @@ cmd_watch() {
 	# the same dash 30 s, and ready (its display opened in good time: /run/dash-ready names it)
 	p=$(pidof dash) && sleep 30 && [ "$(pidof dash)" = "$p" ] && [ "$(cat /run/dash-ready 2>/dev/null)" = "$p" ] &&
 		{ log "slot $B on trial, unconfirmed, but its dash runs: left be"; return 0; }
-	log "slot $B ($(current_version)) not confirmed 4 min after its start, its dash not running healthy: restarting (U-Boot counts the start)"
+	log "slot $B ($(current_version)) not confirmed 4-5 min after its start, its dash not running healthy: restarting (U-Boot counts the start)"
 	(sync &); sleep 2; reboot -nf   # -n: a sync stuck on a failing card must not hold the restart
 }
 

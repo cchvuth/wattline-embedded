@@ -1,5 +1,5 @@
 #!/bin/sh
-# OTA: a start of an update on trial that is not confirmed within 4 minutes (hung before the dash came up, or the dash
+# OTA: a start of an update on trial that is not confirmed within 4 minutes (5 with no dash; hung before it came up, or it
 # never healthy) is restarted, so U-Boot counts it and rolls the version back after 3: not a dark screen for 3 drives.
 # S99ota confirms a healthy start within ~2 min. dash-update watch does the looking.
 case "$1" in start|"") ;; *) exit 0;; esac

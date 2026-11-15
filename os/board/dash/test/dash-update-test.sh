@@ -23,7 +23,7 @@ printf '#!/bin/sh\nrm -f "$1"\n' > $W/bin/umount
 printf '#!/bin/sh\necho "wpa_state=COMPLETED"; echo "ssid=${SSID:-home}"\n' > $W/bin/wpa_cli
 printf '#!/bin/sh\nexit 0\n' > $W/bin/hwclock
 printf '#!/bin/sh\necho REBOOT >> /tmp/dut/rebooted\n' > $W/bin/reboot
-printf '#!/bin/sh\n[ -n "${DASH_UP:-}" ] && [ "$1" = dash ] && echo 4242\n' > $W/bin/pidof   # the dash runs (pid 4242) when DASH_UP is set; no fsck
+printf '#!/bin/sh\n[ "$1" = dash ] && { [ -n "${DASH_UP:-}" ] || [ -f /tmp/dash-up ]; } && echo 4242\n' > $W/bin/pidof   # the dash runs (pid 4242) with DASH_UP or /tmp/dash-up; no fsck
 chmod +x $W/bin/*
 
 # a throwaway signing key (the image's public half where dash-update looks for it)
@@ -206,6 +206,9 @@ check "watch: on trial, unconfirmed, the dash running: left be" "[$(cat $W/reboo
 reset "slot=B good=A trial=1 bootcount=1" "dash.slot=B"
 DASH_UP=1 upd watch
 check "watch: the dash running but never ready (its display hung): restarted" "$(cat $W/rebooted 2>/dev/null)" "REBOOT"
+reset "slot=B good=A trial=1 bootcount=1" "dash.slot=B"
+echo 4242 > /run/dash-ready; rm -f /tmp/dash-up; ( sleep 15; touch /tmp/dash-up ) & upd watch; rm -f /tmp/dash-up
+check "watch: a dash up late (after a /data repair), ready: left be" "[$(cat $W/rebooted 2>/dev/null)]" "[]"
 reset "slot=B good=A trial=1 bootcount=1" "dash.slot=B"
 echo 4141 > /run/dash-ready; DASH_UP=1 upd watch
 check "watch: the ready mark an earlier dash left: restarted" "$(cat $W/rebooted 2>/dev/null)" "REBOOT"

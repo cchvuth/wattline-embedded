@@ -893,9 +893,10 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 			if (access(PJ_AA_FOCUS, F_OK) == 0) {   /* the dash's AA button after AA's own Exit: the map back (unrequested) */
 				unlink(PJ_AA_FOCUS);
 				uint8_t vf[8]; pb_out o = { vf, 0, sizeof vf, 0 }; pb_u(&o, AA_VFI_FOCUS_MODE, AA_FOCUS_FOCUSED); pb_u(&o, AA_VFI_UNREQUESTED, 1);
-				send_msg(fd, tls, AA_CH_VIDEO, AA_MSG_SPECIFIC, AA_AV_VIDEO_FOCUS_INDICATION, vf, o.n);
-				close(open("/run/dash-project", O_CREAT | O_WRONLY | O_CLOEXEC, 0644));
-				fprintf(stderr, "aa: video focus taken back (the dash's AA button)\n");
+				if (!send_msg(fd, tls, AA_CH_VIDEO, AA_MSG_SPECIFIC, AA_AV_VIDEO_FOCUS_INDICATION, vf, o.n)) {   /* (not for a phone gone) */
+					close(open("/run/dash-project", O_CREAT | O_WRONLY | O_CLOEXEC, 0644));
+					fprintf(stderr, "aa: video focus taken back (the dash's AA button)\n");
+				}
 			}
 			if (tx_dead) continue;   /* to the loop's top: the session ends now */
 		}
@@ -1146,8 +1147,8 @@ static int aa_serve(const char *cert, const char *key)
 				fprintf(stderr, "aa: the phone left before its session (AUTH_COMPLETE not sent)\n");
 				goto done;   /* no decoder and no split for a session that never starts */
 			}
-			char c;   /* nor for a phone that closed right after its handshake (a write to it still succeeds) */
-			if (recv(fd, &c, 1, MSG_PEEK | MSG_DONTWAIT) == 0) { fprintf(stderr, "aa: the phone left before its session\n"); goto done; }
+			char c; struct pollfd pp = { fd, POLLIN, 0 };   /* nor for one that leaves at once: its first byte first */
+			if (poll(&pp, 1, AA_SILENT_US / 1000) != 1 || recv(fd, &c, 1, MSG_PEEK | MSG_DONTWAIT) <= 0) { fprintf(stderr, "aa: the phone left before its session\n"); goto done; }
 			int sink = spawn_sink();
 			if (sink < 0) { fprintf(stderr, "aa: no video decoder (%s): no session\n", strerror(errno)); goto done; }
 			close(open("/run/dash-project", O_CREAT | O_WRONLY, 0644));   // the dash UI yields the video region
