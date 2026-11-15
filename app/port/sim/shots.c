@@ -162,17 +162,20 @@ int main(int argc, char **argv)
 			bad |= shot(d, out, ends[k].name, &s, DASH_VIEW_SETTINGS);
 			dash_ui_settings_tab(0); /* another tab: back at the top next time */
 		}
-		{ /* Advanced's Android Auto group in view: the lower-resolution switch over the paired phones */
-			dash_ui_settings_tab(4);
-			lv_obj_t *l = find_label(lv_layer_top(), "Lower resolution");
-			if (!l) printf("no label Lower resolution\n"), bad = 1;
+		static const struct { int tab; const char *label, *name; } rows[] = {   /* a row scrolled into view: its group whole */
+			{4, "Lower resolution", "touch-settings-advanced-aa"}, {2, "60 frames a second", "touch-settings-display-fps"}};
+		for (int k = 0; k < 2; k++) {
+			dash_ui_settings_tab(rows[k].tab);
+			lv_obj_t *l = find_label(lv_layer_top(), rows[k].label);
+			if (!l) printf("no label %s\n", rows[k].label), bad = 1;
 			else {
 				lv_obj_update_layout(lv_layer_top()), lv_obj_scroll_to_view_recursive(l, LV_ANIM_OFF);
 				lv_obj_t *pg = l;
 				do pg = lv_obj_get_parent(pg); while (pg && !lv_obj_is_scrollable(pg));
 				if (pg) lv_obj_scroll_by_bounded(pg, 0, -170, LV_ANIM_OFF); /* the whole group, not its first line at the foot */
 			}
-			bad |= shot(d, out, "touch-settings-advanced-aa", &s, DASH_VIEW_SETTINGS);
+			bad |= shot(d, out, rows[k].name, &s, DASH_VIEW_SETTINGS);
+			dash_ui_settings_tab(0); /* another tab: back at the top next time */
 		}
 		dash_ui_settings_tab(0);
 		s.bt = BT_APPROVING; /* the approval's turn: the step said, the wheel lit */

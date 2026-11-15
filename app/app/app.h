@@ -96,6 +96,7 @@ typedef struct {
   void *ctx;
   void (*show_settings)(void *ctx);                // app_settings loaded: show them (dash_ui_settings); may be NULL
   void (*ask_car)(void *ctx);                      // first boot (no car saved): the settings' Car tab; may be NULL
+  void (*frame_ms)(void *ctx, int ms);             // the screen's refresh period (LVGL's), as the dash's frame; may be NULL
 } ui_hooks_t;
 // ---- the backlight's level (bright.c): the car's screen brightness, else its lamps, else idle; eased ----
 enum { BRIGHT_CAR, BRIGHT_LAMPS, BRIGHT_IDLE, BRIGHT_AWAY, BRIGHT_MANUAL };

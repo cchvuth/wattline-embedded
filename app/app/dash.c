@@ -58,6 +58,8 @@ typedef struct {
   int port;
   int bl_max;
   bright_t bright;
+  int frame_ms;                 // the frame period now: dash.conf's (33 ms: 30 a second), 16 with the settings' 60
+  const ui_hooks_t *ui;
 } dash_t;
 
 // ---- the link's port: one connected UDP socket per attempt, as the app's RawDatagramSocket ----
@@ -225,6 +227,12 @@ static void backlight(dash_t *d, int64_t now, int64_t idle) {
 // The settings screen's brightness: following the car, or the slider's level (until the switch is on again).
 static bool started;   // the car and the link set up: the settings' car and polling can be applied to them
 static void apply_settings(dash_t *d, int64_t now) {
+  int fm = app_settings.fps60 ? 16 : d->cf->frame_ms;   // 60 frames a second, or dash.conf's
+  if (fm != d->frame_ms) {
+    d->frame_ms = fm;
+    if (d->ui && d->ui->frame_ms) d->ui->frame_ms(d->ui->ctx, fm);   // LVGL's redraw alike
+    log_msg("frame: every %d ms", fm);
+  }
   if (app_settings.follow_car) bright_follow(&d->bright);
   else bright_manual(&d->bright, app_settings.brightness_pct);
   d->bright.offset = app_settings.follow_offset;   // the settings' "Follow offset", applied when following
@@ -266,6 +274,7 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
   dash_t *d = &D;
   memset(d, 0, sizeof *d);
   d->cf = cf;
+  d->ui = ui;
   d->fd = -1;
   struct sigaction sa = {.sa_handler = on_sig};
   sigaction(SIGINT, &sa, NULL);
@@ -320,7 +329,7 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
 #ifdef DASH_CMDR
     p[1].fd = cmdr_hook_fd();   // the session's replies: pushes, press results
 #endif
-    poll(p, 3, (int)(wait < 0 ? 0 : wait > cf->frame_ms ? cf->frame_ms : wait));   // fd -1 entries are skipped
+    poll(p, 3, (int)(wait < 0 ? 0 : wait > d->frame_ms ? d->frame_ms : wait));   // fd -1 entries are skipped
     now = mono_ms();
     if (d->fd >= 0) drain(d, now);
     if (now > d->last) d->last = now;
@@ -360,8 +369,8 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
       was = d->link.state, why = d->link.why;
     }
     if (now >= next_frame) {
-      next_frame += cf->frame_ms;
-      if (next_frame <= now) next_frame = now + cf->frame_ms;   // a long frame: no catching up
+      next_frame += d->frame_ms;
+      if (next_frame <= now) next_frame = now + d->frame_ms;   // a long frame: no catching up
       clock_check(d, now);
       bridge_in_t in = {d->seen, utc_now(&d->car, now), app_settings.minor_figures, app_settings.hour12};
       in.wifi_join = wifi_join(now, &in.join_why);

@@ -28,6 +28,13 @@ static uint32_t frame(void *ctx) {
 static int64_t idle(void *ctx) { (void)ctx; return lv_display_get_inactive_time(NULL); }
 static void show_settings(void *ctx) { (void)ctx; dash_ui_settings(&app_settings); }
 static void ask_car(void *ctx) { (void)ctx; dash_ui_ask_car(); }
+static void frame_ms(void *ctx, int ms) {   // LVGL redraws (and reads the touch) at the dash's frame rate
+  (void)ctx;
+  lv_timer_t *t = lv_display_get_refr_timer(lv_display_get_default());
+  if (t) lv_timer_set_period(t, (uint32_t)ms);
+  for (lv_indev_t *i = lv_indev_get_next(NULL); i; i = lv_indev_get_next(i))
+    if (lv_indev_get_read_timer(i)) lv_timer_set_period(lv_indev_get_read_timer(i), (uint32_t)ms);
+}
 
 static void watchdog_off(void) {   // the magic close: a clean stop does not reboot
   if (wd >= 0 && write(wd, "V", 1) == 1) log_msg("watchdog disarmed");
@@ -78,7 +85,7 @@ int main(int argc, char **argv) {
   dash_ui_set_action_cb(app_on_action, NULL);       // taps -> one Commander press (actions.c)
   dash_ui_set_settings_cb(app_on_settings, NULL);   // the settings screen -> actions.c, saved by dash.c (settings.c)
 
-  ui_hooks_t ui = {set, frame, idle, NULL, show_settings, ask_car};
+  ui_hooks_t ui = {set, frame, idle, NULL, show_settings, ask_car, frame_ms};
   app_stopping = watchdog_off;
   int rc = dash_run(&cf, &ui, 0);
   watchdog_off();

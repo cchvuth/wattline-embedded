@@ -235,24 +235,30 @@ static uint16_t msg_id(const uint8_t *p, size_t n) { return n >= 2 ? (uint16_t)(
 // WiFi, a softer picture. Read at each phone's service discovery, so a change counts from the next connection.
 // ponytail: the phone scales its UI by the density; 160 is a first value for this panel (110 keeps the 480p layout
 // alike), tune both on the unit.
-typedef struct { int res, fw, fh, uw, uh, dpi; } aa_video_t;   // frame w x h, the UI area in it, density
-static const aa_video_t AA_VIDEO_720 = {AA_RES_720p, 1280, 720, PJ_RGN_W, PJ_RGN_H, 160};
+typedef struct { int res, fw, fh, uw, uh, dpi, fps; } aa_video_t;   // frame w x h, the UI area in it, density, AA_FPS_*
+static const aa_video_t AA_VIDEO_720 = {AA_RES_720p, 1280, 720, PJ_RGN_W, PJ_RGN_H, 160, AA_FPS_30};
 // the 480p UI area's height: the picture's shape at 800 wide, rounded up to even as the decoder takes its window
 #define AA_LOW_UH (((800 * PJ_RGN_H + PJ_RGN_W - 1) / PJ_RGN_W + 1) & ~1)
-static const aa_video_t AA_VIDEO_480 = {AA_RES_480p, 800, 480, 800, AA_LOW_UH, 110};
+static const aa_video_t AA_VIDEO_480 = {AA_RES_480p, 800, 480, 800, AA_LOW_UH, 110, AA_FPS_30};
 _Static_assert((1280 - PJ_RGN_W) % 4 == 0 && (720 - PJ_RGN_H) % 4 == 0 && PJ_RGN_W <= 1280 && PJ_RGN_H <= 720 &&
 	       AA_LOW_UH <= 480 && (480 - AA_LOW_UH) % 4 == 0, "the UI area must fit its frame, centred on even pixels");
-static aa_video_t vid = {AA_RES_720p, 1280, 720, PJ_RGN_W, PJ_RGN_H, 160};   // this session's (touches are in its UI area)
+static aa_video_t vid = {AA_RES_720p, 1280, 720, PJ_RGN_W, PJ_RGN_H, 160, AA_FPS_30};   // this session's (touches: its UI area)
 #define AA_SETTINGS "/data/settings.conf"   // the dash's (app/settings.c)
-static int low_res_wanted(void)
+static int setting_on(const char *key)   // a switch of the dash's settings ("key = 1"), any non-zero as the app reads it
 {
 	FILE *f = fopen(AA_SETTINGS, "r");
-	char l[128];
+	char l[128], k[32];
 	int on = 0, v;
 	if (!f) return 0;
-	while (fgets(l, sizeof l, f)) if (sscanf(l, " aa_low_res = %d", &v) == 1) on = v != 0;   // as the app reads it
+	while (fgets(l, sizeof l, f)) if (sscanf(l, " %31[a-z0-9_] = %d", k, &v) == 2 && !strcmp(k, key)) on = v != 0;
 	fclose(f);
 	return on;
+}
+static aa_video_t video_wanted(void)   // the settings' lower resolution and 60 frames a second, read at each connection
+{
+	aa_video_t v = setting_on("aa_low_res") ? AA_VIDEO_480 : AA_VIDEO_720;
+	if (setting_on("fps60")) v.fps = AA_FPS_60;
+	return v;
 }
 
 // one audio-sink ChannelDescriptor (PCM 16-bit at the given rate/channels)
@@ -273,7 +279,7 @@ static size_t audio_chd(uint8_t *buf, size_t cap, int ch, int type, int rate, in
 static size_t build_service_discovery_response(uint8_t *buf, size_t cap, const aa_video_t *vm)
 {
 	uint8_t vc[16]; pb_out v = { vc, 0, sizeof vc, 0 };
-	pb_u(&v, AA_VC_RESOLUTION, vm->res); pb_u(&v, AA_VC_FPS, AA_FPS_30);
+	pb_u(&v, AA_VC_RESOLUTION, vm->res); pb_u(&v, AA_VC_FPS, vm->fps);
 	// margins + density are required too ("density missing" -> PROTOCOL_WRONG_CONFIGURATION)
 	pb_u(&v, AA_VC_MARGIN_W, vm->fw - vm->uw); pb_u(&v, AA_VC_MARGIN_H, vm->fh - vm->uh); pb_u(&v, AA_VC_DPI, vm->dpi);
 	uint8_t av[48]; pb_out a = { av, 0, sizeof av, 0 };
@@ -353,8 +359,9 @@ static size_t build_touch(uint8_t *buf, size_t cap, uint64_t ts, uint32_t x, uin
 // build/parse roundtrip over the real field numbers (no phone needed)
 static int msg_selftest(void)
 {
-	for (int mode = 0; mode < 2; mode++) {   // 720p, then the lower setting's 480p
-	const aa_video_t *vm = mode ? &AA_VIDEO_480 : &AA_VIDEO_720;
+	for (int mode = 0; mode < 3; mode++) {   // 720p, the lower setting's 480p, 720p at 60 frames a second
+	aa_video_t v60 = AA_VIDEO_720; v60.fps = AA_FPS_60;
+	const aa_video_t *vm = mode == 1 ? &AA_VIDEO_480 : mode == 2 ? &v60 : &AA_VIDEO_720;
 	uint8_t sdr[512]; size_t sn = build_service_discovery_response(sdr, sizeof sdr, vm);
 	if (!sn || !pb_ok(sdr, sn)) die("msg: build SDR");
 	pb_in in = { sdr, sn, 0 }; pb_val f; int found = 0, nch = 0;
@@ -368,9 +375,9 @@ static int msg_selftest(void)
 			if (pb_get_u(avp, avl, AA_AVCH_STREAM_TYPE, &st) && st == AA_AVSTREAM_VIDEO &&
 			    pb_get_b(avp, avl, AA_AVCH_VIDEO_CONFIGS, &vcp, &vcl) &&
 			    pb_get_u(vcp, vcl, AA_VC_RESOLUTION, &res) && res == (uint64_t)vm->res) {
-				uint64_t mw = 99, mh = 99;
-				pb_get_u(vcp, vcl, AA_VC_MARGIN_W, &mw), pb_get_u(vcp, vcl, AA_VC_MARGIN_H, &mh);
-				found = mw == (uint64_t)(vm->fw - vm->uw) && mh == (uint64_t)(vm->fh - vm->uh);
+				uint64_t mw = 99, mh = 99, fps = 99;
+				pb_get_u(vcp, vcl, AA_VC_MARGIN_W, &mw), pb_get_u(vcp, vcl, AA_VC_MARGIN_H, &mh), pb_get_u(vcp, vcl, AA_VC_FPS, &fps);
+				found = mw == (uint64_t)(vm->fw - vm->uw) && mh == (uint64_t)(vm->fh - vm->uh) && fps == (uint64_t)vm->fps;
 			}
 		}
 	}
@@ -797,8 +804,8 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 			nlog++;
 		}
 		if (chan == AA_CH_CONTROL && id == AA_CTL_SERVICE_DISCOVERY_REQUEST) {
-			vid = low_res_wanted() ? AA_VIDEO_480 : AA_VIDEO_720;
-			fprintf(stderr, "aa: video %dx%d, the phone's UI %dx%d\n", vid.fw, vid.fh, vid.uw, vid.uh);
+			vid = video_wanted();
+			fprintf(stderr, "aa: video %dx%d at %d fps, the phone's UI %dx%d\n", vid.fw, vid.fh, vid.fps == AA_FPS_60 ? 60 : 30, vid.uw, vid.uh);
 			uint8_t sd[512]; size_t sn = build_service_discovery_response(sd, sizeof sd, &vid);
 			send_msg(fd, tls, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_SERVICE_DISCOVERY_RESPONSE, sd, sn);
 		} else if (id == AA_CTL_CHANNEL_OPEN_REQUEST) {
@@ -1352,7 +1359,7 @@ int main(int argc, char **argv)
 		int tf = touch_open(), secs = argc > 2 ? atoi(argv[2]) : 15;
 		if (tf < 0) return 1;
 		input_open = 1; mt_force_visible = 1;
-		vid = low_res_wanted() ? AA_VIDEO_480 : AA_VIDEO_720;   /* the coordinates a session would send now */
+		vid = video_wanted();   /* the coordinates a session would send now */
 		printf("touch-test: touchscreen 0..%d x 0..%d, picture x %d..%d, sent as 0..%d x 0..%d; touch now (%d s)\n", mt_max_x, mt_max_y,
 		       PJ_RGN_X, PJ_RGN_X + PJ_RGN_W - 1, vid.uw - 1, vid.uh - 1, secs); fflush(stdout);
 		for (int64_t end = now_us() + (int64_t)secs * 1000000; now_us() < end; ) {
