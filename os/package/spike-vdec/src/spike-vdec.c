@@ -112,7 +112,7 @@ static void parse_sps(br_t *b)
 	case 100: case 110: case 122: case 244: case 44: case 83: case 86: case 118: case 128: case 138: case 139: case 134: case 135:
 		if (ue(b) != 1) die("only 4:2:0");	/* (chroma_format_idc 1 as set above) */
 		if (ue(b) || ue(b)) die("only 8-bit");	/* bit_depth_luma_minus8, bit_depth_chroma_minus8 (left 0) */
-		if (u(b, 1)) sps.flags |= V4L2_H264_SPS_FLAG_QPPRIME_Y_ZERO_TRANSFORM_BYPASS;
+		if (u(b, 1)) die("lossless coding (transform bypass): not in this spike decoder");   /* cedrus never sets it */
 		if (u(b, 1)) die("SPS scaling matrices: not in this spike decoder");
 	}
 	/* The stream comes from the phone (or whoever reached the AA socket): every value is checked against the
@@ -865,9 +865,10 @@ static int dec_one(dec_t *D, pic_t *p, nal_t *s)
 	int poc = calc_poc(p);
 	p->dp.top_field_order_cnt = p->dp.bottom_field_order_cnt = poc;
 	fill_refs(p);
-	int ci = -1;	/* a capture buffer that holds no reference */
-	for (int k = 0; k < D->ncap && ci < 0; k++) {   /* refs + 2 waiting to be shown + this one fit in ncap (refs + 3) */
-		int used = 0; for (int r = 0; r < nrefs; r++) used |= refs[r].cap == k;
+	int ci = -1;	/* a capture buffer that holds no reference, no picture waiting to be shown and not the reshow's */
+	for (int k = 0; k < D->ncap && ci < 0; k++) {   /* refs + 2 + this one fit in ncap (refs + 3): the reshow's picture is */
+		int used = k == D->newest_ci;                /* the last one waiting, or none waits */
+		for (int r = 0; r < nrefs; r++) used |= refs[r].cap == k;
 		for (int j = 0; j < D->npend; j++) used |= D->pend[j] == k;
 		if (!used) ci = k;
 	}
@@ -898,7 +899,6 @@ static int dec_one(dec_t *D, pic_t *p, nal_t *s)
 	if (p->ref) add_ref(p, ts, poc, ci);
 	D->frames++;
 	if (!bad) D->newest_ci = ci;	/* decode order, not POC order: fine for the display (AA sends IPPP, no reorder) */
-	else if (ci == D->newest_ci) D->newest_ci = -1;	/* its buffer now holds the flagged picture */
 	if (fb_fd >= 0 && D->show_each) D->last_ci = ci, fb_show(D);
 	else if (fb_fd >= 0 && !bad) {   /* the live stream: in the queue to show; when it is full (the screen behind), the oldest is dropped */
 		if (D->npend == 2) D->pend[0] = D->pend[1], D->npend = 1;
@@ -973,19 +973,24 @@ static void process_nal(const uint8_t *p, size_t n, dec_t *D, int *set)
 		if (had && memcmp(&old, &sps, sizeof sps)) need_idr = 1;
 		if (*set && (16 * (sps.pic_width_in_mbs_minus1 + 1) != D->cw || 16 * (sps.pic_height_in_map_units_minus1 + 1) != D->ch))
 			die("SPS changed the picture size mid-stream (%dx%d set up)", D->cw, D->ch);   /* the engine's buffers are for it */
+		if (*set && ((old.flags ^ sps.flags) & V4L2_H264_SPS_FLAG_DIRECT_8X8_INFERENCE))   /* cedrus sizes each buffer's */
+			die("SPS changed direct_8x8_inference mid-stream (the engine's buffers are sized for it)");   /* MV area for it */
 		if (*set && (int)sps.max_num_ref_frames + 3 > D->ncap)
 			die("SPS asks for %d reference frames mid-stream (%d buffers set up)", (int)sps.max_num_ref_frames, D->ncap);
 	} else if (t == 8) parse_pps(&b);
 	else if (t == 1 || t == 5) {
 		if (!have_sps || !have_pps) return;	/* joined mid-stream: wait for the next SPS/PPS before decoding */
-		if (need_idr && t != 5) return;
+		if (need_idr && t != 5) {   /* (a stream that never sends one would freeze the picture for good) */
+			if (++need_idr > 60) die("no IDR within 60 slices of a changed SPS");
+			return;
+		}
 		if (!*set) { dec_setup(D, 0); *set = 1; }
 		pic_t p2; nal_t s = { p, n };
 		parse_slice(&b, t, r, &p2);
 		if (p2.redundant) return;	/* a copy: never the IDR a new SPS waits for */
 		need_idr = 0;
 		dec_one(D, &p2, &s);
-	}
+	} else if (t >= 2 && t <= 4) die("data partitioning (NAL type %d): not in this spike decoder", t);
 }
 
 /* process every complete NAL in buf[0..len) (one ending where the next start code begins); keep the last, possibly
