@@ -25,7 +25,7 @@ int bright_step(bright_t *b, const conf_t *cf, const car_t *c, int64_t now, int6
   bool live = car_live(c);
   if (live) {
     b->live_at = now;
-    if (c->low_beam >= 0 || c->high_beam >= 0) b->night = c->low_beam == 1 || c->high_beam == 1;
+    if (c->low_beam >= 0 || c->high_beam >= 0) b->night = c->low_beam == 1 || c->high_beam == 1, b->lamps = true;
   }
   double car = car_display_brightness(c, now), t;
   int src;

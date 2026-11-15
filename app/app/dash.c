@@ -190,7 +190,7 @@ static void backlight(dash_t *d, int64_t now, int64_t idle) {
   const conf_t *cf = d->cf;
   int pct = bright_step(&d->bright, cf, &d->car, now, idle);
   static int night = -1;   // day or night for the AA receiver (PJ_NIGHT): written when it changes
-  if (d->bright.night != night) {
+  if (d->bright.lamps && d->bright.night != night) {   // not before the lamps are known: a restart keeps the last
     FILE *f = fopen(PJ_NIGHT, "w");
     if (f) fputs(d->bright.night ? "1\n" : "0\n", f), fclose(f), night = d->bright.night;
   }

@@ -101,7 +101,7 @@ enum { BRIGHT_CAR, BRIGHT_LAMPS, BRIGHT_IDLE, BRIGHT_AWAY, BRIGHT_MANUAL };
 typedef struct {
   int follow, manual;           // follow the car (bright_follow_car); manual: settings' %, -1 none
   int offset;                   // follow-car bias (% points added), from the settings' "Follow offset"
-  bool night, bad_logged;
+  bool night, lamps, bad_logged;   // lamps: night known (the car's lamps seen since the start)
   int src;                      // BRIGHT_*, -1 none yet
   double shown, from, target, logged;
   int64_t live_at, ramp_at;

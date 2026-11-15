@@ -7,7 +7,7 @@
 case "$1" in start|"") ;; *) exit 0;; esac
 mkdir -p /data/wattline
 [ -L /etc/wattline ] || { rm -rf /etc/wattline; ln -s /data/wattline /etc/wattline; }
-if [ -f /data/wattline/aa.crt ] && ! /usr/bin/aa certcheck /data/wattline/aa.crt /data/wattline/aa.key 2>/dev/null; then
+if [ -f /data/wattline/aa.crt ] && ! /usr/bin/aa certcheck /data/wattline/aa.crt /data/wattline/aa.key </dev/null 2>/dev/null; then
 	mv /data/wattline/aa.crt /data/wattline/aa.crt.unusable; mv /data/wattline/aa.key /data/wattline/aa.key.unusable 2>/dev/null
 	echo "S06wattline: aa.crt is self-signed or its key is missing / another's: set aside as *.unusable (no AA button)"
 fi

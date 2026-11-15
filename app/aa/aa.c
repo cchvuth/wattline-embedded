@@ -86,6 +86,7 @@ static SSL_CTX *tls_ctx(const char *cert, const char *key, int server)
 	SSL_CTX *c = SSL_CTX_new(server ? TLS_server_method() : TLS_client_method());
 	if (!c) die("SSL_CTX_new");
 	if (cert && SSL_CTX_use_certificate_file(c, cert, SSL_FILETYPE_PEM) != 1) die("load cert %s", cert);
+	SSL_CTX_set_default_passwd_cb_userdata(c, (void *)"");   // a passphrase-protected key fails at once, never prompts
 	if (key && SSL_CTX_use_PrivateKey_file(c, key, SSL_FILETYPE_PEM) != 1) die("load key %s", key);
 	SSL_CTX_set_verify(c, SSL_VERIFY_NONE, NULL);  // AA pins at the app layer, not via the CA store
 	if (!server) {   // the head unit's side, as aasdk's: TLS 1.2, and the phone's certificate taken as it comes
@@ -136,10 +137,10 @@ static void pump(aa_tls_t *from, aa_tls_t *to)
 	}
 }
 
-// generate a self-signed cert/key to PEM files via the OpenSSL API (no openssl CLI needed; runs on-device)
 // A head-unit certificate a phone can accept: readable, not self-signed (phones pin Google's Android Auto CA, so a
 // self-signed one fails the handshake), and, given its key, that key loads and matches it (aa serve dies on a bad key).
-// 0 usable; 1 self-signed; 2 the key missing or not this certificate's; -1 no PEM certificate.
+// 0 usable; 1 self-signed; 2 the key missing, not this certificate's, or passphrase-protected (aa serve cannot use
+// it); -1 no PEM certificate.
 static int cert_check(const char *path, const char *keypath)
 {
 	FILE *f = fopen(path, "r");
@@ -150,7 +151,8 @@ static int cert_check(const char *path, const char *keypath)
 	int r = X509_check_issued(x, x) == X509_V_OK;
 	if (!r && keypath) {
 		EVP_PKEY *k = NULL;
-		if ((f = fopen(keypath, "r"))) k = PEM_read_PrivateKey(f, NULL, NULL, NULL), fclose(f);
+		// "" as the passphrase: a protected key is refused at once (no prompt on the console S06wattline runs on)
+		if ((f = fopen(keypath, "r"))) k = PEM_read_PrivateKey(f, NULL, NULL, (void *)""), fclose(f);
 		r = k && X509_check_private_key(x, k) == 1 ? 0 : 2;
 		EVP_PKEY_free(k);
 	}
@@ -158,6 +160,7 @@ static int cert_check(const char *path, const char *keypath)
 	return r;
 }
 
+// generate a self-signed cert/key to PEM files via the OpenSSL API (no openssl CLI needed; runs on-device)
 static int gen_cert(const char *crt, const char *key, long valid_secs)
 {
 	EVP_PKEY *pk = EVP_RSA_gen(2048);
@@ -1307,7 +1310,7 @@ int main(int argc, char **argv)
 	if ((argc == 3 || argc == 4) && !strcmp(argv[1], "certcheck")) {   // certcheck <crt> [key]: 0 if usable (see cert_check)
 		int r = cert_check(argv[2], argc == 4 ? argv[3] : NULL);
 		if (r) fprintf(stderr, "aa: %s: %s\n", argv[2], r == 1 ? "self-signed: phones reject it (a Google-signed head-unit certificate is needed)"
-						       : r == 2 ? "its key is missing or belongs to another certificate" : "no PEM certificate");
+						       : r == 2 ? "its key is missing, passphrase-protected, or another certificate's" : "no PEM certificate");
 		return r ? 1 : 0;
 	}
 	if (argc == 4 && !strcmp(argv[1], "gencert"))   // gencert <crt> <key>: a self-signed cert (tests; phones reject it)
