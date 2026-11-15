@@ -1707,7 +1707,15 @@ static void open_tap(lv_event_t *e) { dash_ui_show((intptr_t)lv_event_get_user_d
 /* the split's Exit: end the Android Auto session (the marker would pull the view straight back otherwise) */
 static void pj_exit_tap(lv_event_t *e) { (void)e; pj_left = true; aa_pending = false; save(DASH_AA_STOP); dash_ui_show(DASH_VIEW_DASH); }
 /* the dash's Android Auto button (beside the car-panel icon): toggle the on-demand bring-up by its live state */
-static void aa_tap(lv_event_t *e) { (void)e; bool up = access("/run/dash-aa", F_OK) == 0; save(up ? DASH_AA_STOP : DASH_AA_START); aa_pending = !up; }
+static uint32_t aa_pending_at;
+static void aa_tap(lv_event_t *e)
+{
+	(void)e;
+	if (aa_pending && lv_tick_elaps(aa_pending_at) < 15000) return; /* still starting: a second start would race it */
+	bool up = access("/run/dash-aa", F_OK) == 0;
+	save(up ? DASH_AA_STOP : DASH_AA_START);
+	aa_pending = !up, aa_pending_at = lv_tick_get();
+}
 
 /* ---- the phone-map split screen: the picture a rectangle up to the 2/3 line, clear of the left slant (which keeps
  * the Wi-Fi / Bluetooth status), a compact dash on the right 1/3 ---- */
@@ -1765,24 +1773,29 @@ static void project_build(void)
 
 	/* The exit: a clear, finger-sized pill in the strip's bottom corner, always there to leave the phone map and
 	 * return to the full dash. */
+	/* the Exit pill: outlined like the dash's other buttons (W70, thin), a little smaller than a chip */
+	float eh = px(36);
 	pj_exit = box(project);
-	lv_obj_set_height(pj_exit, ri(px(44)));
+	lv_obj_set_height(pj_exit, ri(eh));
 	lv_obj_set_width(pj_exit, LV_SIZE_CONTENT);
 	lv_obj_set_style_radius(pj_exit, LV_RADIUS_CIRCLE, 0);
 	fill(pj_exit, 0x33000000u);
-	border(pj_exit, ACCENT, px(1.5));
+	border(pj_exit, W70, px(1));
 	pressed_look(pj_exit, 0x33FFFFFF);
 	lv_obj_set_flex_flow(pj_exit, LV_FLEX_FLOW_ROW);
 	lv_obj_set_flex_align(pj_exit, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-	lv_obj_set_style_pad_left(pj_exit, ri(px(16)), 0);
-	lv_obj_set_style_pad_right(pj_exit, ri(px(18)), 0);
-	lv_obj_set_style_pad_column(pj_exit, ri(px(8)), 0);
-	icon(pj_exit, &ic_p_close, WHITE);
-	lv_obj_t *xl = label(pj_exit, FS(MEDIUM, 15, UI_S_RING), WHITE);
+	lv_obj_set_style_pad_left(pj_exit, ri(px(12)), 0);
+	lv_obj_set_style_pad_right(pj_exit, ri(px(14)), 0);
+	lv_obj_set_style_pad_column(pj_exit, ri(px(6)), 0);
+	lv_obj_t *xi = icon(pj_exit, &ic_p_close, WHITE);
+	lv_image_set_scale(xi, 256 * 3 / 4); /* the panel's close glyph at 3/4: sized to the shorter pill */
+	lv_obj_set_size(xi, ri(ic_p_close.header.w * 3 / 4.0f), ri(ic_p_close.header.h * 3 / 4.0f));
+	lv_image_set_inner_align(xi, LV_IMAGE_ALIGN_CENTER);
+	lv_obj_t *xl = label(pj_exit, FS(MEDIUM, 13, UI_S_RING), WHITE);
 	lv_label_set_text(xl, "EXIT");
-	tappable(pj_exit, pj_exit_tap, 0, px(10));
+	tappable(pj_exit, pj_exit_tap, 0, px(12)); /* the touch target stays generous around the smaller pill */
 	lv_obj_update_layout(pj_exit);
-	lv_obj_set_pos(pj_exit, ri(sx + sw - pad - lv_obj_get_width(pj_exit)), ri(G.H - px(44) - px(6)));
+	lv_obj_set_pos(pj_exit, ri(sx + sw - pad - lv_obj_get_width(pj_exit)), ri(G.H - eh - px(6)));
 
 	show(project, false);
 }
@@ -2876,12 +2889,13 @@ static bool bt_ready(dash_bt_t b);
 static void wifi_tap(lv_event_t *e)
 {
 	(void)e;
+	if (view == DASH_VIEW_PROJECT) return; /* in the split the box is status only: settings would sit under the video */
 	dash_ui_settings_tab(3);
 	dash_ui_show(DASH_VIEW_SETTINGS);
 }
 static void bt_tap(lv_event_t *e)
 {
-	if (S.bt == BT_APPROVING) return;
+	if (view == DASH_VIEW_PROJECT || S.bt == BT_APPROVING) return; /* status only in the split */
 	if (!bt_ready(S.bt)) approve_tap(e);
 	dash_ui_settings_tab(0);
 	dash_ui_show(DASH_VIEW_SETTINGS);
