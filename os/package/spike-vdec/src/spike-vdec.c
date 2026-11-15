@@ -970,7 +970,7 @@ static void process_nal(const uint8_t *p, size_t n, dec_t *D, int *set)
 	if (t == 7) {
 		struct v4l2_ctrl_h264_sps old = sps; int had = have_sps;
 		parse_sps(&b);
-		if (had && memcmp(&old, &sps, sizeof sps)) need_idr = 1;
+		if (had && memcmp(&old, &sps, sizeof sps) && !need_idr) need_idr = 1;   /* a wait under way keeps its count */
 		if (*set && (16 * (sps.pic_width_in_mbs_minus1 + 1) != D->cw || 16 * (sps.pic_height_in_map_units_minus1 + 1) != D->ch))
 			die("SPS changed the picture size mid-stream (%dx%d set up)", D->cw, D->ch);   /* the engine's buffers are for it */
 		if (*set && ((old.flags ^ sps.flags) & V4L2_H264_SPS_FLAG_DIRECT_8X8_INFERENCE))   /* cedrus sizes each buffer's */
