@@ -40,7 +40,7 @@ extern const char *const cmdr_statuses[9]; // 'ok' .. 'not supported'
 extern const uint8_t cmdr_lean_fields[5];
 // The last CMDR_NEWER (the tyres, the cabin) need recent Commander firmware: dropped again if a subscription is refused.
 enum { CMDR_NEWER = 5 };
-extern const uint8_t cmdr_all_fields[50];
+extern const uint8_t cmdr_all_fields[54];
 
 // A push (notification on push-enhapi, in the clear).
 typedef struct {

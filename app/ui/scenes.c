@@ -150,6 +150,7 @@ static void bluetooth_only(dash_state_t *s)
 	s->live = true, s->wifi_live = false;
 	for (int i = 0; i < 4; i++) s->tyre_psi[i] = (2.9f + 0.025f * (i == 2)) * 14.5038f;
 	s->cabin_c[0] = 22.1f;
+	s->brake_temp_c[0] = 86, s->brake_temp_c[1] = 84, s->brake_temp_c[2] = 52, s->brake_temp_c[3] = 50;
 	s->wifi = WIFI_IDLE, s->bt = BT_FULL;
 	s->speed = 72, s->gear = 'D', s->rear_kw = 13, s->front_kw = 8, s->speed_limit = 70, s->ap = AP_STEERING;
 	s->soc_pct = 58, s->range = 175 * 1.609344f, s->drl = true, s->low_beam = true;

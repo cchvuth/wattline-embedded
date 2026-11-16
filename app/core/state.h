@@ -51,6 +51,7 @@ typedef struct {
   bool pack_heating;
   int co2ppm;                   // -1 none, as every int below
   double cabin_c1, cabin_c2, cabin_c3;
+  double brake_temp_c[4];       // each brake's temperature (FL FR RL RR), °C: Bluetooth's alone; NUL unknown
   int auto_blower;
   double regen_max_kw;
   int hands_on;

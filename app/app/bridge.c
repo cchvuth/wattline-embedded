@@ -210,6 +210,7 @@ void bridge_fill(dash_state_t *s, const car_t *c, const link_t *l, const bt_view
     s->cabin_c[1] = s->cabin_c[2] = NAN;
     s->fan[0][0] = s->fan[1][0] = 0;
   }
+  for (int i = 0; i < 4; i++) s->brake_temp_c[i] = car_via_bt(c) ? c->brake_temp_c[i] : NAN;   // shown with Bluetooth alone
 
   // The chips (_Actions).
   s->trunk = c->trunk;

@@ -649,6 +649,90 @@ static float g_height(void)
 	       PEDAL_GAP + lv_font_get_line_height(label_font()) + PG(3) + PEDAL_H;
 }
 
+/* ---------- the brakes' temperatures (widgets.dart _BrakeTemps, _BrakeCross) ----------
+ * Bluetooth alone on a two-motor car, once the Commander pushes them: BRAKES over the cross of the braking tyres (the
+ * axles, the spine), a disc brake at each wheel, its figure outside it; in the g-meter's ball and figures' place, the
+ * pedal under it where the g-meter's is. No steering angle over Bluetooth: the fronts stay straight. */
+static lv_obj_t *brake_temps;
+static bool bt_brakes(const dash_state_t *s)
+{
+	if (!s->live || s->wifi_live || s->rwd) return false;
+	for (int i = 0; i < 4; i++)
+		if (!isnan(s->brake_temp_c[i])) return true;
+	return false;
+}
+static const lv_font_t *brake_font(void) { return FS(REGULAR, 16, UI_S_FIG); } /* as the dial's figures */
+static float brakes_h(void) { return PG(72) + PG(6) + lv_font_get_line_height(brake_font()) + lv_font_get_line_height(label_font()); }
+static float brake_icon(void) /* the disc's size: under a third of the cross's height */
+{
+	return fminf(PG(17), (brakes_h() - lv_font_get_line_height(label_font()) - PG(8)) * 0.3f);
+}
+static float brake_room(void) /* a figure's width */
+{
+	lv_point_t t;
+	lv_text_get_size(&t, "888°", brake_font(), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+	return t.x;
+}
+static float brakes_w(void) { return 2 * (brake_room() + px(6) + brake_icon()) + PG(12); }
+/* The disc brake (glyphs.dart kDiscBrake, the same shape): on a 102-unit square, the disc (r 34, its centre open to
+ * r 14, five holes on r 24), the hub (r 9, its bore 3.5) and the caliper over it (r 38 to 50, 90°, ends round), the
+ * disc's centre 6 under the square's; turned rot degrees clockwise. */
+static void disc_brake(lv_layer_t *layer, float cx, float cy, float size, float rot, uint32_t c)
+{
+	float k = size / 102, t = DEG(rot), ox = cx - 6 * k * sinf(t), oy = cy + 6 * k * cosf(t);
+	lv_draw_arc_dsc_t d;
+	lv_draw_arc_dsc_init(&d);
+#define RING(px_, py_, ro, rin, a0, a1, col) do { \
+		d.center.x = ri(px_), d.center.y = ri(py_), d.radius = ri((ro) * k); \
+		d.width = ri(((ro) - (rin)) * k) < 1 ? 1 : ri(((ro) - (rin)) * k); \
+		d.start_angle = (a0), d.end_angle = (a1), d.color = rgb(col), d.opa = opa(col); \
+		lv_draw_arc(layer, &d); \
+	} while (0)
+	RING(ox, oy, 34, 14, 0, 360, c); /* the disc */
+	RING(ox, oy, 9, 3.5f, 0, 360, c); /* the hub */
+	for (int i = 0; i < 5; i++) {     /* the holes: one under the caliper's middle, as turned */
+		float a = DEG(-90 + 72 * i + rot);
+		RING(ox + 24 * k * cosf(a), oy + 24 * k * sinf(a), 3, 0, 0, 360, BLACK);
+	}
+	d.rounded = 1;
+	int r = (int)lroundf(rot);
+	RING(ox, oy, 50, 38, ((225 + r) % 360 + 360) % 360, ((315 + r) % 360 + 360) % 360, c); /* the caliper */
+#undef RING
+}
+static void brakes_draw(lv_event_t *e)
+{
+	lv_layer_t *layer = lv_event_get_layer(e);
+	lv_area_t a;
+	lv_obj_get_coords(lv_event_get_target(e), &a);
+	const lv_font_t *lf = label_font(), *f = brake_font();
+	lv_draw_label_dsc_t ld;
+	lv_draw_label_dsc_init(&ld);
+	ld.font = lf, ld.text = "BRAKES", ld.color = rgb(W70), ld.opa = opa(W70), ld.align = LV_TEXT_ALIGN_CENTER;
+	ld.letter_space = ri(PF(0.8));
+	float lh = lv_font_get_line_height(lf);
+	lv_area_t la = {a.x1, a.y1, a.x2, ri(a.y1 + lh)};
+	lv_draw_label(layer, &ld, &la);
+	float top = a.y1 + lh + PG(8), s = brake_icon(), room = brake_room(), gap = px(6), lw = fmaxf(1, px(1.5f));
+	float xs[2] = {a.x1 + room + gap + s / 2, a.x2 - room - gap - s / 2}, ys[2] = {top + s / 2, a.y2 - s / 2};
+	const uint32_t AXLE = 0xFF616161u; /* as the braking tyres' */
+	for (int r = 0; r < 2; r++) line(layer, xs[0] + s / 2, ys[r], xs[1] - s / 2, ys[r], AXLE, lw, false); /* the axles */
+	line(layer, (xs[0] + xs[1]) / 2, ys[0], (xs[0] + xs[1]) / 2, ys[1], AXLE, lw, false);                 /* the spine */
+	float fh = lv_font_get_line_height(f);
+	for (int i = 0; i < 4; i++) {
+		float cx = xs[i % 2], cy = ys[i / 2];
+		disc_brake(layer, cx, cy, s, i % 2 ? 90 : -90, W70); /* the caliper outward */
+		char txt[12];
+		if (isnan(S.brake_temp_c[i])) snprintf(txt, sizeof txt, "—");
+		else snprintf(txt, sizeof txt, "%d°", (int)lroundf(S.brake_temp_c[i]));
+		lv_draw_label_dsc_init(&ld);
+		ld.font = f, ld.text = txt, ld.text_local = 1, ld.color = rgb(WHITE);
+		ld.align = i % 2 ? LV_TEXT_ALIGN_LEFT : LV_TEXT_ALIGN_RIGHT;
+		lv_area_t ta = i % 2 ? (lv_area_t){ri(cx + s / 2 + px(4)), ri(cy - fh / 2), a.x2, ri(cy + fh / 2)}
+				     : (lv_area_t){a.x1, ri(cy - fh / 2), ri(cx - s / 2 - px(4)), ri(cy + fh / 2)};
+		lv_draw_label(layer, &ld, &ta);
+	}
+}
+
 /* ---------- the assist disc's strike (widgets.dart _Strike) ---------- */
 static void strike_draw(lv_event_t *e)
 {
@@ -902,6 +986,9 @@ void dash_ui_init(lv_obj_t *scr)
 	g_val = run_new(root);
 	g_peak = label(root, FS(REGULAR, 12, UI_S_FIG), W70); /* as the dial's labels */
 	lv_obj_set_style_text_letter_space(g_peak, ri(PF(0.8)), 0);
+	brake_temps = box(root); /* Bluetooth alone: the brakes' temperatures in the ball's place */
+	lv_obj_add_event_cb(brake_temps, brakes_draw, LV_EVENT_DRAW_MAIN, NULL);
+	show(brake_temps, false);
 	touch_init();
 }
 
@@ -1664,7 +1751,7 @@ static void set_energy(const dash_state_t *s, float cx)
 	/* The pair's top: the taller of the two blocks centred in the height. */
 	float dh = 98 * q, pad = PF(5);
 	float eh = dh + pad + (card ? ch_h + 2 * pad : 0) + st_h;
-	bool g_on = s->wifi_live && s->gear != 'P'; /* the g-meter's place, kept while driving */
+	bool g_on = (s->wifi_live && s->gear != 'P') || bt_brakes(s); /* the g-meter's place, kept while driving */
 	G.pair_top = G.H / 2 - fmaxf(eh, g_on ? g_height() : 0) / 2;
 	float y = G.pair_top - q; /* the arc's outer edge 1 unit into the box */
 	lv_obj_set_pos(dial, ri(cx - 52 * q), ri(y));
@@ -1683,11 +1770,17 @@ static void set_g(const dash_state_t *s, float cx)
 {
 	/* The pedal (main.dart's line along the top) as a labelled bar at the g-meter block's foot, the circle's width:
 	 * not on a rear-motor car, whose ring has the pedal and the brake; not in P. With Bluetooth alone (no g-meter)
-	 * it sits under the battery block instead. Braking, it is the app's foot brake instead (gauge.dart: kAlert, BRAKE APPLIED, its reach the pressure).
+	 * it sits under the battery block instead, unless the brakes' temperatures take the g-meter's place. Braking, it is the app's foot brake instead (gauge.dart: kAlert, BRAKE APPLIED, its reach the pressure).
 	 * Only the fill and the figure change, so only they redraw. */
 	float side = PG(72), bar_y = G.pair_top + g_height() - PEDAL_H;
 	bool bar = s->live && !s->rwd && s->gear != 'P', braking = bar && s->brake_pct > 0;
-	if (bar && !s->wifi_live) /* Bluetooth alone: no g-meter, so under the battery block's figures (owner) */
+	bool bb = bt_brakes(s);
+	show(brake_temps, bb);
+	if (bb) {
+		place(brake_temps, cx - brakes_w() / 2, G.pair_top, brakes_w(), brakes_h());
+		if (CHANGED(brake_temp_c)) lv_obj_invalidate(brake_temps);
+	}
+	if (bar && !s->wifi_live && !bb) /* Bluetooth alone: no g-meter, so under the battery block's figures (owner) */
 		cx = G.energy_cx, bar_y = G.energy_foot + PEDAL_GAP + lv_font_get_line_height(label_font()) + PG(3);
 	float lab_y = bar_y - PG(3) - lv_font_get_line_height(label_font());
 	bool tyres = braking && s->wifi_live; /* the per-wheel torque comes with WiFi's stream: the four tyres in the row's place */
@@ -3500,7 +3593,8 @@ void dash_ui_set(const dash_state_t *s)
 	w[3] = fmaxf(104 * q, fmaxf(PF(104) + t1.x, t2.x));
 	lv_text_get_size(&t1, "0.88 g", FS(REGULAR, 16, UI_S_FIG), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
 	lv_text_get_size(&t2, "PEAK 0.88", FS(REGULAR, 12, UI_S_FIG), ri(PF(0.8)), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-	w[4] = s->wifi_live && s->gear != 'P' ? fmaxf(PG(72), fmaxf(t1.x, t2.x)) : 0; /* the ball over its figures */
+	w[4] = bt_brakes(s) ? brakes_w() /* Bluetooth alone: the brakes in the ball's place */
+	       : s->wifi_live && s->gear != 'P' ? fmaxf(PG(72), fmaxf(t1.x, t2.x)) : 0; /* the ball over its figures */
 	for (int i = 0; i < 5; i++) sum += w[i];
 	/* The chips step in towards the top: bound by those level with the car picture (the first sits over it, beside
 	 * the lights row) and with the g-meter's ball. */
@@ -3568,5 +3662,6 @@ void dash_state_blank(dash_state_t *s)
 	s->g_lat = s->g_long = NAN;
 	for (int i = 0; i < 4; i++) s->tyre_psi[i] = NAN;
 	for (int i = 0; i < 3; i++) s->cabin_c[i] = NAN;
+	for (int i = 0; i < 4; i++) s->brake_temp_c[i] = NAN;
 	s->route_len = s->route_kwh = s->arrive_range = s->range_drop = s->arrive_pct = s->pct_drop = s->arrive_kwh = NAN;
 }

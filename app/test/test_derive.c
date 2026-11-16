@@ -241,7 +241,7 @@ static void test_bt_stands_in(void) {   // 'Bluetooth stands in for WiFi, WiFi f
   CHECK(!car_live(&C) && C.gear == 0 && !C.door_fl); ISNUL(C.front_kw);
 }
 
-static void test_bt_tyres_cabin(void) {   // "Bluetooth's tyres and cabin: millibar, 0.1 °C zigzagged, only once pushed"
+static void test_bt_tyres_cabin(void) {   // "Bluetooth's tyres and cabin: millibar, 0.1 °C zigzagged, only once pushed"; the brakes
   fresh();
   BT(&C, {61, 0}, {132, 2900}, {133, 2875}, {134, 0}, {135, 6400});
   NEAR(C.tp_fl, 2.9, 1e-9); NEAR(C.tp_fr, 2.875, 1e-9); ISNUL(C.tp_rl); ISNUL(C.tp_rr);   // 0 no reading, past 6.3 bar dropped
@@ -250,6 +250,9 @@ static void test_bt_tyres_cabin(void) {   // "Bluetooth's tyres and cabin: milli
   CHECK(car_bt_has(&C, 159)); NEAR(C.cabin_c1, -21.6, 1e-9);
   BT(&C, {159, 450});
   NEAR(C.cabin_c1, 22.5, 1e-9);
+  ISNUL(C.brake_temp_c[0]);
+  BT(&C, {125, 172}, {126, 168}, {127, 79}, {128, 2000});   // zigzag: 86, 84, -40 (dropped), 1000 (dropped) °C
+  NEAR(C.brake_temp_c[0], 86, 1e-9); NEAR(C.brake_temp_c[1], 84, 1e-9); ISNUL(C.brake_temp_c[2]); ISNUL(C.brake_temp_c[3]);
 }
 
 static void test_capture(void) {   // 'the newer stats decode a capture from the car as the catalog says'

@@ -35,10 +35,10 @@ const char *const cmdr_statuses[9] = {"ok", "invalid security scheme", "invalid 
 const uint8_t cmdr_lean_fields[5] = {6, 7, 8, 9, 101};
 // _wifiLacks + Panda.btFields + Panda.btTraceFields (lib/panda.dart), + the Dash's 24 display_brightness, then the
 // CMDR_NEWER fields last (Commander._newer).
-const uint8_t cmdr_all_fields[50] = {6, 7, 8, 9, 101, 27, 32, 34, 35, 36, 37, 42, 43, 44, 49,
+const uint8_t cmdr_all_fields[54] = {6, 7, 8, 9, 101, 27, 32, 34, 35, 36, 37, 42, 43, 44, 49,
                                      51, 53, 61, 62, 63, 64, 65, 66, 80, 81, 82, 85, 105, 106, 107,
                                      108, 110, 111, 112, 113, 114, 115, 116, 117, 118, 28, 29, 77, 78, 24,
-                                     132, 133, 134, 135, 159};
+                                     125, 126, 127, 128, 132, 133, 134, 135, 159};
 
 uint32_t cmdr_payload_field(uint64_t type) {
   switch (type) {

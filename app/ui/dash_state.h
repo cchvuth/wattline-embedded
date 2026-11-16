@@ -107,6 +107,7 @@ typedef struct {
 	uint8_t seat[DS_SEAT_COUNT];        /* dash_seat_t */
 	float tyre_psi[4];               /* FL FR RL RR; NAN a dash */
 	float cabin_c[3];                /* each row's air; NAN none */
+	float brake_temp_c[4];           /* Bluetooth alone: each brake's temperature (FL FR RL RR), °C; NAN none */
 	char fan[2][8];                  /* rows 1 and 2: "MED", "4", "OFF"; "" none */
 
 	/* The action chips' lit states, and the cabin CO2 on the recirculation chip. */

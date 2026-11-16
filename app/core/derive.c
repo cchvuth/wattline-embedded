@@ -366,6 +366,7 @@ void car_forget(car_t *c, int64_t now) {
   c->slippery = c->grip_held = c->pack_heating = c->charging = c->washer_low = false;
   c->co2ppm = -1;
   c->cabin_c1 = c->cabin_c2 = c->cabin_c3 = NUL;
+  for (int i = 0; i < 4; i++) c->brake_temp_c[i] = NUL;
   c->fan1 = c->fan2 = NULL;
   c->g_long = c->g_lat = NUL;
   c->p.slip_ui = c->p.slip_mode = c->p.tc_flash = c->p.esc_flash = c->p.heat_motors = c->p.heat_pump = false;
@@ -472,6 +473,8 @@ void car_apply_bt(car_t *c, int64_t now) {
   for (int w = 0; w < 4; w++)   // the car's tyre screen in millibar (0x25A's pressures); 0 is no reading
     if (at(c, 132 + w, &v) && v > 0 && v <= 6300) *tyre(c, w) = v / 1000.0;
   if (zz(c, 159, &v)) c->cabin_c1 = v * 0.1;   // the cabin, 0.1 °C
+  for (int w = 0; w < 4; w++)   // the brakes, whole °C (the Commander's estimate)
+    if (zz(c, 125 + w, &v) && v > -40 && v < 1000) c->brake_temp_c[w] = (double)v;
   if (at(c, 24, &v)) {   // display_brightness, uint32, unit unverified: taken as % when it fits
     if (v >= 0 && v <= 100) {
       c->display_brightness = (double)v;

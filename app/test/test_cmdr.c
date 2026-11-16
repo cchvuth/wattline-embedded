@@ -203,7 +203,7 @@ int main(void) {
   CHECK(nsaid == 2 && said[0] == CS_SCANNING && said[1] == CS_LINKING);   // said before the scan and the connect block
   CHECK(dev.last_dev_type == 1 && !dev.scan_had_pin);
   CHECK(dev.types[32] == 1 && dev.types[124] == 1 && dev.types[48] == 1 && dev.types[82] == 1);
-  CHECK(dev.last_sub_fields == 45 && dev.notifies == 1);
+  CHECK(dev.last_sub_fields == 60 && dev.notifies == 1);   // the packed field list: 48 one-byte numbers, 6 two-byte
   CHECK(!strcmp(c.car_link, "car link connected, infotainment ok, paired"));
   CHECK(file_is(PIN_PATH, "AA:BB:CC:00:00:01"));
   char id[64];
@@ -408,7 +408,7 @@ int main(void) {
   run(&c, 9950);
   CHECK(c.level == CMDR_LEAN);
   run(&c, 50);
-  CHECK(c.level == CMDR_FULL && dev.last_sub_fields == 45 && dev.connects == 2);
+  CHECK(c.level == CMDR_FULL && dev.last_sub_fields == 60 && dev.connects == 2);
   // WiFi back: fewer fields only by dialling again.
   cmdr_wifi(&c, 1, 0, now);
   run(&c, 3000);
