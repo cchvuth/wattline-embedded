@@ -1,6 +1,6 @@
 # Commander Bluetooth core: host tests. make -f cmdr.mk test
 CC ?= cc
-CFLAGS = -std=c11 -Wall -Wextra -fsanitize=address,undefined -DAES256=1
+CFLAGS = -std=gnu11 -Wall -Wextra -fsanitize=address,undefined -DAES256=1
 CORE = core/cmdr.c core/cmdr_msg.c core/sec1.c core/pb.c third_party/monocypher.c third_party/aes.c
 
 test:
