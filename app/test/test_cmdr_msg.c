@@ -48,7 +48,8 @@ int main(void) {
   CHECK(same(m, cmdr_api_status_req(m), "0852ea0500"));   // the bytes commander.dart sends
   CHECK(same(m, cmdr_trigger_push_req(m), "0830da0300"));
   n = cmdr_subscribe(m, cmdr_all_fields, sizeof cmdr_all_fields);
-  CHECK(n == 7 + 45 && m[4] == 47 && m[6] == 45);
+  CHECK(n == 7 + 55 && m[4] == 57 && m[6] == 55);   // 45 one-byte fields, 132..159 two bytes each
+  CHECK(same(m, cmdr_subscribe(m, (const uint8_t[]){159}, 1), "087cba08046a029f01"));
 
   // Reply status.
   uint64_t type, st;

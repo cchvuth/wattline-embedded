@@ -186,6 +186,10 @@ static int subscribe(cmdr_t *c, int level, int64_t now) {
                          : cmdr_subscribe(m, cmdr_all_fields, sizeof cmdr_all_fields);
   int e = request(c, m, n, &c->sub_status, r, &rn);
   if (e) return e;
+  if (level == CMDR_FULL && c->sub_status) {   // a Commander that refuses the newer fields: the rest without them
+    n = cmdr_subscribe(m, cmdr_all_fields, sizeof cmdr_all_fields - CMDR_NEWER);
+    if ((e = request(c, m, n, &c->sub_status, r, &rn))) return e;
+  }
   c->push_info = level == CMDR_FULL ? "subscribed" : "subscribed to the route and recirculation only";
   // A field is pushed when it changes: ask for what it has now (48, read-only).
   uint64_t st;

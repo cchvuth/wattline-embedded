@@ -192,9 +192,9 @@ void bridge_fill(dash_state_t *s, const car_t *c, const link_t *l, const bt_view
     text(s->grip_word, sizeof s->grip_word, c->tc_mode ? c->tc_mode : "GRIP");
   }
 
-  // The car picture (_Cabin): the seat map once the chime's frame is in; none at all on Bluetooth alone.
+  // The car picture (_Cabin): the seat map once the chime's frame is in. On Bluetooth alone its lights, the tyres and
+  // the front row's air once the Commander pushes it (newer firmware), no seats or fans.
   s->cabin = wl && seen(in, 0x3A1);
-  s->no_cabin = car_via_bt(c);
   for (int i = 0; i < DS_SEAT_COUNT; i++) {
     int bit = 1 << i;   // DS_SEAT_* and SEAT_* share the order
     s->seat[i] = !(c->car->seats & bit) ? DS_SEAT_PLAIN : car_unbuckled_at(c, bit) ? DS_SEAT_UNBUCKLED
@@ -205,6 +205,11 @@ void bridge_fill(dash_state_t *s, const car_t *c, const link_t *l, const bt_view
   s->cabin_c[0] = c->cabin_c1, s->cabin_c[1] = c->cabin_c2, s->cabin_c[2] = c->cabin_c3;
   text(s->fan[0], sizeof s->fan[0], c->fan1);
   text(s->fan[1], sizeof s->fan[1], c->fan2);
+  if (car_via_bt(c)) {   // WiFi's last rows and fans are stale: Bluetooth's one reading, if it has it
+    if (!car_bt_has(c, 159)) s->cabin_c[0] = NAN;
+    s->cabin_c[1] = s->cabin_c[2] = NAN;
+    s->fan[0][0] = s->fan[1][0] = 0;
+  }
 
   // The chips (_Actions).
   s->trunk = c->trunk;

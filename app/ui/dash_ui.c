@@ -1201,8 +1201,7 @@ static void set_cabin(const dash_state_t *s, float cx, float top)
 	int type = s->car;
 	if (type != cab.car_type) cabin_build(type);
 	const ui_car_pics_t *p = &ui_car_pics[type];
-	bool on = !s->no_cabin;
-	show(cab.grp, on);
+	show(cab.grp, true);
 	/* The cabin's box: 4 dp frame + 4 dp above, 4 dp frame + 6 dp below, the picture 6 dp in each side; fitted to the
 	 * column, then moved 7 % of its height down (more of the road ahead). */
 	float box_h = cb(4 + 4) + cab.h + cb(4 + 6);
@@ -1212,7 +1211,7 @@ static void set_cabin(const dash_state_t *s, float cx, float top)
 	bool seats = s->wifi_live && s->cabin, belt = false;
 	for (int i = 0; i < DS_SEAT_COUNT; i++)
 		if (seats && s->seat[i] == DS_SEAT_UNBUCKLED && p->seat_red[i].img) belt = true;
-	show(cab.frame, on && belt);
+	show(cab.frame, belt);
 	if (belt) {
 		place(cab.frame, cab.x - cb(6), cab.y, cab.w + 2 * cb(6), cab.h);
 		fill(cab.frame, 0x2EE23D3D);
@@ -1258,9 +1257,10 @@ static void set_cabin(const dash_state_t *s, float cx, float top)
 	/* each row's air and fan on a dark pill, centred on its seats; a row with a seat unbuckled leaves the red in view */
 	for (int r = 0; r < 3; r++) {
 		bool unb = false;
-		for (int i = 0; i < DS_SEAT_COUNT; i++)
+		for (int i = 0; seats && i < DS_SEAT_COUNT; i++)
 			if (seat_row[i] == r + 1 && s->seat[i] == DS_SEAT_UNBUCKLED && p->seat_red[i].img) unb = true;
-		bool vis = seats && !isnan(s->cabin_c[r]) && !unb;
+		/* over Bluetooth (no seat map) the rows it has: the bridge leaves only the front's, once pushed */
+		bool vis = (seats || (s->live && !s->wifi_live)) && !isnan(s->cabin_c[r]) && !unb;
 		show(cab.pill[r], vis);
 		if (!vis) continue;
 		const char *fan = r < 2 ? s->fan[r] : "";
@@ -3265,7 +3265,7 @@ static bool steer_under(const lv_area_t *a)
 static bool steer_dots(const dash_state_t *s, lv_layer_t *layer, lv_area_t *box, uint32_t *sum)
 {
 	uint32_t ck = 0;
-	if (!s->live || !s->wifi_live || !s->steer_lines || isnan(s->steer_deg) || s->no_cabin) return false;
+	if (!s->live || !s->wifi_live || !s->steer_lines || isnan(s->steer_deg)) return false;
 	lv_area_t bb = {INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN};
 	const ui_car_pics_t *p = &ui_car_pics[s->car];
 	float w = cab.w, h = cab.h, ox = cab.x, oy = cab.y;
@@ -3486,14 +3486,13 @@ void dash_ui_set(const dash_state_t *s)
 	/* The blocks: the car and the route (only with one) left of the ring, the energy figures and the g-meter right of
 	 * it. Widths are fixed per block (the widest it gets), so nothing moves as the figures change. A route coming or
 	 * going re-spreads the left side only; parking or losing WiFi drops the g-meter's place (while driving it is kept
-	 * even with nothing to show, as the app keeps it); Bluetooth alone has no car picture (its lights row keeps a
-	 * place). */
+	 * even with nothing to show, as the app keeps it). */
 	bool route = s->route;
 	ring_geom_full(); /* the full-dash ring geometry first (the last frame may have been the split's small ring) */
 	G.cx = G.W / 2;
 	float q = dial_q(), w[5], sum = 0;
 	lv_point_t t1, t2;
-	w[0] = s->no_cabin ? PLI(4 * 40) : ui_car_pics[DASH_CAR_Y7].car->header.w + 2 * cb(6);
+	w[0] = ui_car_pics[DASH_CAR_Y7].car->header.w + 2 * cb(6);
 	w[1] = route ? G.card_w : 0;
 	w[2] = 2 * (G.r + G.aw / 2);
 	lv_text_get_size(&t1, "88.8 kW", FS(REGULAR, 16, UI_S_FIG), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);

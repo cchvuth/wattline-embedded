@@ -469,6 +469,9 @@ void car_apply_bt(car_t *c, int64_t now) {
   if (zz(c, 42, &v)) c->pack_temp_c = v * 0.5;
   if (at(c, 49, &v)) c->pack_heating = v == 1;
   if (at(c, 108, &v)) c->hands_on = v == 15 ? -1 : (int)v;
+  for (int w = 0; w < 4; w++)   // the car's tyre screen in millibar (0x25A's pressures); 0 is no reading
+    if (at(c, 132 + w, &v) && v > 0 && v <= 6300) *tyre(c, w) = v / 1000.0;
+  if (zz(c, 159, &v)) c->cabin_c1 = v * 0.1;   // the cabin, 0.1 °C
   if (at(c, 24, &v)) {   // display_brightness, uint32, unit unverified: taken as % when it fits
     if (v >= 0 && v <= 100) {
       c->display_brightness = (double)v;
@@ -502,6 +505,7 @@ bool car_via_bt(const car_t *c) {
   return false;
 }
 bool car_live(const car_t *c) { return c->wifi_live || car_via_bt(c); }
+bool car_bt_has(const car_t *c, int f) { return f >= 0 && f < BT_FIELDS && c->p.bt.has[f]; }
 
 // What lets the frunk, trunk and doors open: P, under gear_fresh_ms old on the monotonic clock, or
 // a live Bluetooth session pushing it. Anything else (no gear yet, stalled link, clock odd) is false.

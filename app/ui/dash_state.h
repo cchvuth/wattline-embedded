@@ -103,7 +103,7 @@ typedef struct {
 	char grip_word[12];              /* "GRIP" or the traction mode's name */
 
 	/* The car picture's figures. cabin: the stream's seat map is in (WiFi and the belt frame seen). */
-	bool cabin, no_cabin;            /* no_cabin: Bluetooth only, no car picture at all */
+	bool cabin;                      /* the seat map (WiFi, the chime's frame in) */
 	uint8_t seat[DS_SEAT_COUNT];        /* dash_seat_t */
 	float tyre_psi[4];               /* FL FR RL RR; NAN a dash */
 	float cabin_c[3];                /* each row's air; NAN none */

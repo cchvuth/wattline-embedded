@@ -16,7 +16,7 @@ enum { CAR_MODEL3_RWD, CAR_MODEL3, CAR_Y5_RWD, CAR_Y5, CAR_Y7, CAR_YL, CAR_COUNT
 extern const car_type_t kCars[CAR_COUNT];
 
 // A Commander push: field number -> value (only ints are read; has[] alone counts for viaBt).
-enum { BT_FIELDS = 128 };
+enum { BT_FIELDS = 160 };   // up to the cabin's 159
 typedef struct { uint8_t has[BT_FIELDS], is_int[BT_FIELDS]; int64_t v[BT_FIELDS]; } bt_map_t;
 
 typedef struct {
@@ -98,6 +98,7 @@ void car_set_steer(car_t *c, double deg, int64_t now);
 bool car_parked(const car_t *c, int64_t now);        // fails closed (PLAN 5.3)
 bool car_via_bt(const car_t *c);
 bool car_live(const car_t *c);
+bool car_bt_has(const car_t *c, int f);   // the Commander pushed field f this session
 bool car_blink_lit(const car_t *c, int64_t now);
 bool car_steer_lines(const car_t *c, int64_t now);
 bool car_grip_lit(const car_t *c);

@@ -23,7 +23,7 @@ HA := build/app-host-cmdr
 AA := build/arm-app-cmdr
 endif
 
-build/signals_gen.h: tools/gen_signals.py tools/extra_signals.json $(wildcard ../wattline/lib/signals.dart)
+build/signals_gen.h: tools/gen_signals.py tools/extra_signals.json $(wildcard ../wattline/lib/signals.dart ../wattline/lib/panda.dart)
 	python3 -I tools/gen_signals.py ../wattline build
 
 # --- host (Mac): LVGL and UI objects shared with ui.mk (same flags, same build/host/), the app's with sanitizers
