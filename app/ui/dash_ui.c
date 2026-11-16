@@ -654,8 +654,8 @@ static float g_height(void)
  * axles, the spine), a disc brake at each wheel, its figure outside it; in the g-meter's ball and figures' place, the
  * pedal under it where the g-meter's is. No steering angle over Bluetooth: the fronts stay straight. */
 static lv_obj_t *brake_temps;
-/* A temperature as shown: °F once the car is in mph, else °C as read (panda.dart temp). */
-static float shown_deg(float c) { return S.kph ? c : c * 1.8f + 32; }
+/* A temperature as shown: °F or °C as read (panda.dart temp). */
+static float shown_deg(float c) { return S.fahrenheit ? c * 1.8f + 32 : c; }
 static bool bt_brakes(const dash_state_t *s)
 {
 	if (!s->live || s->wifi_live || s->rwd) return false;
@@ -1335,7 +1335,9 @@ static void set_cabin(const dash_state_t *s, float cx, float top)
 		float axle = p->axles[i / 2] * cab.h, bw = cab.w * p->tyre_w;
 		float bx = left ? cab.w * p->tyre_l : cab.w - cab.w * p->tyre_r - bw;
 		if (isnan(s->tyre_psi[i])) set_text(cab.tyre[i], "—");
-		else set_text(cab.tyre[i], "%d", (int)lroundf(s->tyre_psi[i]));
+		else if (s->psi) set_text(cab.tyre[i], "%d", (int)lroundf(s->tyre_psi[i]));
+		else set_text(cab.tyre[i], "%.1f", s->tyre_psi[i] / 14.5038f);
+		if (CHANGED(psi) || CHANGED(car)) lv_label_set_text(cab.psi[i], s->psi ? "psi" : "bar"); /* the picture rebuilt says psi */
 		/* the pair (14 at a 1.1 line over 9 at 1.0) centred in a 30 dp box on the axle */
 		float h1 = cb(14) * 1.1f, h2 = cb(9), y0 = axle - cb(15) + (cb(30) - h1 - h2) / 2;
 		const lv_font_t *f1 = lv_obj_get_style_text_font(cab.tyre[i], 0), *f2 = lv_obj_get_style_text_font(cab.psi[i], 0);
@@ -1780,7 +1782,7 @@ static void set_g(const dash_state_t *s, float cx)
 	show(brake_temps, bb);
 	if (bb) {
 		place(brake_temps, cx - brakes_w() / 2, G.pair_top, brakes_w(), brakes_h());
-		if (CHANGED(brake_temp_c) || CHANGED(kph)) lv_obj_invalidate(brake_temps);
+		if (CHANGED(brake_temp_c) || CHANGED(fahrenheit)) lv_obj_invalidate(brake_temps);
 	}
 	if (bar && !s->wifi_live && !bb) /* Bluetooth alone: no g-meter, so under the battery block's figures (owner) */
 		cx = G.energy_cx, bar_y = G.energy_foot + PEDAL_GAP + lv_font_get_line_height(label_font()) + PG(3);
@@ -1863,7 +1865,7 @@ static dash_action_cb act_cb;
 static void *act_ctx;
 static dash_settings_cb set_cb;
 static void *set_ctx;
-static dash_settings_t ST = {.minor_figures = true, .brightness_pct = 80, .follow_car = true};
+static dash_settings_t ST = {.minor_figures = true, .brightness_pct = 80, .follow_car = true, .unit_miles = -1, .unit_f = -1, .unit_psi = -1};
 static int edit_slot = -1;
 static char pick_ssid[33];                     /* the Nearby network the editor was opened for: joined when saved */
 static char shown_nearby[DASH_NEARBY][33];     /* the Nearby rows as drawn (a tap names its own, not today's list) */
@@ -1871,7 +1873,7 @@ static char shown_nearby[DASH_NEARBY][33];     /* the Nearby rows as drawn (a ta
 static lv_obj_t *tip, *snack, *snack_wheel, *snack_text;
 static lv_obj_t *project, *project_video, *pj_hint, *pj_gear, *pj_bar, *pj_bar_fill, *pj_soc, *pj_cold, *pj_range,
 	*pj_belt, *pj_grip, *pj_info, *pj_exit;
-static lv_obj_t *panel, *panel_msg, *settings, *set_status, *set_step, *set_wheel, *set_sw[9], *set_car_btn[6], *set_slider, *set_bl_note, *set_offset, *set_offset_note, *net_list, *near_list, *net_edit, *net_ta[2],
+static lv_obj_t *panel, *panel_msg, *settings, *set_status, *set_step, *set_wheel, *set_sw[12], *set_car_btn[6], *set_slider, *set_bl_note, *set_offset, *set_offset_note, *net_list, *near_list, *net_edit, *net_ta[2],
 	*net_kb, *net_err, *set_bt_line, *set_wifi_line, *set_net_line, *set_car_ask, *set_tz_btn, *set_host_l;
 enum { HOST_SLOT = -2 }; /* edit_slot: the editor holds the Panda's address, not a network */
 static lv_timer_t *tip_timer;
@@ -2408,6 +2410,9 @@ static void switch_changed(lv_event_t *e)
 	else if (i == 6) ST.wifi_first = on;
 	else if (i == 7) ST.ota_auto = on;
 	else if (i == 8) ST.aa_low_res = on;
+	else if (i == 9) ST.unit_miles = on;
+	else if (i == 10) ST.unit_f = on;
+	else if (i == 11) ST.unit_psi = on;
 	else ST.follow_car = on, slider_look();
 	save(DASH_SETTINGS_SAVE);
 }
@@ -2831,6 +2836,9 @@ static void settings_build(void)
 	switch_note_row(c, "Android Auto at 480p", "Scaled up to fit: a softer picture, lighter on the WiFi and the phone. From the next connection", 8, cw);
 	lv_obj_set_style_margin_top(group_title(c, "Dash"), ri(PB(14)), 0);
 	switch_row(c, "Show 12 V, other power and cell imbalance", 0, cw);
+	switch_row(c, "Distance and speed in miles (mph)", 9, cw);
+	switch_row(c, "Temperature in °F", 10, cw);
+	switch_row(c, "Tyre pressure in psi", 11, cw);
 	switch_row(c, "24-hour clock", 1, cw); /* the zone's name on a button: a tap, the next */
 	set_tz_btn = button_row(c, text_block(c, "Time zone", "The arrival and charge clocks, summer time included"), "UTC", tz_tap, cw);
 	lv_obj_set_style_margin_top(group_title(c, "Screen"), ri(PB(14)), 0);
@@ -3196,6 +3204,10 @@ void dash_ui_show(int v)
 		lv_obj_set_state(set_sw[6], LV_STATE_CHECKED, ST.wifi_first);
 		lv_obj_set_state(set_sw[7], LV_STATE_CHECKED, ST.ota_auto);
 		lv_obj_set_state(set_sw[8], LV_STATE_CHECKED, ST.aa_low_res);
+		/* the units as shown now, until switched (panda.dart's toggles) */
+		lv_obj_set_state(set_sw[9], LV_STATE_CHECKED, ST.unit_miles >= 0 ? ST.unit_miles : !S.kph);
+		lv_obj_set_state(set_sw[10], LV_STATE_CHECKED, ST.unit_f >= 0 ? ST.unit_f : S.fahrenheit);
+		lv_obj_set_state(set_sw[11], LV_STATE_CHECKED, ST.unit_psi >= 0 ? ST.unit_psi : S.psi);
 		forget_reset(&fg_cmdr, true), forget_reset(&fg_aa, true);
 		for (int i = 0; i < 6; i++) { /* the chosen car filled, as a selected chip */
 			fill(set_car_btn[i], i == ST.car ? 0xFF4A4458u : 0x00000000u);
@@ -3663,6 +3675,7 @@ void dash_state_blank(dash_state_t *s)
 	s->backlight_pct = -1;
 	s->g_lat = s->g_long = NAN;
 	for (int i = 0; i < 4; i++) s->tyre_psi[i] = NAN;
+	s->psi = true;
 	for (int i = 0; i < 3; i++) s->cabin_c[i] = NAN;
 	for (int i = 0; i < 4; i++) s->brake_temp_c[i] = NAN;
 	s->route_len = s->route_kwh = s->arrive_range = s->range_drop = s->arrive_pct = s->pct_drop = s->arrive_kwh = NAN;

@@ -255,6 +255,17 @@ static void test_bt_tyres_cabin(void) {   // "Bluetooth's tyres and cabin: milli
   NEAR(C.brake_temp_c[0], 86, 1e-9); NEAR(C.brake_temp_c[1], 84, 1e-9); ISNUL(C.brake_temp_c[2]); ISNUL(C.brake_temp_c[3]);
 }
 
+static void test_km_pick(void) {   // "the owner's units: miles turn the car's km/h speeds"
+  fresh();
+  car_set_km_pick(&C, 0);   // a km/h car (the default) shown in mph
+  BT(&C, {61, 100}, {110, 80});
+  CHECK(!C.kph); NEAR(C.speed, 62.137, 1e-3); NEAR(C.speed_limit, 49.710, 1e-3);
+  car_set_km_pick(&C, -1);   // back to the car's, parked: what Bluetooth gave turns with it
+  CHECK(C.kph); NEAR(C.speed_limit, 80, 1e-9);
+  BT(&C, {61, 100});
+  CHECK(C.kph); NEAR(C.speed, 100, 1e-9);
+}
+
 static void test_capture(void) {   // 'the newer stats decode a capture from the car as the catalog says'
   fresh();
   C.kph = true;
@@ -929,6 +940,7 @@ int main(void) {
   test_bt_stands_in();
   test_capture();
   test_bt_tyres_cabin();
+  test_km_pick();
   test_buckles_fans();
   test_g();
   test_held();

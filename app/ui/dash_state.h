@@ -105,7 +105,8 @@ typedef struct {
 	/* The car picture's figures. cabin: the stream's seat map is in (WiFi and the belt frame seen). */
 	bool cabin;                      /* the seat map (WiFi, the chime's frame in) */
 	uint8_t seat[DS_SEAT_COUNT];        /* dash_seat_t */
-	float tyre_psi[4];               /* FL FR RL RR; NAN a dash */
+	float tyre_psi[4];               /* FL FR RL RR, psi (shown in bar unless psi); NAN a dash */
+	bool fahrenheit, psi;            /* the units shown: temperatures in °F, tyres in psi */
 	float cabin_c[3];                /* each row's air; NAN none */
 	float brake_temp_c[4];           /* Bluetooth alone: each brake's temperature (FL FR RL RR), °C; NAN none */
 	char fan[2][8];                  /* rows 1 and 2: "MED", "4", "OFF"; "" none */

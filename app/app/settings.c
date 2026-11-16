@@ -93,6 +93,7 @@ void settings_load(dash_settings_t *st, const conf_t *cf) {
   st->brightness_pct = 80, st->follow_car = cf->bright_follow_car;
   st->follow_offset = 0;   // a user bias on top of dash.conf's bright_follow_offset
   st->car = cf->car, st->sparse = cf->sparse, st->wifi_first = true;   // dash.conf's, the phone app's defaults
+  st->unit_miles = st->unit_f = st->unit_psi = -1;
   snprintf(st->tz, sizeof st->tz, "%s", cf->tz);
   snprintf(st->tz_conf, sizeof st->tz_conf, "%s", cf->tz);
   snprintf(st->panda_host, sizeof st->panda_host, "%s", cf->panda_host);
@@ -120,6 +121,9 @@ void settings_load(dash_settings_t *st, const conf_t *cf) {
         else if (!strcmp(k, "wifi_first")) st->wifi_first = v;
         else if (!strcmp(k, "ota_auto")) st->ota_auto = v;   // S99ota reads it from the file too
         else if (!strcmp(k, "aa_low_res")) st->aa_low_res = v;   // aa reads it from the file at each connection
+        else if (!strcmp(k, "unit_miles")) st->unit_miles = v < 0 ? -1 : !!v;
+        else if (!strcmp(k, "unit_f")) st->unit_f = v < 0 ? -1 : !!v;
+        else if (!strcmp(k, "unit_psi")) st->unit_psi = v < 0 ? -1 : !!v;
         // fps60 (60 frames a second) is gone: the panel shows 30. An old file's line is ignored, dropped at the next save
         else if (!strcmp(k, "car")) {   // by its id (modelY7 ...), as dash.conf names it
           for (int i = 0; i < CAR_COUNT; i++)
@@ -212,11 +216,12 @@ int settings_save(dash_settings_t *st) {
   char text[1024];
   snprintf(text, sizeof text,
            "minor_figures = %d\nclock_24h = %d\nbrightness_pct = %d\nfollow_car = %d\nfollow_offset = %d\nssh = %d\nrecord = %d\n"
-           "car = %s\nsparse = %d\nwifi_first = %d\ntz = %s\npanda_host = %s\npanda_port = %d\nota_auto = %d\naa_low_res = %d\n",
+           "car = %s\nsparse = %d\nwifi_first = %d\ntz = %s\npanda_host = %s\npanda_port = %d\nota_auto = %d\naa_low_res = %d\n"
+           "unit_miles = %d\nunit_f = %d\nunit_psi = %d\n",
            now.minor_figures, !now.hour12, now.brightness_pct, now.follow_car, now.follow_offset, now.dev_ssh, now.record,
            kCars[now.car >= 0 && now.car < CAR_COUNT ? now.car : CAR_FALLBACK].id, now.sparse, now.wifi_first,
            strchr(now.tz, '\n') ? "UTC0" : now.tz, strchr(now.panda_host, '\n') ? "192.168.4.1" : now.panda_host,
-           now.panda_port, now.ota_auto, now.aa_low_res);
+           now.panda_port, now.ota_auto, now.aa_low_res, now.unit_miles, now.unit_f, now.unit_psi);
   if (!(rc |= put(settings_root, "settings.conf", text, 0644))) settings_car_saved = true;
   if (wifi) {
     char dir[256];

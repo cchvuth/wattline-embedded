@@ -300,7 +300,7 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
   d->car.cfg.bt_motor_bad_ms = cf->bt_motor_bad_ms;
   d->car.cfg.bright_stale_ms = cf->bright_stale_ms;
   car_set_type(&d->car, app_settings.car);   // the settings' (dash.conf's until set there)
-  d->car.kph = cf->kph;
+  d->car.kph = d->car.p.car_kph = cf->kph;   // dash.conf's units until the car says (the owner's pick over both)
   double tp[4];   // the last pressures: shown until the car sends new ones (only on the move)
   settings_tyres_load(tp);
   d->car.tp_fl = tp[0], d->car.tp_fr = tp[1], d->car.tp_rl = tp[2], d->car.tp_rr = tp[3];
@@ -372,7 +372,9 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
       next_frame += d->frame_ms;
       if (next_frame <= now) next_frame = now + d->frame_ms;   // a long frame: no catching up
       clock_check(d, now);
-      bridge_in_t in = {d->seen, utc_now(&d->car, now), app_settings.minor_figures, app_settings.hour12};
+      car_set_km_pick(&d->car, app_settings.unit_miles < 0 ? -1 : !app_settings.unit_miles);   // before the bridge reads it
+      bridge_in_t in = {d->seen, utc_now(&d->car, now), app_settings.minor_figures, app_settings.hour12,
+                        app_settings.unit_f, app_settings.unit_psi};
       in.wifi_join = wifi_join(now, &in.join_why);
       in.net_line = wifi_net_line();
       in.ssid = wifi_ssid();

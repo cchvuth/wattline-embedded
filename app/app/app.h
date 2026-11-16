@@ -60,6 +60,7 @@ typedef struct {
   const uint8_t *seen;          // ids heard since the socket opened (Panda.frames' keys), 2048-bit map
   int64_t utc_ms;               // the wall clock (UTC ms) now, or -1: no clock yet ("--:--")
   bool minor_figures, hour12;
+  int unit_f, unit_psi;         // the owner's units (dash_settings_t), -1: °F with mph, psi
   int wifi_join;                // wifi_join(): WIFI_OFF / _SCANNING / _JOINING until wlan0 has an address; -1 the link's
   const char *join_why;         // its words
   const char *net_line;         // wifi_net_line(): the joined network, its address and ssh's state

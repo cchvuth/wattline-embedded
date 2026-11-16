@@ -117,7 +117,8 @@ int main(int argc, char **argv)
 		bad |= shot(d, out, "touch-car-panel", &s, DASH_VIEW_CAR_PANEL);
 		dash_settings_t st = {.minor_figures = true, .hour12 = true, .brightness_pct = 70, .follow_car = true, .car = 4, .sparse = true, .wifi_first = true, .net_count = 3,
 				      .net = {{"S3XY_OBD", ""}, {"Home WiFi", ""}, {"Phone hotspot", ""}},
-				      .tz = "CET-1CEST,M3.5.0,M10.5.0/3", .panda_host = "192.168.4.1", .panda_port = 1338};
+				      .tz = "CET-1CEST,M3.5.0,M10.5.0/3", .panda_host = "192.168.4.1", .panda_port = 1338,
+				      .unit_miles = -1, .unit_f = -1, .unit_psi = -1};
 		dash_ui_settings(&st);
 		scenes[6].fill(&s);
 		s.bt = BT_LEAN, s.backlight_pct = 45; /* following the car: the live 45 % */

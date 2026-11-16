@@ -124,6 +124,8 @@ void bridge_fill(dash_state_t *s, const car_t *c, const link_t *l, const bt_view
   s->car = t == CAR_Y7 ? DASH_CAR_Y7 : t == CAR_YL ? DASH_CAR_YL : t == CAR_Y5 || t == CAR_Y5_RWD ? DASH_CAR_Y5 : DASH_CAR_3;
   s->rwd = c->car->rwd;
   s->kph = c->kph;
+  s->fahrenheit = in->unit_f >= 0 ? in->unit_f : !c->kph;
+  s->psi = in->unit_psi != 0;
   s->minor_figures = in->minor_figures;
 
   // The ring (_powerRing, _Centre): a stalled link blanks speed, power and pedal.

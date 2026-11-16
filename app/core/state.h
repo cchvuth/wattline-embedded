@@ -30,7 +30,8 @@ typedef struct {
   double pedal_pct, brake_pct, steer_deg;
   double brake_wheel_nm[4];     // each wheel's brake torque (FL FR RL RR), Nm; NUL unknown
   double soc_pct, range_mi, speed_limit;
-  bool braking, kph;
+  bool braking, kph;            // kph: the display's unit, the owner's pick (km_pick) else the car's; speeds come in it
+  int km_pick;                  // the owner's distance unit: 1 km, 0 miles, -1 the car's (car_set_km_pick)
   const char *recirc, *autopilot, *dome_light, *tc_mode, *charge_why, *fan1, *fan2;
   char gear;                    // 'P' 'R' 'N' 'D', or 0 for none ("—")
   bool ind_l, ind_r;            // the flasher's strips: car_blink_lit(now)
@@ -79,6 +80,7 @@ typedef struct {
     bool slip_ui, slip_mode, tc_flash, esc_flash, heat_motors, heat_pump, heat_nav, cruise_on, climate_on;
     double cruise_raw;
     bool bt_up;
+    bool car_kph;               // the car's own display unit (DI_uiSpeedUnits)
     int64_t bright_at;          // display_brightness's last write
     int64_t bright_can_at;      // the last 0x273 frame's (the car's own word on it over WiFi; Bluetooth never moves it)
     bool bright_bt;             // ... and it came from the Commander (pushed on a change: no age limit)
@@ -94,6 +96,7 @@ void car_forget(car_t *c, int64_t now);              // the link gone: nothing s
 void car_from_bt(car_t *c, const bt_map_t *push, int64_t now);  // NULL: the Bluetooth link dropped
 void car_apply_bt(car_t *c, int64_t now);            // the link changed state: BT values stand in
 void car_set_gear(car_t *c, char g, int64_t now);
+void car_set_km_pick(car_t *c, int pick);   // 1 km, 0 miles, -1 the car's unit (Panda.kmPick)
 void car_set_steer(car_t *c, double deg, int64_t now);
 
 bool car_parked(const car_t *c, int64_t now);        // fails closed (PLAN 5.3)

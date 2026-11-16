@@ -24,6 +24,24 @@ static bool rnd(char g) { return g == 'R' || g == 'N' || g == 'D'; }
 static int ri(double v) { return (int)lround(v); }
 static double *tyre(car_t *c, int w) { return w == 0 ? &c->tp_fl : w == 1 ? &c->tp_fr : w == 2 ? &c->tp_rl : &c->tp_rr; }
 
+// A speed in the car's display unit, in the display's (the owner's pick may differ).
+static double from_car(const car_t *c, double v) {
+  return c->p.car_kph == c->kph ? v : c->p.car_kph ? v / 1.609344 : v * 1.609344;
+}
+// Speeds in hand turn with the unit: a Bluetooth value comes again only when it changes.
+static void shown_unit(car_t *c) {
+  bool was = c->kph;
+  c->kph = c->km_pick >= 0 ? c->km_pick : c->p.car_kph;
+  if (c->kph == was) return;
+  double k = c->kph ? 1.609344 : 1 / 1.609344;
+  c->speed *= k;
+  if (!isnan(c->speed_limit)) c->speed_limit *= k;
+}
+void car_set_km_pick(car_t *c, int pick) {
+  c->km_pick = pick;
+  shown_unit(c);
+}
+
 void car_init(car_t *c) {
   memset(c, 0, sizeof *c);
   c->cfg.gear_fresh_ms = 2000;   // 0x118 comes every 10 ms: a P older than this is a stalled link
@@ -33,7 +51,8 @@ void car_init(car_t *c) {
   c->cfg.bt_motor_bad_ms = 30000;
   c->cfg.bright_stale_ms = 5000;  // 0x273 comes every 500 ms
   c->car = &kCars[CAR_FALLBACK];
-  c->kph = true;
+  c->kph = c->p.car_kph = true;
+  c->km_pick = -1;
   c->p.half_ms = 360;
   c->p.bms_bus = -1;
   c->p.turned_at = c->p.steer_at = c->p.gear_at = c->p.edge_at = c->p.grip_at = c->p.bt_motor_bad_at = NEVER;
@@ -126,8 +145,8 @@ void car_frame(car_t *c, uint16_t id, uint8_t bus, const uint8_t *d, uint8_t len
     double v;
     if (!sig_decode(&kSignals[s], d, len, &v)) continue;
     switch (s) {
-    case SIG_speed: c->speed = v; break;
-    case SIG_speedIsKph: c->kph = v == 1; break;
+    case SIG_speed: c->speed = from_car(c, v); break;
+    case SIG_speedIsKph: c->p.car_kph = v == 1, shown_unit(c); break;
     case SIG_pedal: c->pedal_pct = clampd(v, 0, 100); break;
     case SIG_brake: c->braking = v == 1 && rnd(c->gear); break;   // 'gear' comes first in kSignals
     case SIG_gear: {
@@ -253,7 +272,7 @@ void car_frame(car_t *c, uint16_t id, uint8_t bus, const uint8_t *d, uint8_t len
     case SIG_packBufferKwh: c->pack_buffer_kwh = v > 20 ? NUL : v; break;
     case SIG_packNewKwh: if (v >= 40 && v <= 110 && bus == c->p.bms_bus) c->pack_new_kwh = v; break;
     case SIG_domeLight: c->dome_light = LUT(kDome, ri(v)); break;
-    case SIG_speedLimit: c->speed_limit = v == 0 || v >= 155 ? NUL : v; break;
+    case SIG_speedLimit: c->speed_limit = v == 0 || v >= 155 ? NUL : from_car(c, v); break;
     case SIG_outside: c->outside_c = v; break;
     case SIG_washer: c->washer_low = v == 1; break;
     case SIG_slippery: c->p.slip_ui = v == 1; c->slippery = c->p.slip_ui || c->p.slip_mode; break;
@@ -432,7 +451,7 @@ static void bt_motors(car_t *c, double f, double r, int64_t now) {
 void car_apply_bt(car_t *c, int64_t now) {
   int64_t v;
   int b;
-  if (at(c, 61, &v) && v < 511) c->speed = (double)v;   // 511 SNA
+  if (at(c, 61, &v) && v < 511) c->speed = from_car(c, (double)v);   // 511 SNA
   if (at(c, 62, &v) && v != 255) c->pedal_pct = clampd(v * 0.4, 0, 100);
   if (at(c, 66, &v)) { const char *g = v >= 0 && v < 5 ? kGears[v] : NULL; car_set_gear(c, g ? g[0] : 0, now); }
   if (at(c, 65, &v)) c->braking = v == 1 && rnd(c->gear);   // 2 INVALID is not braking
@@ -447,7 +466,7 @@ void car_apply_bt(car_t *c, int64_t now) {
   bt_motors(c, kw(c, 51), kw(c, 53), now);
   if (at(c, 111, &v)) c->soc_pct = clampd((double)v, 0, 100);
   if (at(c, 112, &v)) c->range_mi = (double)v;   // miles, always
-  if (at(c, 110, &v)) c->speed_limit = v == 0 || v >= 155 ? NUL : (double)v;
+  if (at(c, 110, &v)) c->speed_limit = v == 0 || v >= 155 ? NUL : from_car(c, (double)v);
   if (at(c, 105, &v)) c->autopilot = v == 1 ? "TACC" : v == 2 || v == 3 ? "AUTOPILOT" : NULL;
   if ((b = lamp(c, 81)) >= 0) c->low_beam = b;
   if ((b = lamp(c, 82)) >= 0) c->high_beam = b;
