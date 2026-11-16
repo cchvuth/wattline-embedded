@@ -1755,7 +1755,7 @@ static void set_energy(const dash_state_t *s, float cx)
 	/* The pair's top: the taller of the two blocks centred in the height. */
 	float dh = 98 * q, pad = PF(5);
 	float eh = dh + pad + (card ? ch_h + 2 * pad : 0) + st_h;
-	bool g_on = (s->wifi_live && s->gear != 'P') || bt_brakes(s); /* the g-meter's place, kept while driving */
+	bool g_on = (s->wifi_live && !s->charging) || bt_brakes(s); /* the g-meter's place, in P too (the last drive's peak); not charging (the app's charge column) */
 	G.pair_top = G.H / 2 - fmaxf(eh, g_on ? g_height() : 0) / 2;
 	float y = G.pair_top - q; /* the arc's outer edge 1 unit into the box */
 	lv_obj_set_pos(dial, ri(cx - 52 * q), ri(y));
@@ -1817,7 +1817,7 @@ static void set_g(const dash_state_t *s, float cx)
 		lv_obj_set_pos(pedal_name, ri(x), ri(lab_y));
 		lv_obj_set_pos(pedal_val, ri(x + a.x), ri(lab_y));
 	}
-	bool on = s->wifi_live && s->g_shown && s->gear != 'P';
+	bool on = s->wifi_live && !s->charging && s->g_shown; /* in P too: the last drive's peak */
 	show(gball, on);
 	show(g_val, on);
 	show(g_peak, on);
@@ -3592,8 +3592,8 @@ void dash_ui_set(const dash_state_t *s)
 
 	/* The blocks: the car and the route (only with one) left of the ring, the energy figures and the g-meter right of
 	 * it. Widths are fixed per block (the widest it gets), so nothing moves as the figures change. A route coming or
-	 * going re-spreads the left side only; parking or losing WiFi drops the g-meter's place (while driving it is kept
-	 * even with nothing to show, as the app keeps it). */
+	 * going re-spreads the left side only; losing WiFi drops the g-meter's place (with WiFi it is kept, in P too, even
+	 * with nothing to show, as the app keeps it). */
 	bool route = s->route;
 	ring_geom_full(); /* the full-dash ring geometry first (the last frame may have been the split's small ring) */
 	G.cx = G.W / 2;
@@ -3608,7 +3608,7 @@ void dash_ui_set(const dash_state_t *s)
 	lv_text_get_size(&t1, "0.88 g", FS(REGULAR, 16, UI_S_FIG), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
 	lv_text_get_size(&t2, "PEAK 0.88", FS(REGULAR, 12, UI_S_FIG), ri(PF(0.8)), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
 	w[4] = bt_brakes(s) ? brakes_w() /* Bluetooth alone: the brakes in the ball's place */
-	       : s->wifi_live && s->gear != 'P' ? fmaxf(PG(72), fmaxf(t1.x, t2.x)) : 0; /* the ball over its figures */
+	       : s->wifi_live && !s->charging ? fmaxf(PG(72), fmaxf(t1.x, t2.x)) : 0; /* the ball over its figures, in P too */
 	for (int i = 0; i < 5; i++) sum += w[i];
 	/* The chips step in towards the top: bound by those level with the car picture (the first sits over it, beside
 	 * the lights row) and with the g-meter's ball. */
