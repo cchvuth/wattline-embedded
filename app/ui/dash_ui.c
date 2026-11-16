@@ -654,6 +654,8 @@ static float g_height(void)
  * axles, the spine), a disc brake at each wheel, its figure outside it; in the g-meter's ball and figures' place, the
  * pedal under it where the g-meter's is. No steering angle over Bluetooth: the fronts stay straight. */
 static lv_obj_t *brake_temps;
+/* A temperature as shown: °F once the car is in mph, else °C as read (panda.dart temp). */
+static float shown_deg(float c) { return S.kph ? c : c * 1.8f + 32; }
 static bool bt_brakes(const dash_state_t *s)
 {
 	if (!s->live || s->wifi_live || s->rwd) return false;
@@ -723,7 +725,7 @@ static void brakes_draw(lv_event_t *e)
 		disc_brake(layer, cx, cy, s, i % 2 ? 90 : -90, W70); /* the caliper outward */
 		char txt[12];
 		if (isnan(S.brake_temp_c[i])) snprintf(txt, sizeof txt, "—");
-		else snprintf(txt, sizeof txt, "%d°", (int)lroundf(S.brake_temp_c[i]));
+		else snprintf(txt, sizeof txt, "%d°", (int)lroundf(shown_deg(S.brake_temp_c[i])));
 		lv_draw_label_dsc_init(&ld);
 		ld.font = f, ld.text = txt, ld.text_local = 1, ld.color = rgb(WHITE);
 		ld.align = i % 2 ? LV_TEXT_ALIGN_LEFT : LV_TEXT_ALIGN_RIGHT;
@@ -995,7 +997,7 @@ void dash_ui_init(lv_obj_t *scr)
 /* ---------- set ---------- */
 #define CHANGED(f) (first || memcmp(&S.f, &P.f, sizeof S.f))
 
-static void fmt_deg(char *b, size_t n, float c) { snprintf(b, n, "%d°", (int)lroundf(c)); }
+static void fmt_deg(char *b, size_t n, float c) { snprintf(b, n, "%d°", (int)lroundf(shown_deg(c))); }
 static uint32_t air_color(float c) { return !isnan(c) && lroundf(c) <= 3 ? COLD : WHITE; }
 
 static void set_chips(const dash_state_t *s)
@@ -1646,9 +1648,9 @@ static void set_energy(const dash_state_t *s, float cx)
 	if (charging) p[n++] = IMG(&ic_bolt_dial, REGEN);
 	if (!isnan(t)) {
 		if (cold) p[n] = IMG(&ic_snow_dial, COLD), p[n].gap = n ? q : 0, n++;
-		float a = fabsf(t);
-		if (a < 10) snprintf(tt, sizeof tt, "%.1f°", a < 0.05f ? 0.0f : t);
-		else snprintf(tt, sizeof tt, "%d°", (int)lroundf(t));
+		float d = shown_deg(t), a = fabsf(d);
+		if (a < 10) snprintf(tt, sizeof tt, "%.1f°", a < 0.05f ? 0.0f : d);
+		else snprintf(tt, sizeof tt, "%d°", (int)lroundf(d));
 		p[n] = TXT(font_px(REGULAR, ri(14 * q)), cold ? COLD : W70, tt), p[n].gap = n ? q : 0, n++;
 		if (heating) p[n] = IMG(&ic_up_dial, ALERT), p[n++].gap = q;
 	}
@@ -1778,7 +1780,7 @@ static void set_g(const dash_state_t *s, float cx)
 	show(brake_temps, bb);
 	if (bb) {
 		place(brake_temps, cx - brakes_w() / 2, G.pair_top, brakes_w(), brakes_h());
-		if (CHANGED(brake_temp_c)) lv_obj_invalidate(brake_temps);
+		if (CHANGED(brake_temp_c) || CHANGED(kph)) lv_obj_invalidate(brake_temps);
 	}
 	if (bar && !s->wifi_live && !bb) /* Bluetooth alone: no g-meter, so under the battery block's figures (owner) */
 		cx = G.energy_cx, bar_y = G.energy_foot + PEDAL_GAP + lv_font_get_line_height(label_font()) + PG(3);
