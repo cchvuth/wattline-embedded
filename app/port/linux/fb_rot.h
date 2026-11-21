@@ -9,6 +9,8 @@
 bool fb_rot_install(lv_display_t *disp, const char *path, int rotation, bool vsync);
 // the G2D's rotation unit took the flush (the OS's /dev/g2drot): it runs beside the drawing
 bool fb_rot_g2d(void);
+// with the unit: the next frame drawn whole and shown at once (a change of view), if its memory allows; between frames
+void fb_rot_whole_next(lv_display_t *disp);
 #endif
 // one w x h area of the rotated canvas at (x1, y1), 32-bit pixels, into the panel's framebuffer (exposed for the test)
 void fb_rot_area(uint8_t *dst, long dst_line, int panel_w, int panel_h, int rotation, int x1, int y1, int w, int h,

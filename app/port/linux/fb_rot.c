@@ -36,7 +36,7 @@ static bool first = true;    // the next flush is a frame's first
 static uint32_t frame_t0, span_ms;   // when the frame's first flush began; how long the last frame's flushes ran
 static int g2d = -1;         // /dev/g2drot
 static uint8_t *g2d_buf;     // LVGL's two draw buffers, the unit's memory
-static size_t g2d_len, g2d_bs;   // that mapping's length; one strip buffer's
+static size_t g2d_len, g2d_bs, g2d_full;   // that mapping's length; one strip buffer's; the whole canvas's
 static struct g2drot_fb g2d_fb;  // the framebuffer, as the unit is told it
 static bool whole;           // the first frame, drawn in one buffer of the whole canvas and shown at once (strips() after)
 static uint8_t *own;         // LVGL's own draw buffer (unused while the unit's are in): the CPU's, should the unit's go
@@ -180,6 +180,7 @@ bool fb_rot_install(lv_display_t *disp, const char *path, int rotation, bool vsy
 	              lv_display_get_vertical_resolution(disp);
 	lv_draw_buf_t *b = lv_display_get_buf_active(disp);
 	own = b->data, own_bs = b->data_size;
+	g2d_full = full;
 	if (g2d_map(full)) {
 		whole = true;
 		lv_display_set_buffers(disp, g2d_buf, NULL, (uint32_t)full, LV_DISPLAY_RENDER_MODE_PARTIAL);
@@ -212,4 +213,26 @@ static void strips(void *d)   // after the first frame: the two strip buffers ag
 }
 
 bool fb_rot_g2d(void) { return g2d >= 0; }
+
+// The next frame drawn whole, in one buffer of the whole canvas, and turned into the framebuffer at once, as the first
+// was: a change of the whole view crawled down the screen in strips. Between frames only. If the unit's memory does not
+// allow it now (the Android Auto decoder holds it), the strips stay, and the frame comes in strips as before; after
+// the frame, strips() gives the big buffer back.
+void fb_rot_whole_next(lv_display_t *disp)
+{
+	if (g2d < 0 || whole || !g2d_full) return;
+	ioctl(g2d, G2DROT_WAIT);
+	lv_display_flush_ready(disp);
+	g2d_unmap();
+	if (g2d_map(g2d_full)) {
+		whole = true;
+		lv_display_set_buffers(disp, g2d_buf, NULL, (uint32_t)g2d_full, LV_DISPLAY_RENDER_MODE_PARTIAL);
+		return;
+	}
+	if (g2d_map(2 * g2d_bs)) {   // not now: the strips again
+		lv_display_set_buffers(disp, g2d_buf, g2d_buf + g2d_bs, (uint32_t)g2d_bs, LV_DISPLAY_RENDER_MODE_PARTIAL);
+		return;
+	}
+	strips(disp);   // nor they: the CPU's tiles
+}
 #endif

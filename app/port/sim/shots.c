@@ -141,6 +141,8 @@ static void swipe(int x0, int y0, int x1, int y1) /* from x0, y0 to x1, y1 in ei
 	clock_ms += 16, finger_down = false;
 	lv_indev_read(finger);
 }
+static int wholes; /* frames asked whole (dash_ui_whole_frame, as a port with the G2D sets it) */
+static void count_whole(void) { wholes++; }
 static dash_settings_t saved; /* the settings as the UI last handed them over to be saved */
 static int saves, presses;
 static void on_save(int what, const dash_settings_t *st, void *ctx)
@@ -588,6 +590,20 @@ int main(int argc, char **argv)
 		if (nb > 6) touch((b[6].x1 + b[6].x2) / 2, (b[6].y1 + b[6].y2) / 2, 600);
 		bad |= expect(nb > 6 && !presses, "a hold on a button: no press");
 		bad |= shot(d, out, "swipe-split-hold", &s, -1);
+		{ /* Exit where the port shows a frame whole: the split stays, its last picture up, until the session has gone;
+		   * then the dash, asked whole. (Without the hook the dash comes at once: the shots' way.) Last: nothing follows */
+			lv_obj_t *xl = find_ui_label("EXIT");
+			lv_area_t xa = {0};
+			if (xl) lv_obj_get_coords(lv_obj_get_parent(xl), &xa);
+			dash_ui_whole_frame = count_whole;
+			if (xl) touch((xa.x1 + xa.x2) / 2, (xa.y1 + xa.y2) / 2, 48);
+			dash_ui_set(&s);
+			bad |= expect(xl && lv_obj_is_visible(xl) && !wholes, "Exit with a whole-frame port: the split stays while the session is up");
+			remove(marker);
+			dash_ui_set(&s);
+			bad |= expect(xl && !lv_obj_is_visible(xl) && wholes == 1, "the session gone: the dash, asked whole once");
+			dash_ui_whole_frame = NULL;
+		}
 		keep_pj = false;
 		remove(marker);
 		dash_ui_set_settings_cb(NULL, NULL);

@@ -78,4 +78,8 @@ extern const char *dash_ui_pj_marker; /* "/run/dash-project": an AA session is u
 extern const char *dash_ui_aa_cert;   /* "/etc/wattline/aa.crt": the AA button only with a head-unit certificate */
 extern const char *dash_ui_aa_up;     /* "/run/dash-aa": Android Auto is on (dash-aa start raises it) */
 extern const char *dash_ui_pj_fps;    /* PJ_FPS: the phone's pictures shown per second (spike-vdec writes it) */
+/* Set by a port that can show a frame whole (the F133's G2D: fb_rot_whole_next), else NULL: asked for when the split is
+ * left with its session gone. With it, the split's Exit keeps the picture until the session has gone (or 1.5 s), so
+ * the dash comes back in one step instead of down the screen in strips. */
+extern void (*dash_ui_whole_frame)(void);
 extern const char *dash_ui_nor_status; /* "/run/dash-nor.status": a card install to copy to the built-in flash */

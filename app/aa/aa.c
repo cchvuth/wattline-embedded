@@ -961,7 +961,7 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 		if (aa_quit == 1) {   // stopped: the phone told first (dash-aa stops the decoder at the same time: no matter now)
 			uint8_t q[4]; pb_out o = { q, 0, sizeof q, 0 }; pb_u(&o, AA_SHUTDOWN_REASON, AA_SHUTDOWN_QUIT);
 			if (!tx_dead) send_msg(fd, tls, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_SHUTDOWN_REQUEST, q, o.n);
-			fprintf(stderr, "aa: stopped: telling the phone the session ends\n");
+			fprintf(stderr, "aa: stopped: telling the phone the session ends (at %.2f s)\n", now_us() / 1e6);
 			aa_quit = 2, quit_until = now_us() + 2000000;
 		}
 		if (aa_quit == 2) {
@@ -1040,7 +1040,7 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 			fprintf(stderr, "aa: phone asked to shut down\n");
 			break;
 		} else if (chan == AA_CH_CONTROL && id == AA_CTL_SHUTDOWN_RESPONSE) {
-			fprintf(stderr, "aa: the phone acknowledged the end of the session\n");
+			fprintf(stderr, "aa: the phone acknowledged the end of the session (at %.2f s)\n", now_us() / 1e6);
 			break;
 		} else if (chan == AA_CH_INPUT && id == AA_IN_BINDING_REQUEST) {
 			uint8_t r[8]; pb_out o = { r, 0, sizeof r, 0 }; pb_u(&o, AA_BINDRESP_STATUS, AA_STATUS_OK);
@@ -1088,9 +1088,14 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 				const uint8_t *nal = body; size_t nl = blen;
 				if (id == AA_AV_MEDIA_WITH_TIMESTAMP) {   // 8-byte timestamp (big-endian)
 					if (nl <= 8) goto acked;
-					if (!phone_off_seen && frames <= 3) {   /* the phone's clock until its first ping: microseconds */
+					if (frames <= 3) {   /* the phone's clock until its first ping: microseconds */
 						uint64_t vt = 0; for (int i = 0; i < 8; i++) vt = vt << 8 | nal[i];
-						if (vt && vt < (uint64_t)INT64_MAX / 2 / 1000) phone_off = (int64_t)vt * 1000 - now_us() * 1000, phone_off_ok = 1;
+						if (vt && vt < (uint64_t)INT64_MAX / 2 / 1000) {
+							if (!phone_off_seen) phone_off = (int64_t)vt * 1000 - now_us() * 1000, phone_off_ok = 1;
+							else   /* its two clocks side by side: a few ms apart when they are one (the video's age), hours when not */
+								fprintf(stderr, "aa: the video's clock is %lld ms from the pings'\n",
+									(long long)(((int64_t)vt * 1000 - now_us() * 1000 - phone_off) / 1000000));
+						}
 					}
 					nal += 8; nl -= 8;
 				}
@@ -1263,7 +1268,7 @@ static int aa_conn(int fd, SSL_CTX *ctx, int *touchp)
 		}
 		unlink("/run/dash-project");
 		unlink(PJ_AA_SESSION), unlink(PJ_AA_FOCUS), unlink(PJ_FPS);   // the decoder, killed, leaves its fps behind
-		fprintf(stderr, "aa: session ended\n");
+		fprintf(stderr, "aa: session ended (at %.2f s)\n", now_us() / 1e6);
 	} else if (ok && !up) {
 		unsigned long err = ERR_get_error();
 		fprintf(stderr, "aa: TLS handshake failed: %s\n", err ? ERR_error_string(err, NULL) : "peer closed or timed out");

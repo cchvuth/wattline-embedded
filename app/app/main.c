@@ -60,6 +60,11 @@ static void watchdog_off(void) {   // the magic close: a clean stop does not reb
   wd = -1;
 }
 
+#ifdef DASH_FB_ROT
+static lv_display_t *whole_disp;
+static void whole_frame(void) { fb_rot_whole_next(whole_disp); }   // dash_ui_whole_frame, with the G2D's unit
+#endif
+
 int main(int argc, char **argv) {
   const char *path = argc > 2 && !strcmp(argv[1], "-c") ? argv[2] : "/run/dashdata/dash.conf";
   conf_t cf;
@@ -94,8 +99,10 @@ int main(int argc, char **argv) {
 #else
   bool vs = false;
 #endif
-  if (fb_ok && fb_rot_install(disp, cf.fb, r, vs))
+  if (fb_ok && fb_rot_install(disp, cf.fb, r, vs)) {
     log_msg("display: %s rotation into the framebuffer", fb_rot_g2d() ? "the G2D's" : "tiled");
+    if (fb_rot_g2d()) whole_disp = disp, dash_ui_whole_frame = whole_frame;   // a change of view shown at once
+  }
 #endif
   lv_indev_t *ts = lv_evdev_create(LV_INDEV_TYPE_POINTER, cf.touch);
   if (!ts) log_msg("no touch device %s", cf.touch);

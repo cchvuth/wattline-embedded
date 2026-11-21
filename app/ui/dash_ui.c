@@ -1450,6 +1450,8 @@ static bool aa_stopping;   /* tapped stop (or Exit), waiting for /run/dash-aa to
 static uint32_t aa_stop_at;
 #define AA_BLUE 0xFF03A9F4u /* Android Auto's blue (its logo's): the button while AA is on */
 static bool pj_left;       /* Exit tapped in the split: stay on the dash until this session's marker is gone */
+static uint32_t pj_leaving; /* Exit tapped where a frame can be shown whole: the split stays until the marker is gone */
+void (*dash_ui_whole_frame)(void);
 /* After leaving the split, repaint everything once more a moment later: the decoder is stopped in the background
  * (dash-aa stop) and may draw a last picture after the first repaint. */
 static void pj_repaint_cb(lv_timer_t *t)
@@ -2528,8 +2530,14 @@ static void open_tap(lv_event_t *e) { if (!FRESH(dash_at, 700)) dash_ui_show((in
 static void pj_exit_tap(lv_event_t *e)
 {
 	(void)e;
-	pj_left = true, aa_pending = false, aa_stopping = true, aa_stop_at = lv_tick_get();
+	if (pj_leaving) return; /* tapped already: the session is going */
+	aa_pending = false, aa_stopping = true, aa_stop_at = lv_tick_get();
 	save(DASH_AA_STOP);
+	if (dash_ui_whole_frame) { /* the dash once the session has gone (dash_ui_set), whole: its last picture until then */
+		pj_leaving = lv_tick_get() | 1;
+		return;
+	}
+	pj_left = true;
 	dash_ui_show(DASH_VIEW_DASH);
 	dash_ui_set(&S); /* laid out at once: else one frame of the strip's ring on the dash */
 }
@@ -3881,7 +3889,9 @@ void dash_ui_show(int v)
 			lv_obj_set_width(glow_l, now_pj ? PJ_RGN_X : (int32_t)glow_dsc[0].header.w);
 		}
 		if (!now_pj) lv_obj_move_foreground(tip), lv_obj_move_foreground(snack); /* toasts stay above the moved ring */
-		/* the decoder draws straight to the framebuffer: LVGL would leave its last picture on screen, so repaint all */
+		/* the decoder draws straight to the framebuffer: LVGL would leave its last picture on screen, so repaint all
+		 * (whole, where the port can and the session's decoder has gone: its memory is what the whole frame takes) */
+		if (!now_pj && !projecting && dash_ui_whole_frame) dash_ui_whole_frame();
 		lv_obj_invalidate(lv_screen_active());
 		lv_obj_invalidate(lv_layer_top());
 		if (!now_pj) lv_timer_create(pj_repaint_cb, 600, NULL);
@@ -4591,6 +4601,11 @@ void dash_ui_set(const dash_state_t *s)
 	/* The AA/projection layer raises /run/dash-project when a phone's video is ready and drops it to leave. Toggle
 	 * only between the dash and the strip, so it never yanks the user out of settings/pairing. */
 	bool want_pj = projecting = access(dash_ui_pj_marker, F_OK) == 0;
+	if (!want_pj || view != DASH_VIEW_PROJECT) pj_leaving = 0;
+	if (pj_leaving && lv_tick_elaps(pj_leaving) > 1500) { /* the session has not gone: the dash anyway, as without */
+		pj_leaving = 0, pj_left = true;
+		dash_ui_show(DASH_VIEW_DASH);
+	}
 	if (!want_pj && pj_left) { /* after Exit the session is gone now: repaint whatever its decoder left on the dash */
 		pj_left = false;
 		lv_obj_invalidate(lv_screen_active());
