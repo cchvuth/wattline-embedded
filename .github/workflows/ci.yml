@@ -20,9 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (os/, os-f133/, app/)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Checkout signal source (cchvuth/wattline)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: cchvuth/wattline
           path: wattline              # app/ Makefile reads ../wattline/lib/signals.dart
@@ -41,7 +41,7 @@ jobs:
   firmware-tools:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev libglib2.0-dev
       - name: Build + self-test the Android Auto receiver (aa), and a session with a fake phone (--conn-test)
@@ -64,14 +64,14 @@ jobs:
   decoder-neon:
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: The decoder's NEON picture conversion against its plain C (--rotate, on ARM)
         run: cc -O2 -Wall -Werror -o /tmp/spike-vdec app/vdec/spike-vdec.c && /tmp/spike-vdec --rotate
 
   ota-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: The updater (dash-update) against a local HTTPS release server, in a scratch container
         run: |
           docker run --rm -v "$PWD/os:/ext:ro" debian:stable sh -c 'apt-get update -qq && apt-get install -y -qq \
