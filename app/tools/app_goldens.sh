@@ -5,7 +5,7 @@
 # Rerun whenever the app's UI changes; the native UI is matched against the newest set.
 set -e
 W=${W:-1536}   # canvas width in dp at 1.25 px/dp; set to the visible top width / 1.25 once C-disp measures the trapezoid (5.2)
-APP=${APP:-$HOME/projs/wattline}
+APP=${APP:-$(cd "$(dirname "$0")/../.." && pwd)/wattline}   # the Flutter app beside this checkout, as app.mk has it (../wattline)
 REV=$(git -C "$APP" describe --always --dirty)
 OUT=$(cd "$(dirname "$0")/.." && pwd)/test/goldens/$REV-w$W
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT

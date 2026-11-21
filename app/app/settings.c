@@ -22,6 +22,7 @@ const char *settings_aa_cmd = "/usr/sbin/dash-aa";   // run with "start"/"stop":
 const char *settings_ssh_pid = "/var/run/dropbear.pid";
 
 bool settings_car_saved;
+static const int kCards[4] = {DASH_CARD_BUTTONS, DASH_CARD_CAR, DASH_CARD_ENERGY, DASH_CARD_G};   // full layout's
 static dash_settings_t saved;                 // as last loaded or saved (passes "")
 static char pass[DASH_NETS][64];              // saved.net[i]'s passphrase
 
@@ -41,7 +42,16 @@ void settings_aa(bool start) { run(settings_aa_cmd, start ? "start" : "stop", NU
 void settings_aa_restore(void) { run(settings_aa_cmd, "restore", NULL); }
 void settings_aa_forget(void) { run(settings_aa_cmd, "forget", NULL); }
 void settings_ota(const char *what) { run("/usr/sbin/dash-update", what, NULL); }
-void settings_reboot(void) { run("/sbin/reboot", NULL, NULL); }
+void settings_nor(const char *what) { run("/usr/sbin/dash-nor", what, NULL); }
+// How the board restarts: the device profile's (device/<name>.mk; the F133 screen's power MCU cycles it, as a warm reboot
+// loses its Wi-Fi chip)
+#ifndef DASH_REBOOT
+#define DASH_REBOOT "/sbin/reboot"
+#endif
+#ifndef DASH_REBOOT_ARG
+#define DASH_REBOOT_ARG NULL
+#endif
+void settings_reboot(void) { run(DASH_REBOOT, DASH_REBOOT_ARG, NULL); }
 
 // Whole file, atomically: <path>.tmp written and synced, renamed over, the folder synced.
 static int put_sync(const char *dir, const char *name, const char *text, mode_t mode, bool sync);
@@ -94,6 +104,9 @@ void settings_load(dash_settings_t *st, const conf_t *cf) {
   st->follow_offset = 0;   // a user bias on top of dash.conf's bright_follow_offset
   st->car = cf->car, st->sparse = cf->sparse, st->wifi_first = true;   // dash.conf's, the phone app's defaults
   st->unit_miles = st->unit_f = st->unit_psi = -1;
+  st->basic = false;   // the phone layout's (the F133's): its full layout
+  memcpy(st->cards, kCards, sizeof kCards);
+  st->split_card = DASH_CARD_ENERGY, st->ring_page = DASH_RING_POWER;   // its split's card (the battery's), the power ring
   snprintf(st->tz, sizeof st->tz, "%s", cf->tz);
   snprintf(st->tz_conf, sizeof st->tz_conf, "%s", cf->tz);
   snprintf(st->panda_host, sizeof st->panda_host, "%s", cf->panda_host);
@@ -124,6 +137,14 @@ void settings_load(dash_settings_t *st, const conf_t *cf) {
         else if (!strcmp(k, "unit_miles")) st->unit_miles = v < 0 ? -1 : !!v;
         else if (!strcmp(k, "unit_f")) st->unit_f = v < 0 ? -1 : !!v;
         else if (!strcmp(k, "unit_psi")) st->unit_psi = v < 0 ? -1 : !!v;
+        else if (!strcmp(k, "basic")) st->basic = v;
+        else if (!strcmp(k, "cards")) {   // four, left to right
+          int c[4];
+          if (sscanf(val, "%d , %d , %d , %d", &c[0], &c[1], &c[2], &c[3]) == 4)
+            for (int i = 0; i < 4; i++) st->cards[i] = c[i] >= 0 && c[i] < DASH_CARDS ? c[i] : st->cards[i];
+        }
+        else if (!strcmp(k, "split_card")) st->split_card = v >= 0 && v < DASH_CARDS ? v : st->split_card;
+        else if (!strcmp(k, "ring_page")) st->ring_page = v >= 0 && v < DASH_RING_PAGES ? v : st->ring_page;
         // fps60 (60 frames a second) is gone: the panel shows 30. An old file's line is ignored, dropped at the next save
         else if (!strcmp(k, "car")) {   // by its id (modelY7 ...), as dash.conf names it
           for (int i = 0; i < CAR_COUNT; i++)
@@ -222,6 +243,15 @@ int settings_save(dash_settings_t *st) {
            kCars[now.car >= 0 && now.car < CAR_COUNT ? now.car : CAR_FALLBACK].id, now.sparse, now.wifi_first,
            strchr(now.tz, '\n') ? "UTC0" : now.tz, strchr(now.panda_host, '\n') ? "192.168.4.1" : now.panda_host,
            now.panda_port, now.ota_auto, now.aa_low_res, now.unit_miles, now.unit_f, now.unit_psi);
+  if (now.basic || memcmp(now.cards, kCards, sizeof kCards)) {   // the phone layout's, once off its full layout (the Dash
+    size_t k = strlen(text);                                      // never moves them: its file as before)
+    snprintf(text + k, sizeof text - k, "basic = %d\ncards = %d, %d, %d, %d\n", now.basic, now.cards[0], now.cards[1],
+             now.cards[2], now.cards[3]);
+  }
+  if (now.split_card != DASH_CARD_ENERGY || now.ring_page != DASH_RING_POWER) {   // the split's card and the ring's face,
+    size_t k = strlen(text);                                                        // once swiped (the phone layout's too)
+    snprintf(text + k, sizeof text - k, "split_card = %d\nring_page = %d\n", now.split_card, now.ring_page);
+  }
   if (!(rc |= put(settings_root, "settings.conf", text, 0644))) settings_car_saved = true;
   if (wifi) {
     char dir[256];

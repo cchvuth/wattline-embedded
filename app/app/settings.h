@@ -1,7 +1,9 @@
 // The settings screen's values, kept on /data (R3's writable mount) when there is one, else in memory only (the Mac):
 //   <root>/settings.conf        minor_figures, clock_24h, brightness_pct, follow_car, ssh, record, car, sparse,
 //                               wifi_first, tz, panda_host, panda_port, ota_auto, aa_low_res,
-//                               unit_miles, unit_f, unit_psi (-1 untouched)   (key = value)
+//                               unit_miles, unit_f, unit_psi (-1 untouched);
+//                               the phone layout's (the F133's), written once moved off their defaults: basic, cards,
+//                               split_card, ring_page   (key = value)
 //   <root>/tyres                the last tyre pressures, for the next start
 //   <root>/wifi/networks.conf   R3's list: two lines a network, SSID then passphrase ("" open), in order of
 //                               preference; folder 0700, file 0600. No file yet: the list is the car's
@@ -30,6 +32,7 @@ bool settings_aa_kept(void);
 void settings_aa_restore(void);   // dash-aa restore: as start, without the pairing window (nobody at the Dash tapped)
 void settings_aa_forget(void);          // dash-aa forget: the phones paired for Android Auto removed
 void settings_ota(const char *what);   // run dash-update <what> (check, auto) in the background
+void settings_nor(const char *what);   // run dash-nor <what> (copy) in the background
 void settings_reboot(void);            // restart the Dash (an armed update starts)
 extern bool settings_car_saved;   // settings.conf names the car (loaded or saved): else the first boot asks for it
 bool settings_apply_tz(const char *tz);   // TZ for localtime (the clocks); true if it changed

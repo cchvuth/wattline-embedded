@@ -54,6 +54,7 @@ enum { AA_SENSOR_NIGHT_DATA = 10, AA_SENSOR_DRIVING_STATUS = 13 };
 /* enums */
 enum { AA_VER_MATCH = 0, AA_VER_MISMATCH = 0xFFFF };          /* VersionResponseStatus */
 enum { AA_STATUS_OK = 0, AA_STATUS_FAIL = 1 };                /* StatusEnum (channel open) */
+enum { AA_SHUTDOWN_REASON = 1, AA_SHUTDOWN_QUIT = 1 };         /* ShutdownRequest.reason (ShutdownReason QUIT) */
 enum { AA_AVSTATUS_NONE = 0, AA_AVSTATUS_FAIL = 1, AA_AVSTATUS_OK = 2 }; /* AVChannelSetupStatus */
 enum { AA_AVSTREAM_NONE = 0, AA_AVSTREAM_AUDIO = 1, AA_AVSTREAM_VIDEO = 3 };
 enum { AA_RES_NONE = 0, AA_RES_480p = 1, AA_RES_720p = 2, AA_RES_1080p = 3 }; /* 800x480 / 1280x720 / 1920x1080 */

@@ -5,6 +5,9 @@
 // The hardware watchdog (watchdog = 1), armed once the display is open, is petted each frame: a hung loop reboots the
 // board; a clean exit disarms it, and one a crashed dash left running is stopped before the open.
 #include "app.h"
+#ifdef DASH_FB_ROT
+#include "../port/linux/fb_rot.h"
+#endif
 #include "settings.h"
 #include "actions.h"
 #include "lvgl.h"
@@ -21,10 +24,20 @@
 static int wd = -1;
 
 static void set(const dash_state_t *s, void *ctx) { (void)ctx; dash_ui_set(s); }
+// The first frame drawn: /run/dash-shown. The boot waits for it (S05dash) before it starts the Wi-Fi driver and the
+// daemons: /run/dash-ready comes once the UI is built, before anything is drawn, and on one core the first frame then
+// shared the CPU with all of them.
 static uint32_t frame(void *ctx) {
   (void)ctx;
+  static bool shown;
   if (wd >= 0) ioctl(wd, WDIOC_KEEPALIVE, 0);
-  return lv_timer_handler();
+  uint32_t r = lv_timer_handler();
+  if (!shown) {
+    shown = true;
+    int fd = open("/run/dash-shown", O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
+    if (fd >= 0) close(fd);
+  }
+  return r;
 }
 static int64_t idle(void *ctx) { (void)ctx; return lv_display_get_inactive_time(NULL); }
 static void show_settings(void *ctx) { (void)ctx; dash_ui_settings(&app_settings); }
@@ -75,6 +88,15 @@ int main(int argc, char **argv) {
                                 : r == 270 ? LV_DISPLAY_ROTATION_270 : LV_DISPLAY_ROTATION_0);
   log_msg("display %dx%d, rotation %d", (int)lv_display_get_horizontal_resolution(disp),
           (int)lv_display_get_vertical_resolution(disp), r);
+#ifdef DASH_FB_ROT   // the device profile's: rotated into the framebuffer by the G2D or the CPU (port/linux/fb_rot.c)
+#ifdef DASH_VSYNC
+  bool vs = true;
+#else
+  bool vs = false;
+#endif
+  if (fb_ok && fb_rot_install(disp, cf.fb, r, vs))
+    log_msg("display: %s rotation into the framebuffer", fb_rot_g2d() ? "the G2D's" : "tiled");
+#endif
   lv_indev_t *ts = lv_evdev_create(LV_INDEV_TYPE_POINTER, cf.touch);
   if (!ts) log_msg("no touch device %s", cf.touch);
   if (ts) {   // the Goodix reports landscape: swapped and calibrated so LVGL's rotation turns it back (main_dash.c)

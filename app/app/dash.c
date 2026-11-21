@@ -6,6 +6,9 @@
 #include "actions.h"
 #include "pair.h"
 #include "record.h"
+#ifndef DASH_NO_RECORD   // a device profile with no room for drive recordings: never on, whatever the settings say
+#define DASH_NO_RECORD 0
+#endif
 #include "settings.h"
 #include "../core/panda.h"
 #include "../ui/project_region.h"
@@ -310,9 +313,6 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
   log_msg("start: panda %s:%d, car %s, tz %s", d->host, d->port, kCars[app_settings.car].id, app_settings.tz);
   bt_view_t bt;
   bt_view_none(&bt);
-#ifdef DASH_CMDR
-  cmdr_hook_start(cf, app_settings.wifi_first);   // before the link's first attempt: its step-aside must reach it
-#endif
   link_connect(&d->link, now);
   started = true;
 
@@ -333,6 +333,15 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
     now = mono_ms();
     if (d->fd >= 0) drain(d, now);
     if (now > d->last) d->last = now;
+    // Android Auto holds the radio (dash-aa: /run/dash-aa-radio): no WiFi link attempts, so no RETRY on the dash. A link
+    // that is up rides on (the AP beside the car's WiFi; a quiet one subscribes again); one that is down waits for AA to
+    // let go, then tries at once. Parked, the link is not "trying": the Commander's Bluetooth goes ahead meanwhile.
+    if (now >= next_frame) {
+      static bool aa_parked;
+      bool aa = access(PJ_AA_RADIO, F_OK) == 0;
+      if (aa && !aa_parked && d->link.state == LINK_RETRYING) link_disconnect(&d->link, now), aa_parked = true;
+      else if (!aa && aa_parked) link_connect(&d->link, now), aa_parked = false;
+    }
     link_poll(&d->link, now);
     pair_handle(now);   // the SSH pairing window's server, while it is open
     while (waitpid(-1, NULL, WNOHANG) > 0) {}   // the scripts settings.c and pair.c start (none is waited on)
@@ -347,7 +356,7 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
       if (settings_save(&app_settings)) app_tell("Settings not saved: the card could not be written", now);
       apply_settings(d, now);
     }
-    record_sync(app_settings.record, cf, now);   // the switch takes effect here, at once
+    record_sync(app_settings.record && !DASH_NO_RECORD, cf, now);   // the switch takes effect here, at once
     {   // the WiFi join just ended (wlan0 has its address): the link tries now, not after its retry delay, in which
         // Bluetooth (waiting for WiFi to try) would dial; before cmdr_hook_sync, so it sees the try
       static int join_was = -1;
@@ -385,6 +394,18 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
       app_actions_fill(&s, now);   // the press out and the snackbar's line
       ui->set(&s, ui->ctx);
       if (ui->frame) ui->frame(ui->ctx);
+#ifdef DASH_CMDR
+      // The Commander's session: after the first frame, and tried again each 2 s for a minute until the system bus is
+      // there. Started before the loop, its start (GLib and GIO, read in from the flash: over a second on the F133)
+      // came before anything was drawn; and where D-Bus starts after the dash (the F133's boot) that one try found no
+      // bus, and the session stayed off until the dash was started again. (The link's hellos before the session have
+      // nothing to step aside.)
+      static int cmdr_tries;   // -1: started
+      static int64_t cmdr_at;
+      if (cmdr_tries >= 0 && now >= cmdr_at)   // every 2 s for a minute, then every 10 s (a try with no bus is cheap)
+        cmdr_tries = cmdr_hook_start(cf, wifi_first_now()) ? -1 : cmdr_tries + 1,
+        cmdr_at = now + (cmdr_tries < 30 ? 2000 : 10000);
+#endif
       backlight(d, now, ui->idle_ms ? ui->idle_ms(ui->ctx) : INT64_MAX);
     }
     if (now >= next_stat) {

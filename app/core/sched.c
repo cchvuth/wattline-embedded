@@ -163,7 +163,7 @@ void link_kick(link_t *l, int64_t now) {
   if (l->on && l->state == LINK_RETRYING && l->retry_at != NEVER) attempt_connect(l, now);   // Panda.kick: a retry pending
 }
 
-bool link_trying(const link_t *l) { return l->state == LINK_IDLE || l->state == LINK_HELLO; }
+bool link_trying(const link_t *l) { return l->on && (l->state == LINK_IDLE || l->state == LINK_HELLO); }   // off: parked
 bool link_group_on(const link_t *l, int g) { return l->sparse_on[g] != 0; }
 void link_pressed(link_t *l, int64_t now) { l->hot_until = now + l->cfg.hot_ms; }
 

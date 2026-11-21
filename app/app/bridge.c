@@ -133,6 +133,7 @@ void bridge_fill(dash_state_t *s, const car_t *c, const link_t *l, const bt_view
   s->gear = c->gear;
   s->front_kw = live ? c->front_kw : NAN;
   s->rear_kw = live ? c->rear_kw : NAN;
+  s->pack_kw = wl ? c->pack_kw : NAN;   // the power card's (_PowerDial: the pack's own over WiFi, else the motors')
   s->pedal_pct = live ? c->pedal_pct : NAN;
   s->brake_pct = wl ? c->brake_pct : NAN;   // WiFi's alone: frozen once it stalls
   for (int i = 0; i < 4; i++) s->brake_nm[i] = wl ? c->brake_wheel_nm[i] : NAN;

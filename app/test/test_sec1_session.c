@@ -47,7 +47,7 @@ static size_t resp0(uint8_t *out, const uint8_t pub[32], const uint8_t rnd[16], 
 
 int main(void) {
   FILE *f = fopen("test/golden_handshake.json", "r");
-  assert(f && "run from the dash-native root");
+  assert(f && "run from the app's root");
   json[fread(json, 1, sizeof json - 1, f)] = 0;
   fclose(f);
 

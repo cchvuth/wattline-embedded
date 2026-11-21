@@ -13,7 +13,8 @@ import 'package:tesla_dash/car.dart';
 import 'package:tesla_dash/glyphs.dart';
 import 'package:tesla_dash/main.dart';
 
-const px = 1.25; // px per dp on the Dash
+// px per dp: the Dash's 1.25 (1920x480); PX overrides it (the F133 screen's 1920x720: 1.875)
+final px = double.parse(Platform.environment['PX'] ?? '1.25');
 // The Dash's sizes over the app's (ui/assets/sizes.json).
 final Map<String, dynamic> sz = jsonDecode(File(Platform.environment['SIZES']!).readAsStringSync());
 double S(String k) => (sz[k] as num).toDouble();

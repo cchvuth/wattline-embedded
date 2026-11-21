@@ -61,6 +61,7 @@ typedef struct {
 	float speed;                     /* NAN: no data (a dim dash) */
 	char gear;                       /* 'P' 'R' 'N' 'D', 0 none */
 	float front_kw, rear_kw;         /* NAN: unknown */
+	float pack_kw;                   /* the pack's own power (WiFi, 0x132), draws included: the power card's; NAN unknown */
 	float pedal_pct, brake_pct;      /* NAN: unknown */
 	float brake_nm[4];               /* each wheel's brake torque while braking (FL FR RL RR), Nm; NAN unknown */
 	float regen_cap_kw;              /* NAN: none (parked, unknown) */

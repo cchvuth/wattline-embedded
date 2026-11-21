@@ -3,8 +3,8 @@
  * at H = 480); the app's names are kept in comments so each piece can be checked against its widget. The icons
  * and car pictures are the app's own renders (ui/assets/export.sh), the text is Roboto through tiny_ttf. */
 #include "dash_ui.h"
-#include "gen/assets.h"
-#include "gen/aa_icon.h"
+#include "assets.h"   /* the device's icon set (its profile's UI_GEN: ui/gen, ui/gen/f133) */
+#include "aa_icon.h"
 #include "../core/cmdr_msg.h" /* cmdr_action: what a tap asks for */
 #include "project_region.h"    /* the phone picture's rectangle, shared with the AA receiver */
 #include <fcntl.h>
@@ -51,7 +51,29 @@ static struct {
 	float energy_cx, energy_foot; /* the battery block's centre and foot (its figures' bottom): Bluetooth's pedal bar */
 	float cab;              /* the cabin's fit in its column (the car pictures are baked for it) */
 	float link_top;         /* the link buttons' row, under the left chips */
+	/* The phone app's full layout (main.dart), on a plain rectangular panel (the F133 screen's 1920x720) rather than
+	 * the Dash's 1920x480 strip: the chips' columns, the car, the ring as tall as the row, the dial over the figures
+	 * over the g-meter; the links, the route and the buttons in the bar along the foot. Its icons are baked at its
+	 * own size (ui/assets/sizes-f133.json: the app's sizes at 1.875 px/dp). */
+	bool phone;
+	float row_b;            /* phone: the row's foot, over the bar */
+	float bar_l, bar_r;     /* phone: the route's pill, between the links and the buttons */
+	float bar_cy;           /* phone: the bar's middle line (the full layout's foot) */
 } G;
+static float car_bar_r; /* the phone layout's full-screen pill's right end, by the buttons (init) */
+static int car_at[2];   /* the car panel button's place in the full layout (init); AA's is beside it */
+static bool strip(void);
+/* the phone layout's basic layout (basic_layout) */
+static int card_slot[DASH_CARDS]; /* each card's slot (basic's 0..3; the split's SPLIT_SLOT, its buttons BAR_SLOT), -1 none */
+static float slot_x[5];           /* the slots' left edges and the last one's right edge, for the swipes */
+static lv_obj_t *dots[4][DASH_CARDS]; /* each slot's page dots (widgets.dart _Cards), its card's lit */
+static int layout_key = -1;       /* the parts as last shown: 0 the full layout, > 0 basic and its cards, < 0 the split's card */
+#define SPLIT_SLOT 3              /* the split's card: the right slot's dots */
+#define BAR_SLOT 4                /* the split's bar over the picture: the buttons, always (not a card there) */
+static float split_x;             /* the split's card's left edge (the ring left of it), for the swipes */
+/* the settings as last handed over (dash_ui_settings); the screen's edits go back through save() */
+static dash_settings_t ST = {.minor_figures = true, .brightness_pct = 80, .follow_car = true, .unit_miles = -1, .unit_f = -1, .unit_psi = -1,
+			      .cards = {DASH_CARD_BUTTONS, DASH_CARD_CAR, DASH_CARD_ENERGY, DASH_CARD_G}};
 
 static float px(float dp) { return dp * 1.25f * G.k; }
 /* The Dash draws each group bigger than the app (ui/assets/sizes.json; the icons are baked at these sizes). */
@@ -63,7 +85,7 @@ static float px(float dp) { return dp * 1.25f * G.k; }
 #define PF(dp) (px(dp) * UI_S_FIG)    /* the figures and the charge card */
 #define PG(dp) (px(dp) * UI_S_G)      /* the g-meter */
 /* The housing hides the screen's top corners: about 115 px each side at the top row, none at the bottom. */
-static float inset(float y) { return 115.0f * G.k * (1.0f - y / G.H); }
+static float inset(float y) { return G.phone ? 0 : 115.0f * G.k * (1.0f - y / G.H); }
 static int ri(float v) { return (int)lroundf(v); }
 
 /* ---------- fonts: Roboto, as the app (gauge.dart kFont) ---------- */
@@ -71,16 +93,40 @@ extern const unsigned char roboto_light[], roboto_regular[], roboto_medium[], ro
 extern const size_t roboto_light_size, roboto_regular_size, roboto_medium_size, roboto_bold_size;
 enum { LIGHT, REGULAR, MEDIUM, BOLD }; /* w200, w400, w500, w600 and w700 */
 
+/* A glyph's box and advance, remembered. tiny_ttf answers each from three of its caches (the glyph, the next one, the
+ * pair's kerning: a tree search and an LRU move each), and a label asks for every letter twice a strip (its lines
+ * broken, then drawn): a fifth of a scrolled Settings frame. One table for all the fonts, direct mapped (72 KiB); the
+ * fonts live as long as the program, at one size each. */
+static bool (*ttf_glyph_dsc)(const lv_font_t *, lv_font_glyph_dsc_t *, uint32_t, uint32_t);
+static bool glyph_dsc(const lv_font_t *f, lv_font_glyph_dsc_t *g, uint32_t c, uint32_t next)
+{
+	static struct { const lv_font_t *f; uint32_t c, next; bool ok; lv_font_glyph_dsc_t g; } memo[1024], *e;
+	e = &memo[(((uintptr_t)f >> 4) ^ c * 31u ^ next * 1021u) & 1023];
+	if (e->f == f && e->c == c && e->next == next) return *g = e->g, e->ok;
+	e->ok = ttf_glyph_dsc(f, g, c, next);
+	e->f = f, e->c = c, e->next = next, e->g = *g;
+	return e->ok;
+}
+
 static const lv_font_t *font_px(int weight, int size)
 {
-	static struct { int w, s; lv_font_t *f; } cache[64];
+	enum { MAX = 128 };   /* the shots use ~50; fonts are never freed (glyph_dsc's memo keys on them) */
+	static struct { int w, s; lv_font_t *f; } cache[MAX];
 	static int n;
-	for (int i = 0; i < n; i++)
+	int near = 0;
+	for (int i = 0; i < n; i++) {
 		if (cache[i].w == weight && cache[i].s == size) return cache[i].f;
+		int d = cache[i].s - size, dn = cache[near].s - size;
+		if (cache[i].w == weight && (cache[near].w != weight || d * d < dn * dn)) near = i;
+	}
+	if (n == MAX) return cache[near].f;   /* full: the nearest size, not a new font on every call */
 	static const unsigned char *data[] = {roboto_light, roboto_regular, roboto_medium, roboto_bold};
 	const size_t sizes[] = {roboto_light_size, roboto_regular_size, roboto_medium_size, roboto_bold_size};
-	lv_font_t *f = lv_tiny_ttf_create_data_ex(data[weight], sizes[weight], size, LV_FONT_KERNING_NORMAL, 64);
-	if (n < 64) cache[n++] = (typeof(cache[0])){weight, size, f};
+	/* the glyph cache: lv_conf.h's count (a profile's DASH_TTF_GLYPHS) */
+	lv_font_t *f = lv_tiny_ttf_create_data_ex(data[weight], sizes[weight], size, LV_FONT_KERNING_NORMAL,
+						  LV_TINY_TTF_CACHE_GLYPH_CNT);
+	if (f) ttf_glyph_dsc = f->get_glyph_dsc, f->get_glyph_dsc = glyph_dsc;
+	cache[n++] = (typeof(cache[0])){weight, size, f};
 	return f;
 }
 static const lv_font_t *F(int weight, float dp) { return font_px(weight, ri(px(dp))); }
@@ -283,6 +329,7 @@ static lv_obj_t *steer;
 static lv_obj_t *pair_view, *pair_qr, *pair_how, *pair_url_l, *pair_code_l, *pair_left, *pair_or, *pair_cmd, *pair_res, *pair_btn;
 static void steer_draw(lv_event_t *e);
 static void touch_init(void);
+static void swipe(lv_event_t *e);
 static void set_touch(const dash_state_t *s);
 
 static dash_state_t S, P; /* shown now, shown before */
@@ -328,6 +375,9 @@ static lv_obj_t *stats_box, *stat_lab[5], *stat_val[5];
 /* the g-meter */
 static lv_obj_t *gball, *g_val, *g_peak;
 
+/* the phone layout's power card (widgets.dart _PowerDial): the pack's power round a circle, its figure in the middle */
+static lv_obj_t *pdial, *pdial_kw, *pdial_unit, *pdial_range;
+
 /* ---------- edge glows (main.dart _Edge), parallel to the bezel ---------- */
 static lv_image_dsc_t glow_dsc[2];
 static void glow_make(lv_image_dsc_t *d, bool right)
@@ -351,21 +401,34 @@ static void glow_make(lv_image_dsc_t *d, bool right)
 static const float SEC_L0 = 124, SEC_R0 = -56, SEC_SWEEP = 112; /* 120° sectors less 4° each end */
 static const float HALF = 56, DROP = 15, MAX_KW = 160, MIN_KW = -60;
 
-static void arc(lv_layer_t *layer, float start, float sweep, uint32_t c, float width)
+/* An arc of the ring as it is drawn: whole degrees from a0 to a1 (not turned into 0..360), its outer edge's radius and
+ * its width in pixels; c 0: none. Kept as drawn, so a change redraws only the degrees it moved (ring_dirty). */
+typedef struct { int a0, a1, rad, w; uint32_t c; } ring_arc_t;
+static ring_arc_t arc_at(float start, float sweep, uint32_t c, float width)
 {
-	if (sweep <= 0.05f) return;
+	if (sweep <= 0.05f) return (ring_arc_t){0};
+	int a0 = ri(start); /* the radius: LVGL's is the outer edge, Flutter's the stroke's middle */
+	return (ring_arc_t){a0, a0 + (ri(sweep) ? ri(sweep) : 1), ri(G.r + width / 2), width < 1 ? 1 : ri(width), c};
+}
+static void arc_draw(lv_layer_t *layer, ring_arc_t a)
+{
+	if (!a.c) return;
 	lv_draw_arc_dsc_t d;
 	lv_draw_arc_dsc_init(&d);
 	d.center.x = ri(G.cx);
 	d.center.y = ri(G.cy);
-	d.width = width < 1 ? 1 : ri(width);
-	d.radius = ri(G.r + width / 2); /* LVGL: the outer edge; Flutter: the stroke's middle */
-	int a0 = ((ri(start) % 360) + 360) % 360, a1 = a0 + (ri(sweep) ? ri(sweep) : 1); /* LVGL wants 0..360 */
+	d.width = a.w;
+	d.radius = a.rad;
+	int a0 = ((a.a0 % 360) + 360) % 360; /* LVGL wants 0..360 */
 	d.start_angle = a0;
-	d.end_angle = a1 % 360;
-	d.color = rgb(c);
-	d.opa = opa(c);
+	d.end_angle = (a0 + a.a1 - a.a0) % 360;
+	d.color = rgb(a.c);
+	d.opa = opa(a.c);
 	lv_draw_arc(layer, &d);
+}
+static void arc(lv_layer_t *layer, float start, float sweep, uint32_t c, float width)
+{
+	arc_draw(layer, arc_at(start, sweep, c, width));
 }
 static void line(lv_layer_t *layer, float x1, float y1, float x2, float y2, uint32_t c, float w, bool round)
 {
@@ -378,41 +441,35 @@ static void line(lv_layer_t *layer, float x1, float y1, float x2, float y2, uint
 	d.round_start = d.round_end = round;
 	lv_draw_line(layer, &d);
 }
-static void motor(lv_layer_t *layer, float kw, float zero, bool up)
+static ring_arc_t motor(float kw, float zero, bool up)
 {
 	float pos = HALF + DROP, neg = HALF - DROP;
 	if (kw >= 0) {
 		float s = pos * fminf(kw, MAX_KW) / MAX_KW;
-		arc(layer, up ? zero : zero - s, s, ACCENT, G.aw);
-	} else {
-		float s = neg * fmaxf(kw, MIN_KW) / MIN_KW;
-		arc(layer, up ? zero - s : zero, s, REGEN, G.aw);
+		return arc_at(up ? zero : zero - s, s, ACCENT, G.aw);
 	}
+	float s = neg * fmaxf(kw, MIN_KW) / MIN_KW;
+	return arc_at(up ? zero - s : zero, s, REGEN, G.aw);
 }
-static void ring_draw(lv_event_t *e)
+/* The ring's coloured arcs, [side: left, right][the motor's (a rear-motor car's right: its pedal or brake), the regen
+ * the pack cannot take (red past the cap: a motor's share is what the other is not using)]. */
+static void ring_arcs(const dash_state_t *s, ring_arc_t a[2][2])
 {
-	lv_layer_t *layer = lv_event_get_layer(e);
-	const dash_state_t *s = &S;
-	float r = G.r, w = G.aw;
-	arc(layer, SEC_L0, SEC_SWEEP, W24, px(1.5)); /* the empty track: a hairline */
-	arc(layer, SEC_R0, SEC_SWEEP, W24, px(1.5));
-	/* The app's brake in the ring's foot (a red arc and BRAKE APPLIED) is in the pedal's slot under the g-meter
-	 * here (owner); a rear-motor car's brake stays on the ring's right arc. */
-	float zl = SEC_L0 + HALF - DROP, zr = SEC_R0 + HALF + DROP;
-	if (!isnan(s->rear_kw)) motor(layer, s->rear_kw, zl, true);
+	float w = G.aw, zl = SEC_L0 + HALF - DROP, zr = SEC_R0 + HALF + DROP;
+	memset(a, 0, sizeof(ring_arc_t[2][2]));
+	if (!isnan(s->rear_kw)) a[0][0] = motor(s->rear_kw, zl, true);
 	float right = !s->rwd ? s->front_kw : s->brake_pct > 0 ? -s->brake_pct : s->pedal_pct;
 	if (!isnan(right)) {
 		if (s->rwd) {
 			float pct = fmaxf(-100, fminf(100, right));
 			if (pct >= 0) {
-				float a = (HALF + DROP) * pct / 100;
-				arc(layer, zr - a, a, ACCENT, w);
+				float d = (HALF + DROP) * pct / 100;
+				a[1][0] = arc_at(zr - d, d, ACCENT, w);
 			} else
-				arc(layer, zr, (HALF - DROP) * -pct / 100, ALERT, w);
+				a[1][0] = arc_at(zr, (HALF - DROP) * -pct / 100, ALERT, w);
 		} else
-			motor(layer, right, zr, false);
+			a[1][0] = motor(right, zr, false);
 	}
-	/* Regen the pack cannot take now, red past the cap: a motor's share is what the other is not using. */
 	if (!isnan(s->regen_cap_kw)) {
 		float total = s->regen_cap_kw;
 		for (int side = 0; side < (s->rwd ? 1 : 2); side++) {
@@ -420,10 +477,130 @@ static void ring_draw(lv_event_t *e)
 			float kw = total - fmaxf(0, isnan(other) ? 0 : -other);
 			float at = fmaxf(0, fminf(kw, -MIN_KW)) / -MIN_KW * (HALF - DROP), rest = HALF - DROP - at;
 			if (rest <= 0) continue;
-			if (side == 0) arc(layer, zl - (HALF - DROP), rest, ALERT, w * 0.3f);
-			else arc(layer, zr + at, rest, ALERT, w * 0.3f);
+			if (side == 0) a[0][1] = arc_at(zl - (HALF - DROP), rest, ALERT, w * 0.3f);
+			else a[1][1] = arc_at(zr + at, rest, ALERT, w * 0.3f);
 		}
 	}
+}
+/* ---------- the speedometer (widgets.dart _Speedo, _SpeedoScale, _SpeedoNeedle): the ring's other face ----------
+ * Basic's ring and the split's, swiped to (main.dart _ring's pages, kept as ring_page): a gas car's speedometer, one arc
+ * over the top (260°, its ends 40° under the level) dashed every 10 and numbered every 50 km/h (20 mph) up to past the
+ * car's top speed, the dial 0.15 of the radius lower than the ring's centre; the figure small inside it on the left, the
+ * limit inside its top right, the needle over them (on a live speed); the gear a little higher than the power ring's,
+ * the cue under it. The assist disc and the air outside stay put. No glow trailing the needle: the app's is its
+ * animation's lag, and the dash draws the speed as it is. */
+#define SPEEDO_A0 140.0f
+#define SPEEDO_SWEEP 260.0f
+static bool speedo(void) { return G.phone && ST.ring_page == DASH_RING_SPEEDO && (view == DASH_VIEW_PROJECT || ST.basic); }
+static float speedo_cy(void) { return G.cy + G.r * 0.15f; }
+static int speedo_top(void) { return S.kph ? 250 : 160; } /* the arc's end: past the car's top speed */
+static void speedo_draw(lv_layer_t *layer)
+{
+	float r = G.r, w = G.aw, cy = speedo_cy(), inner = r - w / 2 - px(3);
+	lv_draw_arc_dsc_t d;
+	lv_draw_arc_dsc_init(&d);
+	d.center.x = ri(G.cx), d.center.y = ri(cy);
+	d.width = ri(w * 0.5f), d.radius = ri(r + w * 0.25f); /* LVGL: the outer edge; the app's: the stroke's middle on r */
+	d.start_angle = 140, d.end_angle = 40;                /* SPEEDO_A0, and on round by SPEEDO_SWEEP */
+	d.color = rgb(W24), d.opa = opa(W24);
+	lv_draw_arc(layer, &d);
+	int hi = speedo_top(), major = hi > 200 ? 50 : 20;
+	const lv_font_t *f = font_px(REGULAR, ri(r * 0.085f));
+	float lh = lv_font_get_line_height(f);
+	lv_draw_label_dsc_t ld;
+	lv_draw_label_dsc_init(&ld);
+	ld.font = f, ld.color = rgb(W70), ld.opa = opa(W70), ld.align = LV_TEXT_ALIGN_CENTER;
+	for (int v = 0; v <= hi; v += 10) { /* a dash every 10, longer and numbered every major */
+		bool mj = v % major == 0;
+		float a = DEG(SPEEDO_A0 + SPEEDO_SWEEP * v / hi), c = cosf(a), sn = sinf(a), len = r * (mj ? 0.09f : 0.045f);
+		line(layer, G.cx + c * inner, cy + sn * inner, G.cx + c * (inner - len), cy + sn * (inner - len), mj ? W70 : W38,
+		     px(mj ? 2 : 1.2f), false);
+		if (!mj) continue;
+		char t[8];
+		snprintf(t, sizeof t, "%d", v);
+		float tx = G.cx + c * (inner - r * 0.17f), ty = cy + sn * (inner - r * 0.17f);
+		lv_area_t ta = {ri(tx - r * 0.2f), ri(ty - lh / 2), ri(tx + r * 0.2f), ri(ty + lh / 2)};
+		ld.text = t, ld.text_local = 1;
+		lv_draw_label(layer, &ld, &ta);
+	}
+}
+static float needle_at = NAN; /* the needle as drawn: its place on the arc (0..1, in half degrees); NAN none */
+static void needle_box(float f, lv_area_t *a) /* the hub to the tip, with the shadow's drop and the hub's round */
+{
+	float an = DEG(SPEEDO_A0 + SPEEDO_SWEEP * f), len = G.r + G.aw / 2, cy = speedo_cy(), m = fmaxf(G.r * 0.08f, px(5)) + px(3);
+	float x1 = G.cx + cosf(an) * len, y1 = cy + sinf(an) * len;
+	*a = (lv_area_t){ri(fminf(G.cx, x1) - m), ri(fminf(cy, y1) - m), ri(fmaxf(G.cx, x1) + m), ri(fmaxf(cy, y1) + m)};
+}
+static void speedo_needle(lv_event_t *e) /* the ring's DRAW_POST: over the figure and the limit, as the app's */
+{
+	if (!speedo() || isnan(needle_at)) return;
+	lv_layer_t *layer = lv_event_get_layer(e);
+	float an = DEG(SPEEDO_A0 + SPEEDO_SWEEP * needle_at), len = G.r + G.aw / 2, cy = speedo_cy();
+	float x1 = G.cx + cosf(an) * len, y1 = cy + sinf(an) * len, sx = px(1.5f), sy = px(2);
+	line(layer, G.cx + sx, cy + sy, x1 + sx, y1 + sy, 0x8A000000u, px(6), true); /* its shadow: unblurred, so lighter */
+	line(layer, G.cx, cy, x1, y1, WHITE, px(3.5f), true);
+	lv_draw_rect_dsc_t rd; /* the hub it turns on: a dark cap, faintly rimmed */
+	lv_draw_rect_dsc_init(&rd);
+	rd.radius = LV_RADIUS_CIRCLE;
+	rd.bg_color = rgb(0xFF2A2A2Au);
+	rd.border_color = rgb(W24), rd.border_opa = opa(W24), rd.border_width = ri(px(1));
+	float hr = G.r * 0.08f;
+	lv_area_t h = {ri(G.cx - hr), ri(cy - hr), ri(G.cx + hr) - 1, ri(cy + hr) - 1};
+	lv_draw_rect(layer, &rd, &h);
+}
+/* The needle moved (by half a degree), came or went: its old place and its new one redrawn, not the whole face. */
+static void needle_dirty(const dash_state_t *s)
+{
+	float f = s->live && !isnan(s->speed) ? fmaxf(0, fminf(1, s->speed / speedo_top())) : NAN;
+	if (!isnan(f)) f = roundf(f * SPEEDO_SWEEP * 2) / (SPEEDO_SWEEP * 2);
+	if (isnan(f) ? isnan(needle_at) : f == needle_at) return;
+	lv_area_t a;
+	if (!isnan(needle_at)) needle_box(needle_at, &a), lv_obj_invalidate_area(ring, &a);
+	needle_at = f;
+	if (!isnan(f)) needle_box(f, &a), lv_obj_invalidate_area(ring, &a);
+}
+
+static void ring_draw(lv_event_t *e)
+{
+	lv_layer_t *layer = lv_event_get_layer(e);
+	if (speedo()) {
+		speedo_draw(layer);
+		return;
+	}
+	const dash_state_t *s = &S;
+	float r = G.r, w = G.aw;
+	arc(layer, SEC_L0, SEC_SWEEP, W24, px(1.5)); /* the empty track: a hairline */
+	arc(layer, SEC_R0, SEC_SWEEP, W24, px(1.5));
+	/* The app's brake in the ring's foot (a red arc and BRAKE APPLIED; WiFi's, two motors) is in the pedal's slot
+	 * under the g-meter on the Dash; the phone layout has it here, as the app. A rear-motor car's brake stays
+	 * on the ring's right arc. */
+	if (G.phone && s->wifi_live && !s->rwd && s->brake_pct > 0) {
+		float room = 90 - (SEC_R0 + SEC_SWEEP) - 10, reach = room * fminf(s->brake_pct, 100) / 100;
+		arc(layer, 90 - reach, 2 * reach, ALERT, w * 0.35f);
+		/* BRAKE APPLIED under it, each letter's top on the circle, turned to its tangent (gauge.dart _curved) */
+		const lv_font_t *f = font_px(BOLD, ri(r * 0.04f));
+		const char *t = "BRAKE APPLIED";
+		float ls = r * 0.004f, rad = r + w * 0.35f, total = 0, wd[16];
+		for (int i = 0; t[i]; i++) total += wd[i] = lv_font_get_glyph_width(f, t[i], t[i + 1]) + ls;
+		float a = DEG(90) + total / 2 / rad;
+		for (int i = 0; t[i]; i++) {
+			float mid = a - wd[i] / 2 / rad, b = rad + ascent(f);
+			lv_draw_letter_dsc_t d;
+			lv_draw_letter_dsc_init(&d);
+			d.font = f;
+			d.color = rgb(ALERT);
+			d.unicode = t[i];
+			d.rotation = ri((mid * 180 / (float)M_PI - 90) * 10);
+			lv_point_t pt = {ri(G.cx + b * cosf(mid)), ri(G.cy + b * sinf(mid))};
+			if (t[i] != ' ') lv_draw_letter(layer, &d, &pt);
+			a -= wd[i] / rad;
+		}
+	}
+	float zl = SEC_L0 + HALF - DROP, zr = SEC_R0 + HALF + DROP;
+	ring_arc_t arcs[2][2];
+	ring_arcs(s, arcs);
+	arc_draw(layer, arcs[0][0]), arc_draw(layer, arcs[1][0]); /* the motors, then the regen caps over them */
+	arc_draw(layer, arcs[0][1]), arc_draw(layer, arcs[1][1]);
 	for (int i = 0; i < 2; i++) { /* zero ticks */
 		float a = DEG(i ? zr : zl), c = cosf(a), sn = sinf(a);
 		line(layer, G.cx + c * (r - w), G.cy + sn * (r - w), G.cx + c * (r + w * 0.4f), G.cy + sn * (r + w * 0.4f), W54, px(2), false);
@@ -431,15 +608,45 @@ static void ring_draw(lv_event_t *e)
 }
 
 static void ring_ext(lv_event_t *e) { lv_event_set_ext_draw_size(e, ri(G.aw)); } /* BRAKE APPLIED, under the ring */
+/* A figure's reach past its label's box, for LVGL's redraw round it. LVGL gives a label a quarter of its line height
+ * round its box (for letters that lean out: italics) and redraws all of it with each new text: round the speed, more
+ * than its box again, every new speed. The digits, the point, the minus and the dash reach out by this much at most
+ * (by none at the sizes drawn). Set again with each new font (the speed's changes with its digits): LVGL asks only when
+ * the box changes. */
+static void figure_ext(lv_event_t *e)
+{
+	const lv_font_t *f = lv_obj_get_style_text_font(lv_event_get_target(e), 0);
+	static const uint32_t ch[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '-', 0x2014};
+	int32_t m = 0;
+	for (size_t i = 0; i < sizeof ch / sizeof ch[0]; i++) {
+		lv_font_glyph_dsc_t g;
+		if (!lv_font_get_glyph_dsc(f, &g, ch[i], 0)) continue;
+		int32_t top = f->line_height - f->base_line - g.box_h - g.ofs_y; /* its box's top in the line (lv_draw_label) */
+		m = LV_MAX(m, LV_MAX(LV_MAX(-g.ofs_x, g.ofs_x + g.box_w - g.adv_w), LV_MAX(-top, top + g.box_h - f->line_height)));
+	}
+	*(int32_t *)lv_event_get_param(e) = m; /* in place of the label's own: a larger one would be kept */
+}
+static void figure_font(lv_obj_t *l, const lv_font_t *f)
+{
+	if (lv_obj_get_style_text_font(l, 0) == f) return;
+	lv_obj_set_style_text_font(l, f, 0);
+	lv_obj_refresh_ext_draw_size(l);
+}
 
 /* The ring's geometry, set per frame so the full dash and the projection strip can each size and place the one ring.
  * The full dash: the app's radius, centred on the screen. The strip (right third of the phone-map split): centred in
  * the strip, as big as the short height leaves once the top and bottom rows are taken. */
 static void ring_geom_full(void)
 {
-	G.r = (G.H - 12 * G.k) / (0.83f * 1.0425f + 1.03f);
-	G.cy = G.H / 2;
-	G.D = 2 * (G.r + px(6));
+	if (G.phone) { /* the app's: as tall as the row, the arcs 6 dp in (gauge.dart RingGauge.radiusIn) */
+		G.D = G.row_b - G.mt;
+		G.r = G.D / 2 - px(6);
+		G.cy = G.mt + G.D / 2;
+	} else {
+		G.r = (G.H - 12 * G.k) / (0.83f * 1.0425f + 1.03f);
+		G.cy = G.H / 2;
+		G.D = 2 * (G.r + px(6));
+	}
 	G.aw = G.r * 0.085f;
 }
 #define PJ_TOP px(34)                    /* the gear + battery row */
@@ -460,7 +667,11 @@ static void ring_figs_geom(float dy) /* dy: how far the speed column sits lower 
 {
 	if (lv_obj_get_style_width(ring, 0) != ri(G.D)) lv_obj_set_size(ring, ri(G.D), ri(G.D)); /* full and compact sizes */
 	float side = G.D * 0.16f, k = side / px(52);
-	place(limit_sign, (G.D - side) / 2, G.D * 0.1f, side, side);
+	if (speedo()) { /* the speedometer's: 0.22 of the radius, inside its arc's top right, under its numbers */
+		side = G.r * 0.22f, k = side / px(52);
+		place(limit_sign, G.D / 2 + G.r * 0.3f, G.D / 2 - G.r * 0.31f, side, side);
+	} else
+		place(limit_sign, (G.D - side) / 2, G.D * 0.1f, side, side);
 	SET_NUM(limit_sign, lv_obj_get_style_border_width, lv_obj_set_style_border_width, ri(px(5) * k));
 	const lv_font_t *lf = font_px(BOLD, ri(px(20) * k));
 	if (lv_obj_get_style_text_font(limit_l, 0) != lf) lv_obj_set_style_text_font(limit_l, lf, 0);
@@ -468,7 +679,8 @@ static void ring_figs_geom(float dy) /* dy: how far the speed column sits lower 
 	lv_obj_t *mt[4] = {rear_v, front_v, rear_u, front_u};
 	const lv_font_t *mf[4] = {fv, fv, fu, fu};
 	for (int i = 0; i < 4; i++) {
-		if (lv_obj_get_style_text_font(mt[i], 0) != mf[i]) lv_obj_set_style_text_font(mt[i], mf[i], 0);
+		if (i < 2) figure_font(mt[i], mf[i]);
+		else if (lv_obj_get_style_text_font(mt[i], 0) != mf[i]) lv_obj_set_style_text_font(mt[i], mf[i], 0);
 		float x = (i % 2 ? 1 : -1) * G.r * 0.72f, y = (i < 2 ? -G.r * 0.06f : G.r * 0.155f) + dy;
 		align(mt[i], LV_ALIGN_CENTER, ri(x), ri(y));
 	}
@@ -526,7 +738,8 @@ static void gball_draw(lv_event_t *e)
 		lv_draw_fill_dsc_t fd;
 		lv_draw_fill_dsc_init(&fd);
 		fd.color = rgb(ACCENT);
-		for (int y = (int)floorf(cy - b); y <= (int)ceilf(cy + ac); y++) {
+		const lv_area_t *clip = &layer->_clip_area; /* only the rows in the part being redrawn: three fills a row */
+		for (int y = LV_MAX((int)floorf(cy - b), clip->y1); y <= LV_MIN((int)ceilf(cy + ac), clip->y2); y++) {
 			float dy = y + 0.5f - cy, ry = dy < 0 ? b : ac;
 			if (ry <= 0 || fabsf(dy) > ry) continue;
 			float hw = l * sqrtf(1 - dy * dy / (ry * ry));
@@ -571,6 +784,83 @@ static void gball_draw(lv_event_t *e)
 }
 
 static void gball_ext(lv_event_t *e) { lv_event_set_ext_draw_size(e, ri(px(14))); } /* the dot: 5 dp x its growth */
+/* The box round a trail of n points as gball_draw puts them on the ball [a]: its lines and the dot at its head. */
+static void trail_box(const lv_area_t *a, const float (*t)[2], int n, lv_area_t *box)
+{
+	float side = a->x2 - a->x1 + 1, cx = a->x1 + side / 2, cy = a->y1 + side / 2, r = side / 2 - px(1);
+	float gk = fmaxf(1, r / px(35)), m = fmaxf(px(2) * gk / 2, 5 * gk * px(1)) + 2; /* a line's half width, the dot */
+	float x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
+	for (int i = 0; i < n; i++) {
+		float gx = t[i][0], gy = t[i][1], dist = sqrtf(gx * gx + gy * gy);
+		if (dist > 1) gx /= dist, gy /= dist;
+		x0 = fminf(x0, cx + gx * r), y0 = fminf(y0, cy + gy * r), x1 = fmaxf(x1, cx + gx * r), y1 = fmaxf(y1, cy + gy * r);
+	}
+	*box = (lv_area_t){(int32_t)floorf(x0 - m), (int32_t)floorf(y0 - m), (int32_t)ceilf(x1 + m), (int32_t)ceilf(y1 + m)};
+}
+/* The ball redraws when its picture moved on: a trail point or a peak other than the last drawn. Parked, or the g
+ * holding for the trail's ten frames, it is the same picture again: it was redrawn all the same, every frame it showed
+ * (three quarters of a parked frame's work with the full layout, nine tenths with the drive card's bigger ball). The
+ * trail alone moving, only where it was and where it is now: the whole ball and its margin for the dot were ten times
+ * the pixels, every frame the g moved. */
+static void gball_dirty(const dash_state_t *s)
+{
+	static float was[TRAIL][2], was_pk[3];
+	static int was_n;
+	static lv_area_t was_at; /* the ball's box when the trail was last drawn */
+	float pk[3] = {s->g_peak_brake, s->g_peak_accel, s->g_peak_lat};
+	if (trail_n == was_n && !memcmp(trail, was, sizeof trail[0] * trail_n) && !memcmp(pk, was_pk, sizeof pk)) return;
+	lv_area_t at, b;
+	lv_obj_get_coords(gball, &at);
+	if (memcmp(pk, was_pk, sizeof pk) || memcmp(&at, &was_at, sizeof at)) lv_obj_invalidate(gball); /* the reach too */
+	else {
+		if (was_n) trail_box(&at, (const float (*)[2])was, was_n, &b), lv_obj_invalidate_area(gball, &b);
+		if (trail_n) trail_box(&at, (const float (*)[2])trail, trail_n, &b), lv_obj_invalidate_area(gball, &b);
+	}
+	memcpy(was, trail, sizeof was), memcpy(was_pk, pk, sizeof pk), was_n = trail_n, was_at = at;
+}
+
+/* ---------- the power card (widgets.dart _PowerDial, _PowerFace): the phone layout's sixth card ----------
+ * After the S3XY Dash's: the pack's power as a white dash round a thin track over the top, filled inside from the top to
+ * it (draw clockwise in the accent, regen green the other way; 300 kW at either end), its figure in the middle, and the
+ * battery as an arc round the foot, under the range. Its circle the ring's and the drive card's (6 dp in). */
+#define PD_ENDS 300.0f /* kW either way: the arc's ends */
+#define PD_REACH 120.0f /* the power's either way from the top: to 10° short of the battery's 100° round the foot */
+static float pd_p = NAN; /* as drawn: the power, of the way to an end (half-degree steps); NAN unknown */
+static int pd_soc = -1;  /* as drawn: the battery, % (-1 unknown) */
+static void pdial_draw(lv_event_t *e)
+{
+	lv_layer_t *layer = lv_event_get_layer(e);
+	lv_area_t a;
+	lv_obj_get_coords(lv_event_get_target(e), &a);
+	float side = lv_area_get_width(&a), cx = a.x1 + side / 2, cy = a.y1 + side / 2, r = side / 2 - px(6), tw = r * 0.035f;
+	lv_draw_arc_dsc_t d;
+	lv_draw_arc_dsc_init(&d);
+	d.center.x = ri(cx), d.center.y = ri(cy);
+#define PD_ARC(a0, a1, rad, wd, c, round) do { d.start_angle = (((int)lroundf(a0)) % 360 + 360) % 360; \
+		d.end_angle = (((int)lroundf(a1)) % 360 + 360) % 360; d.radius = ri((rad) + (wd) / 2); d.width = ri(fmaxf(1, wd)); \
+		d.color = rgb(c), d.opa = opa(c), d.rounded = round; if (lroundf(a1) != lroundf(a0)) lv_draw_arc(layer, &d); } while (0)
+	PD_ARC(270 - PD_REACH, 270 + PD_REACH, r, tw, W24, 1); /* the power's track */
+	float p = pd_p;
+	if (!isnan(p) && fabsf(p) > 0.002f) { /* the fill: from the top to it, three quarters of the dash's depth */
+		float band = r * 0.26f * 0.75f, mid = r * (1 + 0.035f / 2) - band / 2;
+		PD_ARC(p > 0 ? 270 : 270 + PD_REACH * p, p > 0 ? 270 + PD_REACH * p : 270, mid, band, p < 0 ? REGEN : ACCENT, 0);
+	}
+	if (!isnan(p)) { /* the dash, square at its inner end, round at the track; its shadow unblurred, so lighter */
+		float an = DEG(270 + PD_REACH * p), c = cosf(an), sn = sinf(an), x1 = cx + c * r, y1 = cy + sn * r;
+		float x0 = cx + c * r * (1 - 0.26f), y0 = cy + sn * r * (1 - 0.26f), sx = px(1.5f), sy = px(2);
+		line(layer, x1 + sx, y1 + sy, x0 + sx, y0 + sy, 0x8A000000u, px(5), false);
+		line(layer, x1, y1, x0, y0, WHITE, px(3), false);
+		lv_draw_rect_dsc_t rd;
+		lv_draw_rect_dsc_init(&rd);
+		rd.radius = LV_RADIUS_CIRCLE;
+		rd.bg_color = rgb(WHITE);
+		lv_area_t tip = {ri(x1 - px(1.5f)), ri(y1 - px(1.5f)), ri(x1 + px(1.5f)) - 1, ri(y1 + px(1.5f)) - 1};
+		lv_draw_rect(layer, &rd, &tip);
+	}
+	PD_ARC(40, 140, r, tw, W24, 1); /* the battery: round the foot from its left, under the range */
+	if (pd_soc > 0) PD_ARC(140 - 100 * pd_soc / 100.0f, 140, r, tw, ACCENT, 1);
+#undef PD_ARC
+}
 /* Braking: the car from above, its four tyres (FL FR / RL RR) joined by the axles and a spine. Each tyre is a bar in a
  * red outline, filled from the bottom to its own wheel's share (0x185's torque per wheel, on the total's scale: equal
  * wheels read the total), its figure beside it: which wheel the brake, or the stability control, is on. */
@@ -759,7 +1049,10 @@ static const lv_image_dsc_t *chip_icons[10] = {&ic_trunk, &ic_mirror, &ic_door_f
 
 /* Each side column: five chips, then the links (left) or the car panel button (right), spaced evenly in the full
  * height. */
-static float chip_gap(void) { return (G.chip_area - 5 * PC(48) - PL(44)) / 7; }
+static float chip_gap(void) /* the phone layout: five chips in the row, the links in the bar under it */
+{
+	return G.phone ? (G.chip_area - 5 * PC(48)) / 6 : (G.chip_area - 5 * PC(48) - PL(44)) / 7;
+}
 static void chip_geom(int i, float *x, float *y)
 {
 	float item = PC(48), gap = chip_gap(); /* Column spaceEvenly, each chip 3 dp padded, the links' row the last */
@@ -810,12 +1103,15 @@ void dash_ui_init(lv_obj_t *scr)
 	lv_display_t *disp = lv_obj_get_display(scr);
 	G.W = lv_display_get_horizontal_resolution(disp);
 	G.H = lv_display_get_vertical_resolution(disp);
+	G.phone = DASH_PHONE_LAYOUT; /* the device profile's layout set: the Dash's strip or the phone app's */
 	G.k = G.H / 480;
 	G.ml = px(14), G.mt = px(6), G.mb = px(10);
-	G.chip_area = G.H - G.mt - G.mb;
-	G.link_top = G.mt + 6 * chip_gap() + 5 * PC(48); /* the side columns' last row */
-	/* The ring: the radius the app's foot brake left room for (r 247 at 480, 1.28 x the app's at 1536 dp; the owner
-	 * keeps it), centred on the screen both ways now that the foot brake is under the g-meter. At 480 its arcs end
+	G.row_b = G.phone ? G.H - G.mb - PL(44) - px(6) : G.H; /* main.dart: the bar 6 dp under the row */
+	G.chip_area = (G.phone ? G.row_b : G.H - G.mb) - G.mt;
+	/* the side columns' last row; the phone layout's bar */
+	G.link_top = G.phone ? G.H - G.mb - PL(44) : G.mt + 6 * chip_gap() + 5 * PC(48);
+	/* The ring: the radius the app's foot brake left room for (r 247 at 480, 1.28 x the app's at 1536 dp, kept as
+	 * it is), centred on the screen both ways now that the foot brake is under the g-meter. At 480 its arcs end
 	 * 26 px from the top and bottom, the limit sign starts at 36, the gear letter ends at 469. */
 	ring_geom_full();
 	G.cx = G.W / 2; /* until the first layout */
@@ -892,11 +1188,14 @@ void dash_ui_init(lv_obj_t *scr)
 		float cy = G.link_top + PL(22);
 		int car_x = ri(G.W - G.ml - inset(cy) - PL(20) - PL(12)), car_y = ri(cy - PL(12));
 		lv_obj_set_pos(car_panel, car_x, car_y);
+		car_at[0] = car_x, car_at[1] = car_y;
 		/* Android Auto on demand, a gap to the car panel's left: the Android Auto logo, outline (gen/aa_icon.c, from
 		 * assets/android_auto.svg), a 36 px button as ic_car_panel, level with it. Cert-gated. */
 		aa_btn = icon(root, &ic_aa, WHITE);
 		lv_obj_set_pos(aa_btn, car_x - ri(PL(16)) - (int)ic_aa.header.w, car_y);
 		show(aa_btn, false);
+		/* the phone layout's route pill ends at the AA button's 40 dp box (the app's Maps IconButton), shown or not */
+		car_bar_r = car_x - ri(PL(16)) - ic_aa.header.w / 2.0f - PL(20);
 	}
 
 	/* Left: the lights row over the car. */
@@ -905,9 +1204,18 @@ void dash_ui_init(lv_obj_t *scr)
 	lv_obj_set_overflow_visible(cab.grp, true);
 	cab.car_type = -1;
 
+	/* basic's page dots (hidden in the full layout) */
+	for (int i = 0; i < 4 && G.phone; i++)
+		for (int c = 0; c < DASH_CARDS; c++) {
+			dots[i][c] = box(root);
+			lv_obj_set_style_radius(dots[i][c], LV_RADIUS_CIRCLE, 0);
+			show(dots[i][c], false);
+		}
+
 	/* The route column. */
 	dest_card = box(root);
-	border(dest_card, 0x30FFFFFF, 1);
+	if (G.phone) fill(dest_card, 0x24FFFFFF); /* the app's bar: white at 0.14 */
+	else border(dest_card, 0x30FFFFFF, 1);
 	lv_obj_set_style_radius(dest_card, ri(PN(12)), 0);
 	dest_head = label(dest_card, FS(REGULAR, 10, UI_S_NAV), W70);
 	lv_obj_set_style_text_letter_space(dest_head, ri(PN(1.5)), 0);
@@ -924,6 +1232,7 @@ void dash_ui_init(lv_obj_t *scr)
 	lv_obj_add_event_cb(ring, ring_ext, LV_EVENT_REFR_EXT_DRAW_SIZE, NULL);
 	lv_obj_set_overflow_visible(ring, true);
 	speed_l = label(ring, F(LIGHT, 100), WHITE);
+	lv_obj_add_event_cb(speed_l, figure_ext, LV_EVENT_REFR_EXT_DRAW_SIZE, NULL);
 	unit_l = label(ring, FS(REGULAR, 15, UI_S_RING), W60);
 	lv_obj_set_style_text_letter_space(unit_l, ri(PR(3)), 0);
 	gear_l = label(ring, FS(BOLD, 28, UI_S_RING), WHITE);
@@ -940,6 +1249,8 @@ void dash_ui_init(lv_obj_t *scr)
 	const lv_font_t *fv = font_px(LIGHT, ri(G.r * 0.16f)), *fu = font_px(MEDIUM, ri(G.r * 0.085f));
 	rear_v = label(ring, fv, WHITE);
 	front_v = label(ring, fv, WHITE);
+	lv_obj_add_event_cb(rear_v, figure_ext, LV_EVENT_REFR_EXT_DRAW_SIZE, NULL);
+	lv_obj_add_event_cb(front_v, figure_ext, LV_EVENT_REFR_EXT_DRAW_SIZE, NULL);
 	rear_u = label(ring, fu, W70);
 	front_u = label(ring, fu, W70);
 	lv_obj_t *mt[] = {rear_v, front_v, rear_u, front_u};
@@ -991,6 +1302,17 @@ void dash_ui_init(lv_obj_t *scr)
 	brake_temps = box(root); /* Bluetooth alone: the brakes' temperatures in the ball's place */
 	lv_obj_add_event_cb(brake_temps, brakes_draw, LV_EVENT_DRAW_MAIN, NULL);
 	show(brake_temps, false);
+	if (G.phone) { /* the power card (basic's and the split's: cards_parts shows it), the speedometer's needle */
+		pdial = box(root);
+		lv_obj_add_event_cb(pdial, pdial_draw, LV_EVENT_DRAW_MAIN, NULL);
+		pdial_kw = label(pdial, F(BOLD, 40), WHITE); /* sized to the dial as it is placed (pdial_set) */
+		lv_obj_add_event_cb(pdial_kw, figure_ext, LV_EVENT_REFR_EXT_DRAW_SIZE, NULL);
+		pdial_unit = label(pdial, F(REGULAR, 14), W54);
+		lv_label_set_text(pdial_unit, "kW");
+		pdial_range = label(pdial, F(REGULAR, 15), W70);
+		show(pdial, false);
+		lv_obj_add_event_cb(ring, speedo_needle, LV_EVENT_DRAW_POST, NULL);
+	}
 	touch_init();
 }
 
@@ -1053,7 +1375,12 @@ static void set_link(typeof(link_w) *l, int slot, const lv_image_dsc_t *big, con
 	if (lv_image_get_scale(l->icon) != scale) lv_image_set_scale(l->icon, scale);
 	float cy = G.link_top + PL(22), x0 = G.ml + inset(cy); /* the left column's last row, from its stepped edge */
 	float x = x0 + (slot == 0 ? 0 : (S.wifi == WIFI_LIVE ? PL(36) : PL(60))), w = settled ? PL(36) : PL(60), y = G.link_top;
-	if (view == DASH_VIEW_PROJECT) { /* the split: the slanted strip left of the picture, stacked, right edge on it; */
+	if (view == DASH_VIEW_PROJECT && G.phone) { /* the phone layout's split: stacked at the bar's left end over the
+						    * picture, the buttons the rest of it; one width for every state (status only here) */
+		w = PL(60), x = x0, y = (PJ_RGN_Y - 2 * PL(44) - PL(4)) / 2 + slot * (PL(44) + PL(4));
+	} else if (G.phone && ST.basic) { /* basic: the bar under the ring, from its left end */
+		x += G.cx - G.D / 2 - x0;
+	} else if (view == DASH_VIEW_PROJECT) { /* the split: the slanted strip left of the picture, stacked, right edge on it; */
 		y = G.H - G.mb - (2 - slot) * PL(44) - (1 - slot) * PL(6); /* one width for every state: centred on one line, */
 		w = PL(60), x = PJ_RGN_X - px(4) - w;                         /* and never resized across into the picture */
 	}
@@ -1117,7 +1444,8 @@ const char *dash_ui_aa_cert = "/etc/wattline/aa.crt", *dash_ui_aa_up = "/run/das
 static const char *aa_start_lock = "/run/dash-aa.starting";   /* dash-aa start holds it until it ends, up or not */
 static bool aa_pending;    /* tapped start, waiting for /run/dash-aa to appear: shown on at once */
 static bool aa_stopping;   /* tapped stop (or Exit), waiting for /run/dash-aa to go: shown off at once */
-#define AA_STOP_MS 35000   /* dash-aa stop's longest: a sync, its hook 12 s, the kills 5 s, two bluetoothctl calls 5 s each */
+#define AA_STOP_MS 45000   /* dash-aa stop's longest: a sync, its hook 12 s, the receiver's goodbye and the kills 5 s, the
+                             access point's 5 s, two bluetoothctl calls 5 s each, and a margin */
 #define AA_START_MS 90000  /* dash-aa start's longest: the Wi-Fi lock 30 s, the AP, its hook 12 s, bluetoothctl, a sync */
 static uint32_t aa_stop_at;
 #define AA_BLUE 0xFF03A9F4u /* Android Auto's blue (its logo's): the button while AA is on */
@@ -1185,6 +1513,7 @@ static void set_links(const dash_state_t *s)
 	set_link(&link_b, 1, bi, &ic_bt_s, bc, bw, s->bt == BT_LEAN || s->bt == BT_FULL, -1, s->bt_secs, s->bt_span);
 }
 
+static char lights_shown[96] = "-"; /* the lamps' row as built and placed ("-": build it again) */
 static void set_lights(const dash_state_t *s, float cx, float top)
 {
 	struct { const char *w; const lv_image_dsc_t *i; uint32_t c; } lamp[4];
@@ -1197,9 +1526,8 @@ static void set_lights(const dash_state_t *s, float cx, float top)
 	char key[96] = "";
 	for (int i = 0; i < n; i++) snprintf(key + strlen(key), sizeof key - strlen(key), "%s%x", lamp[i].w, (unsigned)lamp[i].c);
 	snprintf(key + strlen(key), sizeof key - strlen(key), "@%d,%d", ri(cx), ri(top));
-	static char shown[96] = "-";
-	if (!strcmp(key, shown)) return;
-	strcpy(shown, key);
+	if (!strcmp(key, lights_shown)) return;
+	strcpy(lights_shown, key);
 	lv_obj_clean(lights_row);
 	const lv_font_t *f = FS(REGULAR, 12, UI_S_LIGHTS);
 	float x = 0, ls = PLI(1), wd[4];
@@ -1388,6 +1716,8 @@ static void stat_run(lv_obj_t *run, const lv_image_dsc_t *i, const char *text, u
 	run_set(run, p, note && note[0] ? 3 : 2);
 }
 
+/* The phone layout's route: in the full layout's bar, else a card (basic's; the split's, its bar has the buttons). */
+static bool route_bar(void) { return view != DASH_VIEW_PROJECT && !ST.basic; }
 static void set_route(const dash_state_t *s, float x, float cy)
 {
 	char b[6][32], n[6][16];
@@ -1428,7 +1758,58 @@ static void set_route(const dash_state_t *s, float x, float cy)
 		else n[rows][0] = 0;
 		ic[rows] = &ic_battery, col[rows++] = !isnan(s->arrive_pct) && s->arrive_pct < 10 ? ALERT : WHITE;
 	}
-	/* Laid out as the owner's mockup (the header, the place, then a row each), scaled with the column; the rows
+	if (G.phone && route_bar()) { /* the app's bar (widgets.dart _Nav): DESTINATION (and the place after it) over the figures in one
+			* row, 20 dp apart, centred on the pill 12 dp in; the gaps close up rather than overflow */
+		float w = G.bar_r - G.bar_l, ph = PN(12), pv = PN(s->dest[0] ? 1 : 3), gap = PN(20), tot, rh;
+		const lv_font_t *hf = lv_obj_get_style_text_font(dest_head, 0), *nf = lv_obj_get_style_text_font(dest_name, 0);
+		/* too narrow (the split's bar): the lesser figures go, as the app's one-line route does */
+		const lv_image_dsc_t *drop[] = {&ic_route, &ic_bolt, &ic_flag, &ic_battery, &ic_ecar};
+		for (int d = 0;; d++) {
+			tot = 0, rh = 0;
+			for (int i = 0; i < rows; i++) {
+				stat_run(dest_row[i], ic[i], b[i], col[i], n[i]);
+				tot += lv_obj_get_style_width(dest_row[i], 0);
+				rh = fmaxf(rh, lv_obj_get_style_height(dest_row[i], 0));
+			}
+			if (rows <= 1 || tot + (rows - 1) * PN(8) <= w - 2 * ph || d == (int)(sizeof drop / sizeof drop[0])) break;
+			for (int i = 0; i < rows; i++)
+				if (ic[i] == drop[d]) {
+					for (int j = i; j < rows - 1; j++)
+						memcpy(b[j], b[j + 1], 32), memcpy(n[j], n[j + 1], 16), ic[j] = ic[j + 1], col[j] = col[j + 1];
+					rows--;
+					break;
+				}
+		}
+		for (int i = 0; i < 6; i++) show(dest_row[i], i < rows);
+		if (rows > 1 && tot + (rows - 1) * gap > w - 2 * ph) gap = fmaxf(0, (w - 2 * ph - tot) / (rows - 1));
+		lv_point_t hs;
+		lv_text_get_size(&hs, "DESTINATION", hf, ri(PN(1.5)), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+		float l1 = lv_font_get_line_height(hf), nw = 0, after = PN(10 + 15 + 4); /* 10 dp, the pin, 4 dp */
+		show(dest_name, s->dest[0]);
+		show(dest_pin, s->dest[0]);
+		if (s->dest[0]) {
+			lv_point_t ns;
+			lv_text_get_size(&ns, s->dest, nf, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+			nw = fmaxf(0, fminf(ns.x, w - 2 * ph - hs.x - after));
+			set_text(dest_name, "%s", s->dest);
+			lv_obj_set_size(dest_name, ri(nw), lv_font_get_line_height(nf));
+			l1 = fmaxf(l1, lv_font_get_line_height(nf));
+		}
+		float h = 2 * pv + l1 + rh, x = (w - hs.x - (s->dest[0] ? after + nw : 0)) / 2;
+		place(dest_card, G.bar_l, G.bar_cy - h / 2, w, h);
+		lv_obj_set_pos(dest_head, ri(x), ri(pv + (l1 - lv_font_get_line_height(hf)) / 2));
+		if (s->dest[0]) {
+			lv_obj_set_pos(dest_pin, ri(x + hs.x + PN(10)), ri(pv + (l1 - PN(15)) / 2));
+			lv_obj_set_pos(dest_name, ri(x + hs.x + after), ri(pv + (l1 - lv_font_get_line_height(nf)) / 2));
+		}
+		x = (w - tot - (rows > 1 ? (rows - 1) * gap : 0)) / 2;
+		for (int i = 0; i < rows; i++) {
+			lv_obj_set_pos(dest_row[i], ri(x), ri(pv + l1 + (rh - lv_obj_get_style_height(dest_row[i], 0)) / 2));
+			x += lv_obj_get_style_width(dest_row[i], 0) + gap;
+		}
+		return;
+	}
+	/* Laid out as the mockup (the header, the place, then a row each), scaled with the column; the rows
 	 * close up when there are too many for the height. */
 	float pad = 20 * G.k * UI_S_NAV, pitch = 52 * G.k * UI_S_NAV, head_c = 27 * G.k * UI_S_NAV;
 	float name_h = 0, name_x = pad + PN(15 + 4), name_w = G.card_w - pad - name_x;
@@ -1470,37 +1851,50 @@ static void set_ring(const dash_state_t *s)
 	if (charge) snprintf(t, sizeof t, "%d", (int)lroundf(s->charge_kw));
 	else if (known) snprintf(t, sizeof t, "%d", (int)lroundf(s->speed));
 	else snprintf(t, sizeof t, "—");
+	bool sp = speedo();
+	if (G.phone) { /* a face swiped to: all of the ring drawn again (its parts move on their own) */
+		static int face = -1;
+		if (face != sp || (sp && CHANGED(kph))) face = sp, lv_obj_invalidate(ring); /* km/h or mph: the other scale */
+	}
 	float bw = G.D * 0.5f, bh = G.D * 0.4f;
+	if (sp) bw = G.r * 0.42f, bh = G.r * 0.24f; /* the speedometer's: small, inside its arc on the left */
 	static float adv = 0;
 	if (!adv) adv = lv_font_get_glyph_width(font_px(LIGHT, 200), '0', 0) / 200.0f;
 	float em_w = known ? strlen(t) * adv : 1.0f; /* the em dash is an em wide */
 	float fs = fminf(bh, bw / em_w);
 	const lv_font_t *f = font_px(LIGHT, ri(fs));
-	if (lv_obj_get_style_text_font(speed_l, 0) != f) lv_obj_set_style_text_font(speed_l, f, 0);
+	figure_font(speed_l, f);
 	set_text(speed_l, "%s", t);
 	text_color(speed_l, charge ? REGEN : known ? WHITE : W24);
 	/* Column centred: the box, then the unit's line. At height 1 the text's box is its size, the baseline at
-	 * ascent / (ascent + descent) of it. */
+	 * ascent / (ascent + descent) of it. The speedometer's column 0.62 of the radius left of the dial's centre, its top
+	 * 0.04 under it, the unit 11 sp spaced 2. */
+	if (G.phone) {
+		const lv_font_t *uf = FS(REGULAR, sp ? 11 : 15, UI_S_RING);
+		if (lv_obj_get_style_text_font(unit_l, 0) != uf) lv_obj_set_style_text_font(unit_l, uf, 0);
+		SET_NUM(unit_l, lv_obj_get_style_text_letter_space, lv_obj_set_style_text_letter_space, ri(PR(sp ? 2 : 3)));
+	}
 	const lv_font_t *fu = lv_obj_get_style_text_font(unit_l, 0);
-	float col_h = bh + lv_font_get_line_height(fu), top = (G.D - col_h) / 2;
+	float col_h = bh + lv_font_get_line_height(fu), top = (G.D - col_h) / 2, xc = G.D / 2;
+	if (sp) top = G.D / 2 + G.r * 0.11f, xc = G.D / 2 - G.r * 0.41f;
 	float a = ascent(f), d = f->base_line, base = top + (bh - fs) / 2 + fs * a / (a + d), dy = 0;
 	lv_font_glyph_dsc_t g0;
-	if (view == DASH_VIEW_PROJECT && lv_font_get_glyph_dsc(f, &g0, '0', 0)) /* the strip: no gear in the ring's foot, */
+	if (strip() && lv_font_get_glyph_dsc(f, &g0, '0', 0)) /* the strip: no gear in the ring's foot, */
 		dy = G.D / 2 + g0.ofs_y + g0.box_h / 2.0f - base;                    /* so the figures sit in the middle */
 	base += dy;
 	ring_figs_geom(dy); /* size the limit sign and the motor readouts to the current ring (full or the strip) */
-	put_text(speed_l, 1, G.D / 2, base, G.D);
+	put_text(speed_l, 1, xc, base, G.D);
 	set_text(unit_l, "%s", charge ? "kW" : s->kph ? "km/h" : "mph");
 	float unit_base = top + bh + ascent(fu) + dy;
-	put_text(unit_l, 1, G.D / 2 + PR(3) / 2, unit_base, G.D);
+	put_text(unit_l, 1, xc + PR(sp ? 2 : 3) / 2, unit_base, G.D);
 
 	/* The gear, in the gap at the ring's foot; unknown, a dim dash (widgets.dart: Panda's gear starts as '—'). */
 	if (s->gear) set_text(gear_l, "%c", s->gear);
 	else set_text(gear_l, "—");
 	text_color(gear_l, s->live && s->gear && strchr("PRND", s->gear) ? WHITE : W38);
 	const lv_font_t *fg = lv_obj_get_style_text_font(gear_l, 0);
-	put_text(gear_l, 1, G.D / 2, G.D - G.D * 0.05f - lv_font_get_line_height(fg) + ascent(fg), G.D);
-	show(gear_l, view != DASH_VIEW_PROJECT); /* the strip shows the gear in its top row, not in the ring's foot */
+	put_text(gear_l, 1, G.D / 2, G.D - G.D * (sp ? 0.11f : 0.05f) - lv_font_get_line_height(fg) + ascent(fg), G.D);
+	show(gear_l, !strip()); /* the strip shows the gear in its top row, not in the ring's foot */
 
 	/* The limit sign. */
 	bool lim = s->live && !isnan(s->speed_limit);
@@ -1522,11 +1916,12 @@ static void set_ring(const dash_state_t *s)
 	if (s->live && !isnan(right)) set_text(front_v, "%d", (int)lroundf(s->rwd ? fabsf(right) : right));
 	else set_text(front_v, "—");
 	set_text(front_u, "%s", s->rwd ? (right < 0 ? "%\nBRAKE" : "%\nPEDAL") : "kW\nFRONT");
+	show(rear_v, !sp), show(front_v, !sp), show(rear_u, !sp), show(front_u, !sp); /* the power ring's alone */
 
 	/* The cue under the speed: charging, the cruise, or the washer fluid low. */
 	part_t p[8];
 	int n = 0;
-	float ck = view == DASH_VIEW_PROJECT ? 0.8f : 1; /* the split's smaller ring: a smaller cue */
+	float ck = strip() ? 0.8f : 1; /* the split's smaller ring: a smaller cue */
 	const lv_font_t *fs15 = FS(BOLD, 15 * ck, UI_S_RING);
 	char a1[24], a2[24];
 	bool washer = s->wifi_live && s->washer_low;
@@ -1557,10 +1952,12 @@ static void set_ring(const dash_state_t *s)
 	if (n) {
 		run_set(cue, p, n);
 		float cy = G.D - G.D * 0.17f - G.D * 0.075f / 2, ch = lv_obj_get_style_height(cue, 0);
-		cy = fmaxf(cy, unit_base + lv_font_get_line_height(fu) - ascent(fu) + PR(6) + ch / 2.0f); /* under the unit */
+		if (sp) cy = G.D - G.D * 0.03f + px(4) - G.D * 0.075f / 2; /* the speedometer's: under its raised gear */
+		else cy = fmaxf(cy, unit_base + lv_font_get_line_height(fu) - ascent(fu) + PR(6) + ch / 2.0f); /* under the unit */
 		align(cue, LV_ALIGN_TOP_MID, 0, ri(cy - ch / 2.0f));
-		/* inside the arc's opening at that height: a long line on the split's smaller ring is drawn smaller */
-		float ri_ = G.r - G.aw, dy = cy - G.D / 2, room = 2 * (sqrtf(fmaxf(0, ri_ * ri_ - dy * dy)) - PR(4));
+		/* inside the arc's opening at that height: a long line on the split's smaller ring is drawn smaller (the
+		 * speedometer's foot is open: half the ring's width) */
+		float ri_ = G.r - G.aw, dy = cy - G.D / 2, room = sp ? G.D * 0.5f : 2 * (sqrtf(fmaxf(0, ri_ * ri_ - dy * dy)) - PR(4));
 		float cw = lv_obj_get_style_width(cue, 0);
 		int32_t sc = cw > room + px(4) && room > 0 ? (int32_t)(256 * room / cw) : 256; /* rare: a layer each redraw */
 		SET_NUM(cue, lv_obj_get_style_transform_pivot_x, lv_obj_set_style_transform_pivot_x, ri(cw / 2));
@@ -1618,20 +2015,56 @@ static void ring_place(void)
 	align(outside_l, LV_ALIGN_TOP_RIGHT, ri(right - G.W), ri(y - lv_font_get_line_height(f) / 2.0f));
 }
 
-/* Redraws only the ring's parts whose values changed: a sector's box, or its foot. */
+/* The box round the ring's band (every arc, the zero ticks) from a0 to a1 degrees, and a few pixels for the edges. */
+static void band_box(int a0, int a1, lv_area_t *box)
+{
+	float r1 = G.r - G.aw, r2 = G.r + G.aw, x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
+#define BAND_PT(rr, deg) do { float x_ = G.cx + (rr) * cosf(DEG(deg)), y_ = G.cy + (rr) * sinf(DEG(deg)); \
+		x0 = fminf(x0, x_), y0 = fminf(y0, y_), x1 = fmaxf(x1, x_), y1 = fmaxf(y1, y_); } while (0)
+	BAND_PT(r1, a0); BAND_PT(r2, a0); BAND_PT(r1, a1); BAND_PT(r2, a1);
+	for (int q = (int)ceilf(a0 / 90.0f) * 90; q <= a1; q += 90) BAND_PT(r2, q); /* where it reaches furthest out */
+#undef BAND_PT
+	*box = (lv_area_t){(int32_t)floorf(x0) - 3, (int32_t)floorf(y0) - 3, (int32_t)ceilf(x1) + 3, (int32_t)ceilf(y1) + 3};
+}
+/* Redraws only the ring's parts whose values changed: the degrees an arc moved over (its end, as a figure moves; all of
+ * it before and after when it changed colour or came or went), a sector's box when the ring itself changed, its foot;
+ * on the speedometer the needle. The two sectors' boxes, every frame a motor's power moved, were nearly half of a
+ * driving frame's pixels. */
 static void ring_dirty(const dash_state_t *s)
 {
-	float R = G.r + G.aw, in = 0.5f * (G.r - G.aw), h = 0.83f * R;
-	bool both = first || CHANGED(live) || CHANGED(rwd) || CHANGED(regen_cap_kw);
-	bool left = both || CHANGED(rear_kw) || CHANGED(front_kw);
-	bool right = both || CHANGED(front_kw) || CHANGED(rear_kw) || CHANGED(pedal_pct) || CHANGED(brake_pct);
-	lv_area_t a;
-	if (left) {
-		a = (lv_area_t){ri(G.cx - R) - 2, ri(G.cy - h) - 2, ri(G.cx - in) + 2, ri(G.cy + h) + 2};
-		lv_obj_invalidate_area(ring, &a);
+	if (speedo()) {
+		needle_dirty(s);
+		return;
 	}
-	if (right) {
-		a = (lv_area_t){ri(G.cx + in) - 2, ri(G.cy - h) - 2, ri(G.cx + R) + 2, ri(G.cy + h) + 2};
+	static struct { float cx, cy, r, aw; ring_arc_t a[2][2]; } shown; /* as drawn (this frame's, once it is) */
+	typeof(shown) now = {G.cx, G.cy, G.r, G.aw};
+	ring_arcs(s, now.a);
+	float R = G.r + G.aw, in = 0.5f * (G.r - G.aw), h = 0.83f * R;
+	bool both = first || CHANGED(live) || CHANGED(rwd) || memcmp(&now, &shown, 4 * sizeof(float));
+	lv_area_t a;
+	for (int side = 0; side < 2; side++) {
+		if (both) {
+			a = side ? (lv_area_t){ri(G.cx + in) - 2, ri(G.cy - h) - 2, ri(G.cx + R) + 2, ri(G.cy + h) + 2}
+				 : (lv_area_t){ri(G.cx - R) - 2, ri(G.cy - h) - 2, ri(G.cx - in) + 2, ri(G.cy + h) + 2};
+			lv_obj_invalidate_area(ring, &a);
+			continue;
+		}
+		for (int k = 0; k < 2; k++) {
+			ring_arc_t o = shown.a[side][k], n = now.a[side][k];
+			if (!memcmp(&o, &n, sizeof o)) continue;
+			if (o.c && o.c == n.c && o.rad == n.rad && o.w == n.w && (o.a0 == n.a0 || o.a1 == n.a1)) { /* one end moved */
+				int e0 = o.a0 == n.a0 ? o.a1 : o.a0, e1 = o.a0 == n.a0 ? n.a1 : n.a0;
+				band_box(LV_MIN(e0, e1), LV_MAX(e0, e1), &a);
+				lv_obj_invalidate_area(ring, &a);
+				continue;
+			}
+			if (o.c) band_box(o.a0, o.a1, &a), lv_obj_invalidate_area(ring, &a);
+			if (n.c) band_box(n.a0, n.a1, &a), lv_obj_invalidate_area(ring, &a);
+		}
+	}
+	shown = now;
+	if (G.phone && (both || CHANGED(brake_pct) || CHANGED(wifi_live))) { /* the foot's brake and its words */
+		a = (lv_area_t){ri(G.cx - 0.45f * R) - 2, ri(G.cy + 0.85f * G.r), ri(G.cx + 0.45f * R) + 2, ri(G.cy + G.r + 2.5f * G.aw) + 2};
 		lv_obj_invalidate_area(ring, &a);
 	}
 }
@@ -1754,6 +2187,38 @@ static void set_energy(const dash_state_t *s, float cx)
 	/* The dial level with the g-meter's circle and as big (ui/assets/sizes.json), its figures under it, centred. */
 	/* The pair's top: the taller of the two blocks centred in the height. */
 	float dh = 98 * q, pad = PF(5);
+	if (G.phone) {
+		/* the app's column (main.dart): the dial 14 dp down, the g-meter's place at the foot (kept while it has nothing
+		 * to show, so the figures hold still), the figures centred between; Bluetooth alone, the figures 6 dp under
+		 * the dial; charging (no g-meter), the dial, the charge card and the figures together in the middle
+		 * (_SideColumn: 5 dp above and below each) */
+		float top = G.mt + px(14), y;
+		if (view == DASH_VIEW_PROJECT || ST.basic) { /* a card (main.dart _basicRow): the dial, 12 dp, the charge card,
+							  * the figures, together in the middle */
+			top = (G.H - (dh + px(12) + (card ? ch_h + px(12) : 0) + st_h)) / 2;
+			y = top + dh + px(12);
+			if (card) {
+				lv_obj_set_pos(charge_box, ri(cx - lv_obj_get_style_width(charge_box, 0) / 2.0f), ri(y));
+				y += ch_h + px(12);
+			}
+		} else if (charging) {
+			top = G.mt + (G.row_b - G.mt - (dh + (card ? ch_h + 2 * pad : 0) + st_h + 4 * pad)) / 2 + pad;
+			y = top + dh + 2 * pad;
+			if (card) {
+				lv_obj_set_pos(charge_box, ri(cx - lv_obj_get_style_width(charge_box, 0) / 2.0f), ri(y));
+				y += ch_h + 2 * pad;
+			}
+		} else if (!s->wifi_live && s->live) {
+			y = top + dh + px(6);
+		} else {
+			y = (top + dh + G.row_b - px(4) - PG(72)) / 2 - st_h / 2;
+		}
+		lv_obj_set_pos(dial, ri(cx - 52 * q), ri(top));
+		lv_obj_set_pos(stats_box, ri(cx - st_w / 2), ri(y));
+		G.energy_cx = cx, G.energy_foot = y + st_h;
+		if (CHANGED(soc_pct) || CHANGED(charge_limit_pct) || CHANGED(charging)) lv_obj_invalidate(dial);
+		return;
+	}
 	float eh = dh + pad + (card ? ch_h + 2 * pad : 0) + st_h;
 	bool g_on = (s->wifi_live && !s->charging) || bt_brakes(s); /* the g-meter's place, in P too (the last drive's peak); not charging (the app's charge column) */
 	G.pair_top = G.H / 2 - fmaxf(eh, g_on ? g_height() : 0) / 2;
@@ -1770,6 +2235,7 @@ static void set_energy(const dash_state_t *s, float cx)
 	if (CHANGED(soc_pct) || CHANGED(charge_limit_pct) || CHANGED(charging)) lv_obj_invalidate(dial);
 }
 
+static bool g_figures(const dash_state_t *s, bool card);
 static void set_g(const dash_state_t *s, float cx)
 {
 	/* The pedal (main.dart's line along the top) as a labelled bar at the g-meter block's foot, the circle's width:
@@ -1784,7 +2250,7 @@ static void set_g(const dash_state_t *s, float cx)
 		place(brake_temps, cx - brakes_w() / 2, G.pair_top, brakes_w(), brakes_h());
 		if (CHANGED(brake_temp_c) || CHANGED(fahrenheit)) lv_obj_invalidate(brake_temps);
 	}
-	if (bar && !s->wifi_live && !bb) /* Bluetooth alone: no g-meter, so under the battery block's figures (owner) */
+	if (bar && !s->wifi_live && !bb) /* Bluetooth alone: no g-meter, so under the battery block's figures */
 		cx = G.energy_cx, bar_y = G.energy_foot + PEDAL_GAP + lv_font_get_line_height(label_font()) + PG(3);
 	float lab_y = bar_y - PG(3) - lv_font_get_line_height(label_font());
 	bool tyres = braking && s->wifi_live; /* the per-wheel torque comes with WiFi's stream: the four tyres in the row's place */
@@ -1817,13 +2283,27 @@ static void set_g(const dash_state_t *s, float cx)
 		lv_obj_set_pos(pedal_name, ri(x), ri(lab_y));
 		lv_obj_set_pos(pedal_val, ri(x + a.x), ri(lab_y));
 	}
-	bool on = s->wifi_live && !s->charging && s->g_shown; /* in P too: the last drive's peak */
+	if (!g_figures(s, false)) return;
+	/* the ball, then its figures centred under it, the block centred in the column's height */
+	float h1 = lv_obj_get_style_height(g_val, 0), top = G.pair_top;
+	place(gball, cx - side / 2, top, side, side);
+	lv_obj_set_pos(g_val, ri(cx - lv_obj_get_style_width(g_val, 0) / 2.0f), ri(top + side + PG(6)));
+	align(g_peak, LV_ALIGN_TOP_MID, ri(cx - G.W / 2), ri(top + side + PG(6) + h1));
+	gball_dirty(s); /* a point was pushed: the trail's fade moves on, until all of it holds the same g */
+}
+
+/* The g-meter's figures (the reading five times a second, the peak) and the ball's trail; false while it is not
+ * shown. The phone layout's are the app's full-layout sizes (widgets.dart _GBall: 20 / 14 sp). Its drive [card] shows
+ * it with WiFi alone (main.dart _basicRow: charging too). */
+static bool g_figures(const dash_state_t *s, bool card)
+{
+	bool on = card ? s->wifi_live : s->wifi_live && !s->charging && s->g_shown; /* in P too: the last drive's peak */
 	show(gball, on);
 	show(g_val, on);
 	show(g_peak, on);
 	if (!on) {
 		trail_n = 0;
-		return;
+		return false;
 	}
 	float gx = isnan(s->g_lat) ? 0 : s->g_lat, gy = isnan(s->g_long) ? 0 : s->g_long;
 	if (trail_n == TRAIL) memmove(trail, trail + 1, sizeof trail[0] * (TRAIL - 1)), trail_n--;
@@ -1833,18 +2313,96 @@ static void set_g(const dash_state_t *s, float cx)
 	if (lv_tick_elaps(g_at) >= 200 || !lv_obj_get_child_count(g_val)) { /* five a second: readable, not rebuilt each frame */
 		g_at = lv_tick_get();
 		snprintf(v, sizeof v, "%.2f", sqrtf(gx * gx + gy * gy));
-		part_t p[2] = {TXT(FS(REGULAR, 16, UI_S_FIG), WHITE, v), TXT(FS(REGULAR, 12, UI_S_FIG), W70, " g")}; /* as the dial's figures */
+		part_t p[2] = {TXT(FS(REGULAR, G.phone ? 20 : 16, UI_S_FIG), WHITE, v), /* as the dial's figures */
+			       TXT(FS(REGULAR, G.phone ? 14 : 12, UI_S_FIG), W70, " g")};
 		run_set(g_val, p, 2);
 	}
 	float peak = fmaxf(s->g_peak_brake, fmaxf(s->g_peak_accel, s->g_peak_lat));
 	snprintf(pk, sizeof pk, "PEAK %.2f", peak);
 	set_text(g_peak, "%s", pk);
-	/* the ball, then its figures centred under it, the block centred in the column's height */
-	float h1 = lv_obj_get_style_height(g_val, 0), top = G.pair_top;
-	place(gball, cx - side / 2, top, side, side);
-	lv_obj_set_pos(g_val, ri(cx - lv_obj_get_style_width(g_val, 0) / 2.0f), ri(top + side + PG(6)));
-	align(g_peak, LV_ALIGN_TOP_MID, ri(cx - G.W / 2), ri(top + side + PG(6) + h1));
-	lv_obj_invalidate(gball); /* a point was pushed: the trail's fade moves on even when g holds exactly */
+	return true;
+}
+
+/* The pedal and, Bluetooth alone, the brakes (main.dart): the app's line along the top of the screen, from its centre
+ * (not on a rear-motor car: its ring has it); with Bluetooth alone the labelled pedal bar (150 dp, not in P) and the
+ * brakes' temperatures under it, centred between y0 and y1 (room: there is a place for them, else only the line).
+ * The phone layout's foot of the energy column (main.dart): the g-meter (widgets.dart _GBall: the ball, 12 dp, its
+ * figures beside it) at the foot; the pedal as the app's line along the top of the screen, from its centre (not on a
+ * rear-motor car: its ring has it); Bluetooth alone (no g-meter), the labelled pedal bar (150 dp, not in P) and the
+ * brakes' temperatures under it, centred in the room under the figures. No tyres (the Dash's).
+ * [card]: the drive card's ball's side (main.dart _basicRow): Bluetooth alone the brakes over the labelled bar (as wide
+ * as the ball) 22 dp under them, the pair 20 dp under the middle of y0..y1 (the brakes the dash's size, as in its full
+ * layout: the app's 120 dp cross is half its card's width, the F133's card is narrower); 0: the full layout's column.
+ * The line along the top: not in the split (it would run over the bar above the picture), and with the speedometer's
+ * face on a rear-motor car too (the app's: that face has no pedal). */
+static void pedal_brakes(const dash_state_t *s, float cx, float y0, float y1, bool room, float card)
+{
+	bool bt = !s->wifi_live, bb = room && bt_brakes(s);
+	bool bar = s->live && (bt ? !s->rwd && room && s->gear != 'P' : (!s->rwd || speedo()) && view != DASH_VIEW_PROJECT);
+	bool braking = bar && bt && s->brake_pct > 0;
+	show(brake_car, false);
+	static int look = -1; /* the pedal: 1 the line along the top, 0 the labelled bar */
+	if (look != !bt) {
+		look = !bt;
+		fill(pedal, bt ? W24 : 0);
+		lv_obj_set_style_radius(pedal, bt ? LV_RADIUS_CIRCLE : 0, 0);
+		lv_obj_set_style_radius(pedal_fill, bt ? LV_RADIUS_CIRCLE : 0, 0);
+	}
+	float pct = braking ? s->brake_pct : s->pedal_pct, lh = lv_font_get_line_height(label_font());
+	pct = fmaxf(0, fminf(100, isnan(pct) ? 0 : pct));
+	show(pedal, bar);
+	show(pedal_name, bar && bt);
+	show(pedal_val, bar && bt);
+	if (bar && !bt) {
+		float f = G.W * pct / 100;
+		place(pedal, 0, 0, G.W, px(4));
+		show(pedal_fill, f >= 1);
+		fill(pedal_fill, ACCENT);
+		place(pedal_fill, (G.W - f) / 2, 0, f, px(4));
+	}
+	/* Bluetooth alone: the bar, 16 dp, the brakes, together in the middle of the room under the figures (the drive card:
+	 * the brakes, 22 dp, the bar) */
+	float bw = card > 0 ? card : px(150), bh = bar && bt ? lh + PG(3) + PEDAL_H : 0, kh = bb ? brakes_h() : 0;
+	float rh = y1 - y0, kgap = bh && kh ? (card > 0 ? px(22) : fmaxf(px(4), fminf(px(16), rh - bh - kh))) : 0;
+	float y = card > 0 ? (y0 + y1) / 2 + px(20) - (bh + kgap + kh) / 2 : y0 + fmaxf(0, (rh - bh - kgap - kh) / 2);
+	float by = card > 0 ? y + kh + kgap : y; /* the bar's label's top */
+	if (bar && bt) {
+		place(pedal, cx - bw / 2, by + lh + PG(3), bw, PEDAL_H);
+		float f = bw * pct / 100;
+		show(pedal_fill, f >= 1);
+		fill(pedal_fill, braking ? ALERT : ACCENT);
+		place(pedal_fill, 0, 0, fmaxf(f, PEDAL_H), PEDAL_H);
+		set_text(pedal_name, "%s", braking ? "BRAKE APPLIED" : "PEDAL");
+		text_color(pedal_name, braking ? ALERT : W70);
+		if (isnan(braking ? s->brake_pct : s->pedal_pct)) set_text(pedal_val, " —");
+		else set_text(pedal_val, " %d %%", (int)lroundf(pct));
+		lv_point_t a, b;
+		lv_text_get_size(&a, lv_label_get_text(pedal_name), label_font(), ri(PF(0.8)), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+		lv_text_get_size(&b, lv_label_get_text(pedal_val), label_font(), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+		float x = cx - (a.x + b.x) / 2.0f;
+		lv_obj_set_pos(pedal_name, ri(x), ri(by));
+		lv_obj_set_pos(pedal_val, ri(x + a.x), ri(by));
+		if (card <= 0) y += bh + kgap;
+	}
+	show(brake_temps, bb);
+	if (bb) {
+		place(brake_temps, cx - brakes_w() / 2, y, brakes_w(), brakes_h());
+		if (CHANGED(brake_temp_c) || CHANGED(fahrenheit)) lv_obj_invalidate(brake_temps);
+	}
+}
+static void set_g_phone(const dash_state_t *s, float cx)
+{
+	pedal_brakes(s, cx, G.energy_foot + px(6), G.row_b, true, 0);
+	if (!g_figures(s, false)) return;
+	float side = PG(72), gap = PG(12), h1 = lv_obj_get_style_height(g_val, 0), h2 = lv_font_get_line_height(lv_obj_get_style_text_font(g_peak, 0));
+	lv_point_t pk;
+	lv_text_get_size(&pk, lv_label_get_text(g_peak), lv_obj_get_style_text_font(g_peak, 0), lv_obj_get_style_text_letter_space(g_peak, 0), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+	float fw = fmaxf(lv_obj_get_style_width(g_val, 0), pk.x), x = cx - (side + gap + fw) / 2, top = G.row_b - px(4) - side;
+	float fy = top + (side - h1 - h2) / 2;
+	place(gball, x, top, side, side);
+	lv_obj_set_pos(g_val, ri(x + side + gap), ri(fy));
+	align(g_peak, LV_ALIGN_TOP_LEFT, ri(x + side + gap), ri(fy + h1));
+	gball_dirty(s); /* a point was pushed: the trail's fade moves on, until all of it holds the same g */
 }
 
 /* ---------- touch: chips, snackbar, car panel, settings (main.dart _press, _say, _linksChanged; car_panel.dart) ----------
@@ -1865,7 +2423,6 @@ static dash_action_cb act_cb;
 static void *act_ctx;
 static dash_settings_cb set_cb;
 static void *set_ctx;
-static dash_settings_t ST = {.minor_figures = true, .brightness_pct = 80, .follow_car = true, .unit_miles = -1, .unit_f = -1, .unit_psi = -1};
 static int edit_slot = -1;
 static char pick_ssid[33];                     /* the Nearby network the editor was opened for: joined when saved */
 static char shown_nearby[DASH_NEARBY][33];     /* the Nearby rows as drawn (a tap names its own, not today's list) */
@@ -1873,7 +2430,7 @@ static char shown_nearby[DASH_NEARBY][33];     /* the Nearby rows as drawn (a ta
 static lv_obj_t *tip, *snack, *snack_wheel, *snack_text;
 static lv_obj_t *project, *project_video, *pj_hint, *pj_gear, *pj_bar, *pj_bar_fill, *pj_soc, *pj_cold, *pj_range,
 	*pj_belt, *pj_grip, *pj_info, *pj_exit;
-static lv_obj_t *panel, *panel_msg, *settings, *set_status, *set_step, *set_wheel, *set_sw[12], *set_car_btn[6], *set_slider, *set_bl_note, *set_offset, *set_offset_note, *net_list, *near_list, *net_edit, *net_ta[2],
+static lv_obj_t *panel, *panel_msg, *settings, *set_dlg, *set_status, *set_step, *set_wheel, *set_sw[12], *set_car_btn[6], *set_slider, *set_bl_note, *set_offset, *set_offset_note, *net_list, *near_list, *net_edit, *net_ta[2],
 	*net_kb, *net_err, *set_bt_line, *set_wifi_line, *set_net_line, *set_car_ask, *set_tz_btn, *set_host_l;
 enum { HOST_SLOT = -2 }; /* edit_slot: the editor holds the Panda's address, not a network */
 static lv_timer_t *tip_timer;
@@ -1941,7 +2498,14 @@ static void chip_hold(lv_event_t *e)
 	if (tip_released(e)) return;
 	float x, y;
 	chip_geom(i, &x, &y);
-	if (i < 5) tip_at(chip_tip[i], x + PC(52) + PC(8), y + PC(21), false); /* beside the chip, towards the middle */
+	bool left = i >= 5;
+	if (G.phone) { /* where the layout put it: basic's card, the split's bar (towards its middle, along the row) */
+		lv_area_t a;
+		lv_obj_get_coords(chips[i].box, &a);
+		x = a.x1, y = a.y1;
+		if (view == DASH_VIEW_PROJECT) left = x + PC(26) > (G.ml + PL(60) + lv_obj_get_x(pj_exit)) / 2;
+	}
+	if (!left) tip_at(chip_tip[i], x + PC(52) + PC(8), y + PC(21), false); /* beside the chip, towards the middle */
 	else tip_at(chip_tip[i], x - PC(8), y + PC(21), true);
 }
 static void ap_hold(lv_event_t *e) /* the assist disc's words (widgets.dart _ApIcon's Tooltip) */
@@ -2002,11 +2566,12 @@ static void aa_tap(lv_event_t *e)
 
 /* ---- the phone-map split screen: the picture a rectangle up to the 2/3 line, clear of the left slant (which keeps
  * the Wi-Fi / Bluetooth status), a compact dash on the right 1/3 ---- */
-static float pj_vw(void) { return PJ_RGN_X + PJ_RGN_W; } /* where the strip starts: the 2/3 line */
+static float pj_vw(void) { return PJ_RGN_X + PJ_RGN_W; } /* where the dash's side starts: the 2/3 line, or the middle */
+static bool strip(void) { return view == DASH_VIEW_PROJECT && !G.phone; } /* the Dash's compact strip, not the basic ring */
 void dash_ui_project_region(int *x, int *y, int *w, int *h)
 {
 	if (x) *x = PJ_RGN_X;
-	if (y) *y = 0;
+	if (y) *y = PJ_RGN_Y;
 	if (w) *w = PJ_RGN_W;
 	if (h) *h = PJ_RGN_H;
 }
@@ -2019,7 +2584,7 @@ static void project_build(void)
 	fill(project, BLACK);
 	/* the video region: black until frames arrive; a hint sits in it meanwhile */
 	project_video = box(project);
-	place(project_video, PJ_RGN_X, 0, PJ_RGN_W, PJ_RGN_H);
+	place(project_video, PJ_RGN_X, PJ_RGN_Y, PJ_RGN_W, PJ_RGN_H);
 	fill(project_video, 0xFF0A0A0Au);
 	/* touches on the picture: the AA receiver reads them from the touchscreen itself (all fingers); here they only
 	 * have to stop at the picture, not reach anything beneath it */
@@ -2079,6 +2644,13 @@ static void project_build(void)
 	tappable(pj_exit, pj_exit_tap, 0, px(12)); /* the touch target stays generous around the smaller pill */
 	lv_obj_update_layout(pj_exit);
 	lv_obj_set_pos(pj_exit, ri(sx + sw - pad - lv_obj_get_width(pj_exit)), ri(G.H - eh - px(6)));
+	if (G.phone) { /* the bar over the picture: Exit at its right end; the compact strip's own parts unused */
+		lv_obj_set_gesture_bubble(project, false); /* the swipes on the ring and the card (swipe) */
+		lv_obj_add_event_cb(project, swipe, LV_EVENT_GESTURE, NULL);
+		lv_obj_set_pos(pj_exit, ri(PJ_RGN_X + PJ_RGN_W - pad - lv_obj_get_width(pj_exit)), ri(PJ_RGN_Y / 2.0f - eh / 2));
+		lv_obj_t *unused[] = {pj_gear, pj_bar, pj_soc, pj_cold, pj_range, pj_belt, pj_grip, pj_info};
+		for (size_t i = 0; i < sizeof unused / sizeof unused[0]; i++) show(unused[i], false);
+	}
 
 	show(project, false);
 }
@@ -2324,9 +2896,11 @@ static void pair_tap(lv_event_t *e)
 typedef struct {
 	lv_obj_t *btn;
 	const char *word;
-	uint32_t armed; /* the first tap's time, 0 none */
+	uint32_t armed;            /* the first tap's time, 0 none */
+	const char *again, *done; /* the second tap's asking and its answer (NULL: forgetting's) */
 } forget_t;
-static forget_t fg_cmdr = {NULL, "Forget Commander", 0}, fg_aa = {NULL, "Forget phones", 0};
+static forget_t fg_cmdr = {NULL, "Forget Commander", 0, NULL, NULL}, fg_aa = {NULL, "Forget phones", 0, NULL, NULL},
+		fg_nor = {NULL, "Copy to flash", 0, "Tap again to copy", "Copying"};
 static void forget_label(forget_t *f, const char *t, uint32_t c)
 {
 	lv_obj_t *l = lv_obj_get_child(f->btn, -1);
@@ -2337,11 +2911,11 @@ static bool forget_second(forget_t *f)
 {
 	if (!f->armed || lv_tick_elaps(f->armed) > 3000) {
 		f->armed = lv_tick_get();
-		forget_label(f, "Tap again to forget", ALERT);
+		forget_label(f, f->again ? f->again : "Tap again to forget", ALERT);
 		return false;
 	}
 	f->armed = 0;
-	forget_label(f, "Forgotten", WHITE);
+	forget_label(f, f->done ? f->done : "Forgotten", WHITE);
 	return true;
 }
 static void forget_reset(forget_t *f, bool all) /* all: the settings opened; else only a second-tap window run out */
@@ -2440,6 +3014,47 @@ static void ota_field(const char *txt, const char *key, char *out, size_t n)
 	if (p) for (p += strlen(key); *p && *p != '\n' && k + 1 < n; p++) out[k++] = *p;
 	out[k] = 0;
 }
+/* ---- the built-in flash (Advanced): a card install copied there (dash-nor, /run/dash-nor.status). Shown only while
+ * the file says there is something to copy: the F133 screen run from its card, with its flash's files on it ---- */
+static lv_obj_t *set_nor_title, *set_nor_l;
+const char *dash_ui_nor_status = "/run/dash-nor.status";
+static void nor_tap(lv_event_t *e)
+{
+	(void)e;
+	if (!forget_second(&fg_nor)) return;
+	save(DASH_NOR_COPY);
+	set_text(set_nor_l, "Copying: starting...");
+	show(fg_nor.btn, false); /* back if dash-nor reports an error */
+}
+static void nor_refresh(bool force)
+{
+	static uint32_t last;
+	static char prev[256];
+	if (!set_nor_l || (!force && lv_tick_elaps(last) < 1000)) return;
+	last = lv_tick_get();
+	char txt[256] = "", st[16], note[96];
+	FILE *f = fopen(dash_ui_nor_status, "r");
+	bool on = f != NULL;
+	if (f) { txt[fread(txt, 1, sizeof txt - 1, f)] = 0; fclose(f); }
+	if (!force && !strcmp(txt, prev)) return;
+	snprintf(prev, sizeof prev, "%s", txt);
+	lv_obj_t *row = lv_obj_get_parent(set_nor_l);
+	show(set_nor_title, on), show(row, on);
+	if (!on) return;
+	ota_field(txt, "state=", st, sizeof st), ota_field(txt, "note=", note, sizeof note);
+	bool btn = true;
+	if (!strcmp(st, "stock"))
+		set_text(set_nor_l, "Copy this card's system to the screen's built-in flash, to start without the card. The stock "
+				     "firmware is saved to the card first");
+	else if (!strcmp(st, "copying")) set_text(set_nor_l, "Copying: %s...", note), btn = false;
+	else if (!strcmp(st, "done")) set_text(set_nor_l, "Copied: without the card, the screen starts from its built-in flash"), btn = false;
+	else if (!strcmp(st, "error")) set_text(set_nor_l, "Copy failed: %s", note);
+	else set_text(set_nor_l, "Copy this card's system to the screen's built-in flash, to start without the card");
+	if (btn) forget_reset(&fg_nor, true);
+	show(fg_nor.btn, btn);
+	lv_obj_update_layout(fg_nor.btn);
+	lv_obj_set_width(set_nor_l, ri(lv_obj_get_width(row) - (btn ? lv_obj_get_width(fg_nor.btn) + PB(12) : 0)));
+}
 static void ota_refresh(bool force)
 {
 	static uint32_t last;
@@ -2477,6 +3092,7 @@ static void ota_refresh(bool force)
 	else if (!strcmp(st, "current")) set_text(set_ota_l, "%s: up to date", vs);
 	else if (!strcmp(st, "offline")) set_text(set_ota_l, "%s. No internet now", vs);
 	else if (!strcmp(st, "skipped")) set_text(set_ota_l, "%s. On the car's WiFi: updates need internet", vs);
+	else if (!strcmp(st, "card-only")) set_text(set_ota_l, "%s. Updates need the SD card install", vs), busy = true; /* the F133 from its NOR */
 	else if (!strcmp(st, "ok") && note[0]) set_text(set_ota_l, "%s: %s", vs, note);
 	else if (!strcmp(st, "rolled-back")) set_text(set_ota_l, "The update did not start. %s", vs);
 	else if (!strcmp(st, "failed-before")) set_text(set_ota_l, "%s. Not installed again on its own: %s", vs, note); /* after a rollback */
@@ -2589,9 +3205,14 @@ static lv_obj_t *button_row(lv_obj_t *parent, lv_obj_t *words, const char *btn, 
 {
 	lv_obj_t *r = box(parent);
 	lv_obj_set_size(r, ri(w), LV_SIZE_CONTENT);
-	lv_obj_t *b = outlined(r, NULL, btn, cb, 0);
-	align(b, LV_ALIGN_RIGHT_MID, 0, 0);
+	/* the button's width, from a layout of the button alone: made on a screen of its own, then moved into the row. In
+	 * the row at once, each of these laid out the whole dialog built so far (three quarters of its building) */
+	static lv_obj_t *apart;
+	if (!apart) apart = lv_obj_create(NULL);
+	lv_obj_t *b = outlined(apart, NULL, btn, cb, 0);
 	lv_obj_update_layout(b);
+	lv_obj_set_parent(b, r);
+	align(b, LV_ALIGN_RIGHT_MID, 0, 0);
 	if (words) {
 		lv_obj_set_parent(words, r);
 		lv_obj_set_width(words, ri(w - lv_obj_get_width(b) - PB(12)));
@@ -2745,11 +3366,14 @@ void dash_ui_settings_tab(int i) { if (i >= 0 && i < SET_TABS && set_page[0]) ta
 static void settings_build(void)
 {
 	float top = PB(6), x0 = G.ml + inset(top) + PB(6), w = G.W - 2 * x0, h = G.H - 2 * top, pad = PB(20);
-	settings = box(lv_layer_top());
+	/* on the screen, above the dash, not on the top layer: LVGL looks for an opaque cover only among the screen's own
+	 * objects, so on the top layer each redraw inside the dialog (a scrolled page: every frame) drew the whole dash
+	 * beneath it first. Here the dialog is that cover; the dash still shows, dimmed, round it (C906: 64 -> ~20 ms) */
+	settings = box(lv_screen_active());
 	place(settings, 0, 0, G.W, G.H);
 	fill(settings, 0x8A000000); /* the dialog's barrier, black54 */
 	lv_obj_set_clickable(settings, true);
-	lv_obj_t *d = box(settings);
+	lv_obj_t *d = set_dlg = box(settings);
 	place(d, x0, top, w, h);
 	fill(d, M3_DIALOG);
 	lv_obj_set_style_radius(d, ri(px(28)), 0);
@@ -2763,6 +3387,14 @@ static void settings_build(void)
 	static const char *const names[SET_TABS] = {"Commander", "Car", "Display", "Network", "Advanced"};
 	float cy = pad * 0.7f + PB(24) * 0.8f * 1.17f + PB(14), rail_w = PB(150), tab_h = PB(32);
 	float xp = pad + rail_w + PB(32), cw = fminf(PB(360), w - xp - pad), ph = h - cy - PB(8);
+	/* A page's rectangle stays inside the dialog's round corner. LVGL draws a scrolled page in strips and starts each
+	 * at the dialog only if the dialog covers the strip's four corners; the last strip's bottom right one lay in the
+	 * part the round cuts off (the F133's radius: 53 px, the page 11 and 15 px from the edges), so every frame of a
+	 * scroll drew the dash beneath that strip, the barrier and the dialog again (a quarter of the frame). The page is
+	 * narrowed by what poked out, its right padding and its scroll bar's margin by as much: nothing drawn moves. */
+	float rr = ri(px(28)), ex = PB(6), ey = PB(8);
+	int cut = ey < rr ? (int)ceilf(rr - sqrtf(rr * rr - (rr - ey) * (rr - ey)) - ex) + 1 : 0;
+	cut = cut < 0 ? 0 : cut > ri(PB(4)) ? ri(PB(4)) : cut; /* (at most the bar's margin: the bar stays inside the page) */
 	for (int i = 0; i < SET_TABS; i++) {
 		lv_obj_t *t = set_tab_btn[i] = box(d);
 		place(t, pad, cy + i * (tab_h + PB(3)), rail_w, tab_h);
@@ -2774,8 +3406,8 @@ static void settings_build(void)
 		align(l, LV_ALIGN_LEFT_MID, ri(PB(20)), 0);
 		/* a page longer than the dialog scrolls, its bar shown all the time there is more (in the right margin) */
 		lv_obj_t *pg = set_page[i] = column(d, PB(10));
-		place(pg, xp, cy, w - xp - PB(6), ph);
-		lv_obj_set_style_pad_right(pg, ri(pad - PB(6)), 0);
+		place(pg, xp, cy, w - xp - PB(6) - cut, ph);
+		lv_obj_set_style_pad_right(pg, ri(pad - PB(6)) - cut, 0);
 		lv_obj_set_style_pad_bottom(pg, ri(PB(12)), 0);
 		lv_obj_set_clickable(pg, true);
 		lv_obj_set_scrollable(pg, true);
@@ -2785,7 +3417,7 @@ static void settings_build(void)
 		lv_obj_set_style_radius(pg, LV_RADIUS_CIRCLE, LV_PART_SCROLLBAR);
 		lv_obj_set_style_bg_color(pg, rgb(M3_OUTLINE), LV_PART_SCROLLBAR);
 		lv_obj_set_style_bg_opa(pg, LV_OPA_COVER, LV_PART_SCROLLBAR);
-		lv_obj_set_style_pad_right(pg, ri(PB(4)), LV_PART_SCROLLBAR);
+		lv_obj_set_style_pad_right(pg, ri(PB(4)) - cut, LV_PART_SCROLLBAR);
 	}
 	/* the Commander: the steering wheel to press, and beside it the steps, the current one said as it comes */
 	lv_obj_t *c = set_page[0];
@@ -2898,7 +3530,9 @@ static void settings_build(void)
 	switch_note_row(c, "SSH", "Needs a paired key, or one on the card", 2, aw);
 	button_row(c, text_block(c, "Pair a computer", "The Dash shows a page and a code: that computer adds its key, within 5 minutes"),
 		   "Pair", pair_tap, aw); /* only from this tap: someone at the Dash */
+#ifndef DASH_NO_RECORD /* a profile with no room for recordings (the F133's data partition: 512 KiB) has no switch */
 	switch_note_row(c, "Record drives", "CAN and Commander data to the card, for replays at the desk", 4, aw);
+#endif
 	set_host_l = label(c, FS(REGULAR, 14, UI_S_PANEL), M3_ON_SURFACE); /* the Panda's address, its editor beside it */
 	lv_label_set_long_mode(set_host_l, LV_LABEL_LONG_MODE_DOTS);
 	button_row(c, set_host_l, "Panda host", host_tap, aw);
@@ -2916,6 +3550,12 @@ static void settings_build(void)
 	lv_label_set_long_mode(set_ota_l, LV_LABEL_LONG_MODE_WRAP);
 	set_ota_btn = button_row(c, set_ota_l, "Check for updates", ota_tap, aw);
 	ota_refresh(true);
+	set_nor_title = group_title(c, "Built-in flash");
+	lv_obj_set_style_margin_top(set_nor_title, ri(PB(14)), 0);
+	set_nor_l = label(c, FS(REGULAR, 14, UI_S_PANEL), M3_ON_SURFACE); /* what dash-nor says */
+	lv_label_set_long_mode(set_nor_l, LV_LABEL_LONG_MODE_WRAP);
+	fg_nor.btn = button_row(c, set_nor_l, "Copy to flash", nor_tap, aw);
+	nor_refresh(true);
 	tab_select(set_tab);
 	show(settings, false);
 }
@@ -3148,11 +3788,61 @@ void dash_ui_ask_car(void)
 	dash_ui_show(DASH_VIEW_SETTINGS);
 }
 
+/* The phone layout's split: the cards' parts, the buttons and their tooltip go onto its cover with it, hidden and moved
+ * into the right half (one card shows; LVGL repaints a part where it was when it shows it, and the left half's lower
+ * 3/4 under the cover is the decoder's picture); the path lines' box (the whole screen on the dash) cut to it too.
+ * Back on the dash after, each in its place among the dash's parts (the frame and the path lines under the car and the
+ * chips): the reverse of the way out, before the ring and the links go back. */
+static void pj_parts(bool to_pj)
+{
+	static int at[64]; /* each one's place among the dash's, as it left */
+	lv_obj_t *o[64];
+	int n = 0;
+	o[n++] = cab.frame, o[n++] = steer, o[n++] = pedal, o[n++] = pedal_name, o[n++] = pedal_val, o[n++] = brake_car;
+	for (int i = 0; i < 10; i++) o[n++] = chips[i].box;
+	o[n++] = lights_row, o[n++] = cab.grp;
+	for (int c = 0; c < DASH_CARDS; c++) o[n++] = dots[SPLIT_SLOT][c];
+	o[n++] = dest_card, o[n++] = dial, o[n++] = charge_box, o[n++] = stats_box;
+	o[n++] = gball, o[n++] = g_val, o[n++] = g_peak, o[n++] = brake_temps, o[n++] = pdial, o[n++] = tip; /* the dash's order */
+	if (to_pj)
+		for (int i = 0; i < n; i++) { /* parked clear of the picture by more than any part draws past its box (the g dot's) */
+			at[i] = lv_obj_get_index(o[i]);
+			lv_obj_set_parent(o[i], project);
+			show(o[i], false);
+			lv_obj_set_x(o[i], ri(pj_vw() + px(16)));
+		}
+	else
+		for (int i = n - 1; i >= 0; i--) lv_obj_set_parent(o[i], root), lv_obj_move_to_index(o[i], at[i]);
+	place(steer, to_pj ? pj_vw() : 0, 0, to_pj ? G.W - pj_vw() : G.W, G.H);
+	strcpy(lights_shown, "-"); /* moved: placed again when next shown */
+}
+
+/* The settings coming up: the screen redrawn in parts, those the dialog covers on their own. LVGL starts each part at the
+ * topmost object that covers all of it: in one part, the whole screen, that was the screen itself, so the frame that
+ * opened the settings drew the whole dash and the dim barrier over it beneath the dialog (two thirds of its work). The
+ * dialog's rectangle less its round corners, in three parts, starts at the dialog; the barrier's frame round it and the
+ * four corners draw what they did. The parts make up the whole screen: whatever else came or went is drawn too. */
+static void settings_reveal(void)
+{
+	lv_area_t d;
+	lv_obj_get_coords(set_dlg, &d);
+	int32_t r = lv_obj_get_style_radius(set_dlg, 0), w = G.W - 1, h = G.H - 1;
+	const lv_area_t part[] = {
+		{d.x1 + r, d.y1, d.x2 - r, d.y2}, {d.x1, d.y1 + r, d.x1 + r - 1, d.y2 - r}, {d.x2 - r + 1, d.y1 + r, d.x2, d.y2 - r},
+		{0, 0, w, d.y1 - 1}, {0, d.y2 + 1, w, h}, {0, d.y1, d.x1 - 1, d.y2}, {d.x2 + 1, d.y1, w, d.y2},
+		{d.x1, d.y1, d.x1 + r - 1, d.y1 + r - 1}, {d.x2 - r + 1, d.y1, d.x2, d.y1 + r - 1},
+		{d.x1, d.y2 - r + 1, d.x1 + r - 1, d.y2}, {d.x2 - r + 1, d.y2 - r + 1, d.x2, d.y2}};
+	for (size_t i = 0; i < sizeof part / sizeof part[0]; i++)
+		if (part[i].x1 <= part[i].x2 && part[i].y1 <= part[i].y2) lv_obj_invalidate_area(settings, &part[i]);
+}
+
 void dash_ui_show(int v)
 {
 	if (v == DASH_VIEW_SETTINGS) save(DASH_SETTINGS_OPEN);
 	bool was_pj = view == DASH_VIEW_PROJECT, now_pj = v == DASH_VIEW_PROJECT;
 	if (v == DASH_VIEW_DASH && view != DASH_VIEW_DASH) dash_at = lv_tick_get();
+	/* the phone layout's split has the buttons in its bar, and it comes on its own: a tap meant for the dash presses none */
+	if (G.phone && v == DASH_VIEW_PROJECT && view != DASH_VIEW_PROJECT) dash_at = lv_tick_get();
 	if (v == DASH_VIEW_CAR_PANEL && view != DASH_VIEW_CAR_PANEL) panel_at = lv_tick_get();
 	if (v == DASH_VIEW_NETWORK && view != DASH_VIEW_NETWORK) edit_at = lv_tick_get(); /* the tap that opened it: no key */
 	if (v == DASH_VIEW_SETTINGS && (view == DASH_VIEW_NETWORK || view == DASH_VIEW_PAIR)) {
@@ -3164,6 +3854,7 @@ void dash_ui_show(int v)
 	 * it lives over the full-screen project overlay while projecting, and back on the dash otherwise. */
 	if (now_pj != was_pj) {
 		lv_obj_t *to = now_pj ? project : root;
+		if (G.phone && !now_pj) pj_parts(false);
 		lv_obj_set_parent(ring, to);
 		lv_obj_set_parent(ap_disc, to);
 		lv_obj_set_parent(outside_l, to);
@@ -3173,7 +3864,12 @@ void dash_ui_show(int v)
 		 * draws there, so nothing of LVGL's may be repainted over it */
 		lv_obj_set_parent(glow_l, to), lv_obj_set_parent(glow_r, to);
 		lv_obj_move_to_index(glow_r, 0), lv_obj_move_to_index(glow_l, 0);
-		lv_obj_set_width(glow_l, now_pj ? PJ_RGN_X : (int32_t)glow_dsc[0].header.w);
+		if (G.phone) { /* the left glow at the dash's side's left edge, beside the picture; the cards' parts */
+			lv_obj_set_x(glow_l, now_pj ? ri(pj_vw()) : 0);
+			if (now_pj) pj_parts(true);
+		} else {
+			lv_obj_set_width(glow_l, now_pj ? PJ_RGN_X : (int32_t)glow_dsc[0].header.w);
+		}
 		if (!now_pj) lv_obj_move_foreground(tip), lv_obj_move_foreground(snack); /* toasts stay above the moved ring */
 		/* the decoder draws straight to the framebuffer: LVGL would leave its last picture on screen, so repaint all */
 		lv_obj_invalidate(lv_screen_active());
@@ -3182,16 +3878,21 @@ void dash_ui_show(int v)
 		if (now_pj) close(open(PJ_VISIBLE, O_CREAT | O_WRONLY | O_CLOEXEC, 0644)); /* the AA receiver sends touches */
 		else unlink(PJ_VISIBLE);
 	}
+	bool reveal = v == DASH_VIEW_SETTINGS && lv_obj_is_hidden(settings); /* the views' own redraws: settings_reveal's */
+	if (reveal) lv_display_enable_invalidation(lv_obj_get_display(settings), false);
 	show(panel, v == DASH_VIEW_CAR_PANEL);
 	show(settings, v == DASH_VIEW_SETTINGS);
+	if (v == DASH_VIEW_SETTINGS) lv_obj_move_foreground(settings); /* above all the dash's own (the screen's) */
 	show(net_edit, v == DASH_VIEW_NETWORK);
 	show(pair_view, v == DASH_VIEW_PAIR);
 	show(project, v == DASH_VIEW_PROJECT);
 	/* under the split and the opaque pages the dash is hidden: else each change in the strip or the page draws the whole
 	 * dash beneath it too (the settings' barrier is see-through: drawn there) */
 	show(root, v == DASH_VIEW_DASH || v == DASH_VIEW_SETTINGS);
+	if (reveal) lv_display_enable_invalidation(lv_obj_get_display(settings), true), settings_reveal();
 	show(tip, false);
 	lv_obj_t *sp = v == DASH_VIEW_SETTINGS ? lv_layer_top() : root; /* the snackbar (a failed save) over the settings too */
+	if (G.phone && now_pj) sp = project; /* the phone layout's split: what came of a button's press, in the right half */
 	if (lv_obj_get_parent(snack) != sp) lv_obj_set_parent(snack, sp);
 	if (sp != root || !now_pj) lv_obj_move_foreground(snack);
 	if (v == DASH_VIEW_SETTINGS) {
@@ -3199,7 +3900,7 @@ void dash_ui_show(int v)
 		lv_obj_set_state(set_sw[1], LV_STATE_CHECKED, !ST.hour12);
 		lv_obj_set_state(set_sw[2], LV_STATE_CHECKED, ST.dev_ssh);
 		lv_obj_set_state(set_sw[3], LV_STATE_CHECKED, ST.follow_car);
-		lv_obj_set_state(set_sw[4], LV_STATE_CHECKED, ST.record);
+		if (set_sw[4]) lv_obj_set_state(set_sw[4], LV_STATE_CHECKED, ST.record);
 		lv_obj_set_state(set_sw[5], LV_STATE_CHECKED, ST.sparse);
 		lv_obj_set_state(set_sw[6], LV_STATE_CHECKED, ST.wifi_first);
 		lv_obj_set_state(set_sw[7], LV_STATE_CHECKED, ST.ota_auto);
@@ -3208,7 +3909,7 @@ void dash_ui_show(int v)
 		lv_obj_set_state(set_sw[9], LV_STATE_CHECKED, ST.unit_miles >= 0 ? ST.unit_miles : !S.kph);
 		lv_obj_set_state(set_sw[10], LV_STATE_CHECKED, ST.unit_f >= 0 ? ST.unit_f : S.fahrenheit);
 		lv_obj_set_state(set_sw[11], LV_STATE_CHECKED, ST.unit_psi >= 0 ? ST.unit_psi : S.psi);
-		forget_reset(&fg_cmdr, true), forget_reset(&fg_aa, true);
+		forget_reset(&fg_cmdr, true), forget_reset(&fg_aa, true), forget_reset(&fg_nor, true);
 		for (int i = 0; i < 6; i++) { /* the chosen car filled, as a selected chip */
 			fill(set_car_btn[i], i == ST.car ? 0xFF4A4458u : 0x00000000u);
 			border(set_car_btn[i], i == ST.car ? 0xFFD0BCFFu : W70, PB(1));
@@ -3341,7 +4042,7 @@ static void set_snack(const dash_state_t *s)
 {
 	bool approving = s->bt == BT_APPROVING; /* the one step that needs a hand: said until it is done */
 	bool say = approving || (s->toast[0] && view != DASH_VIEW_CAR_PANEL);
-	show(snack, say);
+	if (!G.phone || !say) show(snack, say); /* the phone layout's once placed: in the split, where it was may be the picture */
 	if (!say) return;
 	show(snack_wheel, approving);
 	const char *t = approving ? "Approve this Dash for the Commander: in the car, double-press the right scroll wheel" : s->toast;
@@ -3351,29 +4052,44 @@ static void set_snack(const dash_state_t *s)
 	lv_text_get_size(&sz, t, lv_obj_get_style_text_font(snack_text, 0), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
 	lv_obj_set_width(snack_text, ri(fminf(sz.x + 1, max)));
 	lv_obj_update_layout(snack);
-	align(snack, LV_ALIGN_BOTTOM_MID, 0, ri(-PB(6)));
+	/* at the foot's middle; in the phone layout's split its right half's (off the picture) */
+	align(snack, LV_ALIGN_BOTTOM_MID, G.phone && view == DASH_VIEW_PROJECT ? ri(pj_vw() / 2) : 0, ri(-PB(6)));
+	if (G.phone) lv_obj_update_layout(snack), show(snack, true);
 }
 
 /* ---- the car's path either side, dotted (widgets.dart _CarLights, steerLines): under the car ---- */
-/* A dot over a chip or the route card (outlined, no fill when unlit): left out, as if passing under it. */
-static bool steer_under(const lv_area_t *a)
+static bool overlap(const lv_area_t *a, const lv_area_t *b)
 {
-	lv_area_t o;
+	return a->x1 <= b->x2 && a->x2 >= b->x1 && a->y1 <= b->y2 && a->y2 >= b->y1;
+}
+/* The path lines' dots as last worked out, and what from: a box and an opacity each (a dot over a chip or the route card,
+ * outlined, no fill when unlit, left out, as if passing under it), each line's bounding box (one box round both took in
+ * the car's picture and its lights between them, redrawn each time the wheel turned: a quarter of a driving frame's
+ * work; a line with no dot shown has an empty box) and a checksum of the dots (a dot that came out from under a chip or
+ * the card changes it, not always a box). steer_draw runs for every part of the screen redrawn (its box is the whole
+ * screen) and steer_dirty once a frame, all on the same dots. */
+static struct {
+	struct { bool on; char gear; int car; float deg, x, y, w, h; lv_area_t under[11]; } key;
+	struct { lv_area_t a; lv_opa_t opa; } dot[80]; /* (33 a line at most) */
+	int n;
+	lv_area_t box[2];
+	uint32_t sum;
+} steer_m;
+/* The dots for [s] into steer_m (worked out again only when what they come from changed); false when there are none. */
+static bool steer_dots(const dash_state_t *s)
+{
+	typeof(steer_m.key) k;
+	memset(&k, 0, sizeof k); /* its padding too: compared whole */
+	k.on = s->live && s->wifi_live && s->steer_lines && !isnan(s->steer_deg);
+	k.gear = s->gear, k.car = s->car, k.deg = s->steer_deg, k.x = cab.x, k.y = cab.y, k.w = cab.w, k.h = cab.h;
 	for (int i = 0; i <= 10; i++) {
 		lv_obj_t *b = i < 10 ? chips[i].box : dest_card;
-		if (!b || lv_obj_is_hidden(b)) continue;
-		lv_obj_get_coords(b, &o);
-		if (a->x1 <= o.x2 && a->x2 >= o.x1 && a->y1 <= o.y2 && a->y2 >= o.y1) return true;
+		k.under[i] = (lv_area_t){INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN}; /* none: a box nothing overlaps */
+		if (b && !lv_obj_is_hidden(b)) lv_obj_get_coords(b, &k.under[i]);
 	}
-	return false;
-}
-/* The path lines' dots: drawn on LAYER (NULL: none), their bounding box into BOX and a checksum of the dots drawn into
- * SUM (a dot that came out from under a chip or the card changes it, not always the box); false when there are none. */
-static bool steer_dots(const dash_state_t *s, lv_layer_t *layer, lv_area_t *box, uint32_t *sum)
-{
-	uint32_t ck = 0;
-	if (!s->live || !s->wifi_live || !s->steer_lines || isnan(s->steer_deg)) return false;
-	lv_area_t bb = {INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN};
+	if (!memcmp(&k, &steer_m.key, sizeof k)) return k.on;
+	steer_m.key = k, steer_m.n = 0, steer_m.sum = 0;
+	if (!k.on) return false;
 	const ui_car_pics_t *p = &ui_car_pics[s->car];
 	float w = cab.w, h = cab.h, ox = cab.x, oy = cab.y;
 	float road = fmaxf(-max_road[s->car], fminf(max_road[s->car], s->steer_deg / steer_ratio[s->car])) * (float)M_PI / 180;
@@ -3382,11 +4098,8 @@ static bool steer_dots(const dash_state_t *s, lv_layer_t *layer, lv_area_t *box,
 	float cx = w * p->centre, ccx = cx + side * r, ccy = h * p->axles[1];
 	bool rev = s->gear == 'R';
 	float step = h * 0.022f, len = h * (rev ? 0.53f : 0.7f), dot = cb(1.6f);
-	lv_draw_rect_dsc_t rd;
-	lv_draw_rect_dsc_init(&rd);
-	rd.radius = LV_RADIUS_CIRCLE;
-	rd.bg_color = rgb(WHITE);
 	for (int sd = -1; sd <= 1; sd += 2) {
+		lv_area_t bb = {INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN};
 		float px0 = cx + sd * w * p->path_from[1], py0 = h * p->path_from[0];
 		float rad = hypotf(px0 - ccx, py0 - ccy), a0 = atan2f(py0 - ccy, px0 - ccx);
 #define AT(d, X, Y) do { float a_ = a0 + side * (d) / rad; X = ccx + cosf(a_) * rad, Y = ccy + sinf(a_) * rad; } while (0)
@@ -3395,40 +4108,103 @@ static bool steer_dots(const dash_state_t *s, lv_layer_t *layer, lv_area_t *box,
 		AT(len, q1x, q1y);
 		AT(len / 2, mx, my);
 		float chx = (q0x + q1x) / 2, chy = (q0y + q1y) / 2, ctx = chx + (mx - chx) * 6, cty = chy + (my - chy) * 6;
-		for (float d = 0; d <= len; d += step) {
+		for (float d = 0; d <= len && steer_m.n < (int)(sizeof steer_m.dot / sizeof steer_m.dot[0]); d += step) {
 			float t = d / len, qx = q0x * (1 - t) * (1 - t) + ctx * 2 * t * (1 - t) + q1x * t * t,
 			      qy = q0y * (1 - t) * (1 - t) + cty * 2 * t * (1 - t) + q1y * t * t;
 			float x = ox + qx, y = oy + (rev ? h - qy : qy);
-			rd.bg_opa = (lv_opa_t)(0.8f * 255 * (1 - d / len));
 			lv_area_t a = {ri(x - dot), ri(y - dot), ri(x + dot) - 1, ri(y + dot) - 1};
-			if (steer_under(&a)) continue;
-			ck = ck * 31 + (uint32_t)(a.x1 * 2048 + a.y1);
-			if (layer) lv_draw_rect(layer, &rd, &a);
+			bool under = false;
+			for (int i = 0; i <= 10; i++) under |= overlap(&a, &k.under[i]);
+			if (under) continue;
+			steer_m.sum = steer_m.sum * 31 + (uint32_t)(a.x1 * 2048 + a.y1);
+			steer_m.dot[steer_m.n].a = a, steer_m.dot[steer_m.n++].opa = (lv_opa_t)(0.8f * 255 * (1 - d / len));
 			bb.x1 = LV_MIN(bb.x1, a.x1), bb.y1 = LV_MIN(bb.y1, a.y1), bb.x2 = LV_MAX(bb.x2, a.x2), bb.y2 = LV_MAX(bb.y2, a.y2);
 		}
+		steer_m.box[sd > 0] = bb;
 	}
-	if (box) *box = bb;
-	if (sum) *sum = ck;
 	return true;
 }
-static lv_area_t steer_drawn; /* the dots as last drawn (steer_on: any), whatever came between (the split, a page) */
+static lv_area_t steer_drawn[2]; /* the dots as last drawn (steer_on: any), whatever came between (the split, a page) */
 static uint32_t steer_sum;
 static bool steer_on;
-static void steer_draw(lv_event_t *e) { steer_on = steer_dots(&S, lv_event_get_layer(e), &steer_drawn, &steer_sum); }
-/* Each frame: where the dots are drawn and where they go now are repainted when they differ (or CHANGED says so). */
+static void steer_draw(lv_event_t *e) /* only the dots in the part being redrawn */
+{
+	lv_layer_t *layer = lv_event_get_layer(e);
+	if (!(steer_on = steer_dots(&S))) return;
+	memcpy(steer_drawn, steer_m.box, sizeof steer_drawn), steer_sum = steer_m.sum;
+	lv_draw_rect_dsc_t rd;
+	lv_draw_rect_dsc_init(&rd);
+	rd.radius = LV_RADIUS_CIRCLE;
+	rd.bg_color = rgb(WHITE);
+	for (int i = 0; i < steer_m.n; i++)
+		if (overlap(&steer_m.dot[i].a, &layer->_clip_area)) rd.bg_opa = steer_m.dot[i].opa, lv_draw_rect(layer, &rd, &steer_m.dot[i].a);
+}
+/* Each frame: where the dots are drawn and where they go now are repainted when they differ (or CHANGED says so), each
+ * line on its own. */
 static void steer_dirty(const dash_state_t *s, bool changed)
 {
-	lv_area_t a;
-	uint32_t sum;
-	bool has = steer_dots(s, NULL, &a, &sum);
-	if (!changed && has == steer_on && (!has || (!memcmp(&a, &steer_drawn, sizeof a) && sum == steer_sum))) return;
-	if (steer_on) lv_obj_invalidate_area(steer, &steer_drawn);
-	if (has) lv_obj_invalidate_area(steer, &a);
+	bool has = steer_dots(s);
+	const lv_area_t *a = steer_m.box;
+	if (!changed && has == steer_on && (!has || (!memcmp(a, steer_drawn, sizeof steer_drawn) && steer_m.sum == steer_sum))) return;
+	for (int i = 0; i < 2; i++) {
+		if (steer_on && steer_drawn[i].x1 <= steer_drawn[i].x2) lv_obj_invalidate_area(steer, &steer_drawn[i]);
+		if (has && a[i].x1 <= a[i].x2) lv_obj_invalidate_area(steer, &a[i]);
+	}
 }
 
 /* The link icons (main.dart _btStatus): WiFi, its settings; Bluetooth, try the link now (as Approve does), then its
  * settings, which say what it is doing. Nothing while the approval prompt is up: it already says it all. */
 static bool bt_ready(dash_bt_t b);
+/* The phone layout: the gear's tap switches between the full and basic layouts (main.dart: "Tap the gear under the speed
+ * to switch"); in basic a swipe up or down on a slot brings its next or previous card (_Cards), passing over those the
+ * other slots show, and in the split on its one card the next or previous of five (the buttons are in its bar); on the
+ * ring (basic's, the split's) its other face (_Pages); all kept in the settings. */
+static void gear_tap(lv_event_t *e)
+{
+	(void)e;
+	if (!G.phone || view != DASH_VIEW_DASH) return;
+	ST.basic = !ST.basic;
+	save(DASH_SETTINGS_SAVE);
+}
+/* LVGL hands a swipe to the first object up from the finger that does not pass it on: the dash's root (basic) and the
+ * split's cover stop it (the picture's own box keeps those that start on it: the phone's). Where the finger is decides
+ * (a vertical swipe keeps its column). Any swipe lets go of the press it began with: a swipe that starts on a chip (a
+ * card's, the split's bar's) and ends on it never presses it, nor one from the gear the layout. */
+static int split_card(void);
+static void swipe(lv_event_t *e)
+{
+	(void)e;
+	bool pj = view == DASH_VIEW_PROJECT;
+	if (!G.phone || !(pj || (ST.basic && view == DASH_VIEW_DASH))) return;
+	lv_indev_t *in = lv_indev_active();
+	lv_dir_t d = lv_indev_get_gesture_dir(in);
+	lv_point_t p;
+	lv_indev_get_point(in, &p);
+	lv_indev_wait_release(in);
+	if ((d != LV_DIR_TOP && d != LV_DIR_BOTTOM) || (pj && p.x < pj_vw())) return; /* up or down; not on the bar over the picture */
+	int step = d == LV_DIR_TOP ? 1 : -1;
+	if (pj ? p.x < split_x : p.x >= G.cx - G.D / 2 && p.x < G.cx + G.D / 2) { /* the ring: its other face */
+		ST.ring_page = ((ST.ring_page + step) % DASH_RING_PAGES + DASH_RING_PAGES) % DASH_RING_PAGES;
+	} else if (pj) { /* the split's card: the next or the previous of its five in turn */
+		int c = split_card();
+		do c = (c + step + DASH_CARDS) % DASH_CARDS;
+		while (c == DASH_CARD_BUTTONS);
+		ST.split_card = c;
+	} else { /* a slot of basic's: passing over the cards the other slots show */
+		int i = 0;
+		while (i < 4 && !(p.x >= slot_x[i] && p.x < slot_x[i + 1])) i++;
+		if (i == 4 || (i == 1 && p.x > G.cx - G.D / 2) || (i == 2 && p.x < G.cx + G.D / 2)) return;
+		int c = ST.cards[i];
+		for (int k = 0; k < DASH_CARDS; k++) {
+			c = (c + (d == LV_DIR_TOP ? 1 : DASH_CARDS - 1)) % DASH_CARDS;
+			bool used = false;
+			for (int j = 0; j < 4; j++) used |= j != i && ST.cards[j] == c;
+			if (!used) break;
+		}
+		ST.cards[i] = c;
+	}
+	save(DASH_SETTINGS_SAVE);
+}
 static void wifi_tap(lv_event_t *e)
 {
 	(void)e;
@@ -3460,6 +4236,12 @@ static void touch_init(void)
 	lv_obj_add_event_cb(ap_disc, ap_hold, LV_EVENT_RELEASED, NULL);
 	lv_obj_add_event_cb(ap_disc, ap_hold, LV_EVENT_PRESS_LOST, NULL);
 	tappable(car_panel, open_tap, DASH_VIEW_CAR_PANEL, PL(12));
+	if (G.phone) {
+		tappable(gear_l, gear_tap, 0, PR(16));
+		lv_obj_set_clickable(root, true); /* a swipe that starts on no button reaches it */
+		lv_obj_set_gesture_bubble(root, false); /* and stops here (passed on, LVGL gives it to the screen) */
+		lv_obj_add_event_cb(root, swipe, LV_EVENT_GESTURE, NULL);
+	}
 	tappable(aa_btn, aa_tap, 0, PL(8)); /* half the gap to the car icon: AA sits on top, so it must not reach past it */
 	tip = box(root);
 	fill(tip, 0xE6616161); /* Tooltip: grey 700 at 90 % */
@@ -3527,14 +4309,15 @@ static void set_touch(const dash_state_t *s)
 	if (view == DASH_VIEW_SETTINGS && ST.follow_car && s->backlight_pct >= 0 && CHANGED(backlight_pct))
 		lv_slider_set_value(set_slider, s->backlight_pct, LV_ANIM_OFF); /* the live value, greyed */
 	if (view == DASH_VIEW_SETTINGS) {
-		ota_refresh(false);
+		ota_refresh(false), nor_refresh(false);
 		uint32_t c;
 		const char *w = bt_word(s->bt, &c, NULL);
 		set_text(set_status, "Commander: %s", w);
 		text_color(set_status, c == W54 ? W70 : c);
 		set_text(set_bt_line, "%s", s->bt_line);
 		if (set_wifi_line) set_text(set_wifi_line, "%s", s->wifi_line);
-		forget_reset(&fg_cmdr, false), forget_reset(&fg_aa, false); /* a second tap's window over: the label again */
+		/* a second tap's window over: the label again */
+		forget_reset(&fg_cmdr, false), forget_reset(&fg_aa, false), forget_reset(&fg_nor, false);
 		if (set_guard && lv_obj_is_clickable(set_guard) && !FRESH(set_back_at, 500)) lv_obj_set_clickable(set_guard, false);
 		net_delete_reset(false);
 		bool join_over = joining[0] && lv_tick_elaps(joining_at) >= 20000; /* a join that did not take: Connect again */
@@ -3544,6 +4327,247 @@ static void set_touch(const dash_state_t *s)
 		if (set_net_line) set_text(set_net_line, "%s", s->net_line);
 		set_approval(s->bt);
 	}
+}
+
+/* ---------- the phone layout's basic layout (main.dart _basicRow): the ring between cards ----------
+ * The F133's wide screen takes two cards each side, each slot half its side wide, the screen's height; the
+ * ring as tall as the row, the bar under it as wide as it (the links, the car panel and AA buttons). A card is the
+ * dash's own parts in its slot: the battery (the dial over the figures), the drive card (the lamps over the g-meter's
+ * ball, as big as fits, its figures under it), the car (the cabin, the lamps over it while no drive card has them),
+ * the buttons (the ten chips in two columns), the route (the Dash's column), the power (the pack's power round a
+ * circle). A part shows in one place at most; the full layout gets them all back. The split shows one card. */
+static void cards_parts(bool basic)
+{
+	bool on[DASH_CARDS];
+	for (int c = 0; c < DASH_CARDS; c++) on[c] = !basic || card_slot[c] >= 0;
+	show(dial, on[DASH_CARD_ENERGY]), show(stats_box, on[DASH_CARD_ENERGY]);
+	if (!on[DASH_CARD_ENERGY]) show(charge_box, false);
+	show(cab.grp, on[DASH_CARD_CAR]), show(steer, on[DASH_CARD_CAR]);
+	if (!on[DASH_CARD_CAR]) show(cab.frame, false);
+	show(lights_row, on[DASH_CARD_CAR] || on[DASH_CARD_G]);
+	if (!on[DASH_CARD_ROUTE]) show(dest_card, false);
+	if (!on[DASH_CARD_G]) {
+		lv_obj_t *g[] = {gball, g_val, g_peak, brake_temps, pedal_name, pedal_val, brake_car};
+		for (size_t i = 0; i < sizeof g / sizeof g[0]; i++) show(g[i], false);
+	}
+	show(pdial, basic && on[DASH_CARD_POWER]); /* not the full layout's */
+	for (int i = 0; i < 10; i++) {
+		float x, y;
+		show(chips[i].box, on[DASH_CARD_BUTTONS]);
+		if (!basic) chip_geom(i, &x, &y), lv_obj_set_pos(chips[i].box, ri(x), ri(y));
+	}
+	for (int i = 0; i < 4; i++) /* each slot's dots; the split's card the right one's, the buttons (in its bar) not one */
+		for (int c = 0; c < DASH_CARDS; c++)
+			show(dots[i][c], basic && (view != DASH_VIEW_PROJECT || (i == SPLIT_SLOT && c != DASH_CARD_BUTTONS)));
+	if (!basic) { /* the buttons back in the bar's corner */
+		lv_obj_set_pos(car_panel, car_at[0], car_at[1]);
+		lv_obj_set_pos(aa_btn, car_at[0] - ri(PL(16)) - (int)ic_aa.header.w, car_at[1]);
+	}
+	lv_obj_invalidate(root);
+}
+/* A slot's row of dots at its foot, [cx] its middle, card [lit] lit, card [skip] not in its round (-1 none: all are;
+ * widgets.dart _Cards). */
+static void dots_place(int i, float cx, int lit, int skip)
+{
+	int n = DASH_CARDS - (skip >= 0);
+	for (int c = 0, k = 0; c < DASH_CARDS; c++) {
+		if (c == skip) continue;
+		float d = px(6), x = cx + (k++ - (n - 1) / 2.0f) * px(14) - d / 2;
+		place(dots[i][c], x, G.H - G.mb / 2 - d / 2, d, d);
+		fill(dots[i][c], c == lit ? W70 : W24);
+	}
+}
+/* The power card's figure (_PowerDial): the pack's own power over WiFi, else the motors' (Bluetooth alone); NAN none. */
+static float pack_now(const dash_state_t *s)
+{
+	float kw = s->wifi_live && !isnan(s->pack_kw) ? s->pack_kw
+		 : s->live && !isnan(s->rear_kw) ? (isnan(s->front_kw) ? 0 : s->front_kw) + s->rear_kw : NAN;
+	return isnan(kw) || fabsf(kw) >= 0.05f ? kw : 0; /* never -0.0 */
+}
+/* The power card: the dial as big as the card (its circle 6 dp in), the figure (at a 1.0 line) over its unit in the
+ * middle, the range's foot 0.86 of the radius down; the marks redrawn only where they moved (the power over the top,
+ * in half degrees; the battery round the foot). */
+static void pdial_set(const dash_state_t *s, float cx, float w)
+{
+	float side = fminf(w - px(16), G.H - G.mt - G.mb), r = side / 2 - px(6), x0 = cx - side / 2, top = G.H / 2 - side / 2;
+	place(pdial, x0, top, side, side);
+	float kw = pack_now(s);
+	const lv_font_t *fk = font_px(BOLD, ri(r * 0.32f)), *fu = font_px(REGULAR, ri(r * 0.11f)), *fr = font_px(REGULAR, ri(r * 0.12f));
+	figure_font(pdial_kw, fk);
+	if (lv_obj_get_style_text_font(pdial_unit, 0) != fu) lv_obj_set_style_text_font(pdial_unit, fu, 0);
+	if (lv_obj_get_style_text_font(pdial_range, 0) != fr) lv_obj_set_style_text_font(pdial_range, fr, 0);
+	if (isnan(kw)) set_text(pdial_kw, "—");
+	else set_text(pdial_kw, "%.1f", kw);
+	text_color(pdial_kw, isnan(kw) ? W38 : kw < 0 ? REGEN : WHITE);
+	float kh = ri(r * 0.32f), y = side / 2 - (kh + lv_font_get_line_height(fu)) / 2;
+	put_text(pdial_kw, 1, side / 2, y + baseline_in(fk, 1), side);
+	put_text(pdial_unit, 1, side / 2, y + kh + ascent(fu), side);
+	if (!s->live || isnan(s->range)) set_text(pdial_range, "—");
+	else set_text(pdial_range, "%d %s", (int)lroundf(s->range), s->kph ? "km" : "mi");
+	put_text(pdial_range, 1, side / 2, side / 2 + r * 0.86f - lv_font_get_line_height(fr) + ascent(fr), side);
+	float p = isnan(kw) ? NAN : roundf(fmaxf(-1, fminf(1, kw / PD_ENDS)) * PD_REACH * 2) / (PD_REACH * 2);
+	int soc = s->live && !isnan(s->soc_pct) ? (int)lroundf(fmaxf(0, fminf(100, s->soc_pct))) : -1;
+	if (isnan(p) ? !isnan(pd_p) : p != pd_p) { /* the power's track, fill and dash: down to 30° under the level */
+		pd_p = p;
+		lv_area_t a = {ri(x0) - 2, ri(top) - 2, ri(x0 + side) + 2, ri(top + side / 2 + r * 0.62f) + 2};
+		lv_obj_invalidate_area(pdial, &a);
+	}
+	if (soc != pd_soc) { /* the battery's, from 40° under the level */
+		pd_soc = soc;
+		lv_area_t a = {ri(x0) - 2, ri(top + side / 2 + r * 0.55f), ri(x0 + side) + 2, ri(top + side) + 2};
+		lv_obj_invalidate_area(pdial, &a);
+	}
+}
+/* Card [c] in its place: [cx] its middle, [w] its width, the screen's height (basic's slots, the split's card). */
+static void card_set(const dash_state_t *s, int c, float cx, float w)
+{
+	switch (c) {
+	case DASH_CARD_ENERGY:
+		set_energy(s, cx);
+		break;
+	case DASH_CARD_CAR: { /* the lights 5 dp down (unless the drive card has them, as the app's: its car card is the car
+			       * alone), the cabin fitted to the rest, a little lower (the full layout's) */
+		float top = G.mt + px(5), lh = PLI(20 + 2) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_LIGHTS));
+		if (card_slot[DASH_CARD_G] < 0) set_lights(s, cx, top);
+		float bt = top + lh + PLI(4), bb = G.H - G.mb - px(5), ch = cb(8) + ui_car_pics[s->car].car->header.h + cb(10);
+		set_cabin(s, cx, (bt + bb - ch) / 2 + 0.07f * ch);
+		break;
+	}
+	case DASH_CARD_BUTTONS: /* the two columns, 16 dp apart, the rows spread over the height */
+		for (int k = 0; k < 10; k++) {
+			float gap = (G.H - G.mt - G.mb - 5 * PC(42)) / 6;
+			float x = cx + (k < 5 ? -PC(8) - PC(52) : PC(8)), y = G.mt + gap + (k % 5) * (PC(42) + gap);
+			lv_obj_set_pos(chips[k].box, ri(x), ri(y));
+		}
+		break;
+	case DASH_CARD_ROUTE:
+		show(dest_card, s->route);
+		if (s->route) set_route(s, cx - G.card_w / 2, G.H / 2);
+		break;
+	case DASH_CARD_G: { /* the app's drive card: the ball's square as big as the card leaves, the lamps 4 dp over it, the
+			     * ball 5 dp in it (its circle the power card's), the figures 6 dp under it; Bluetooth alone the
+			     * brakes and the pedal bar in its place (pedal_brakes) */
+		float lh = PLI(20 + 2) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_LIGHTS)), fh = PG(48);
+		float side = fminf(w - px(16), G.H - G.mt - G.mb - 2 * (lh + px(8)) - fh), top = G.H / 2 - side / 2;
+		set_lights(s, cx, top - lh - px(4));
+		pedal_brakes(s, cx, 0, G.H, true, side);
+		if (g_figures(s, true)) {
+			place(gball, cx - side / 2 + px(5), top + px(5), side - px(10), side - px(10));
+			lv_point_t pk;
+			const lv_font_t *pf = lv_obj_get_style_text_font(g_peak, 0);
+			lv_text_get_size(&pk, lv_label_get_text(g_peak), pf, lv_obj_get_style_text_letter_space(g_peak, 0), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+			float vw = lv_obj_get_style_width(g_val, 0), vh = lv_obj_get_style_height(g_val, 0), x = cx - (vw + PG(12) + pk.x) / 2;
+			float y = top + side + px(6);
+			lv_obj_set_pos(g_val, ri(x), ri(y));
+			align(g_peak, LV_ALIGN_TOP_LEFT, ri(x + vw + PG(12)), ri(y + vh - ascent(pf) - pf->base_line + (vh - lv_font_get_line_height(pf)) * 0));
+			gball_dirty(s);
+		}
+		break;
+	}
+	case DASH_CARD_POWER:
+		pdial_set(s, cx, w);
+		break;
+	}
+}
+static void basic_layout(const dash_state_t *s)
+{
+	int key = 1;
+	for (int c = 0; c < DASH_CARDS; c++) card_slot[c] = -1;
+	for (int i = 0; i < 4; i++) { /* a card in two slots shows in the first: the dash has one set of its parts */
+		int c = ST.cards[i];
+		if (c < 0 || c >= DASH_CARDS || card_slot[c] >= 0) c = -1;
+		else card_slot[c] = i;
+		key = key * 8 + c + 1;
+	}
+	if (key != layout_key) cards_parts(true), layout_key = key;
+	float rl = G.cx - G.D / 2 - px(8), rr = G.cx + G.D / 2 + px(8), lw = (rl - G.ml) / 2, rw = (G.W - G.ml - rr) / 2;
+	float x0[4] = {G.ml, G.ml + lw, rr, rr + rw}, w[4] = {lw, lw, rw, rw};
+	for (int i = 0; i < 4; i++) slot_x[i] = x0[i], dots_place(i, x0[i] + w[i] / 2, ST.cards[i], -1);
+	slot_x[4] = G.W - G.ml;
+	ring_place();
+	set_chips(s);
+	set_links(s);
+	/* the car panel and AA under the ring's right end, as the links under its left */
+	int car_x = ri(G.cx + G.D / 2 - PL(20) - PL(12));
+	lv_obj_set_pos(car_panel, car_x, car_at[1]);
+	lv_obj_set_pos(aa_btn, car_x - ri(PL(16)) - (int)ic_aa.header.w, car_at[1]);
+	set_ring(s);
+	ring_dirty(s);
+	for (int c = 0; c < DASH_CARDS; c++)
+		if (card_slot[c] >= 0) card_set(s, c, x0[card_slot[c]] + w[card_slot[c]] / 2, w[card_slot[c]]);
+	if (card_slot[DASH_CARD_G] < 0) pedal_brakes(s, G.cx, 0, 0, false, 0); /* the line along the top, still */
+}
+
+/* The split's card: the one saved, the battery's if that is none of the round (the buttons are in the bar). */
+static int split_card(void)
+{
+	int c = ST.split_card;
+	return c >= 0 && c < DASH_CARDS && c != DASH_CARD_BUTTONS ? c : DASH_CARD_ENERGY;
+}
+/* The split's bar over the picture: the ten chips in two rows of five between the links (stacked at its left
+ * end) and Exit, spread evenly; each row a chip's 48 dp finger room tall, the strip's half. The full layout's columns
+ * become the rows: its left one's chips on top. */
+static void bar_chips(void)
+{
+	float x0 = G.ml + PL(60), gap = (lv_obj_get_x(pj_exit) - x0 - 5 * PC(52)) / 6;
+	for (int k = 0; k < 10; k++)
+		lv_obj_set_pos(chips[k].box, ri(x0 + gap + (k % 5) * (PC(52) + gap)), ri(PJ_RGN_Y * (k / 5 * 2 + 1) / 4.0f - PC(21)));
+}
+/* The phone layout's split: the picture in the left half's lower 3/4; over it a bar, the links, the buttons and
+ * Exit; the right half the basic layout's ring (as big as fits, the gear in its foot, swiped to its other face) and one
+ * card right of it, swiped up or down to the next or previous of five (all but the buttons: nothing else shows one
+ * here; the route is one, the bar has no room for its pill): the battery's at first. Every part on the split's cover
+ * stays off the picture (the right half, the bar): the picture is the decoder's, never repainted (pj_parts). */
+static void split_phone(const dash_state_t *s)
+{
+	float l = pj_vw() + px(8), r = G.W - G.ml - px(170); /* the card: 170 dp, the figures' widest row */
+	G.D = fminf(fminf(G.H - G.mt - G.mb, r - l), G.H * 2 / 3); /* the ring smaller beside the picture */
+	l += (r - l - G.D) / 2; /* centred in the room it leaves */
+	G.r = G.D / 2 - px(6);
+	G.aw = G.r * 0.085f;
+	G.cx = l + G.D / 2;
+	G.cy = G.mt + (G.H - G.mt - G.mb) / 2;
+	ring_place();
+	set_ring(s);
+	ring_dirty(s);
+	int c = split_card();
+	for (int k = 0; k < DASH_CARDS; k++) card_slot[k] = k == c ? SPLIT_SLOT : k == DASH_CARD_BUTTONS ? BAR_SLOT : -1;
+	if (-1 - c != layout_key) cards_parts(true), layout_key = -1 - c;
+	bar_chips();
+	set_chips(s);
+	float x0 = G.cx + G.D / 2, cx = (x0 + G.W - G.ml) / 2;
+	split_x = x0;
+	dots_place(SPLIT_SLOT, cx, c, DASH_CARD_BUTTONS);
+	card_set(s, c, cx, G.W - G.ml - x0);
+}
+
+/* The phone app's full layout (main.dart build): the chips' columns at the sides, the car's column (its lights over
+ * it), the ring, the energy column (the dial, the figures, the g-meter), the two columns centred between the chips
+ * and the ring as the app's two Expanded; the bar under them: the links, the route's pill, the buttons. */
+static void phone_layout(const dash_state_t *s)
+{
+	if (layout_key) cards_parts(false), layout_key = 0;
+	float cl = G.ml + PC(52), cr = G.W - G.ml - PC(52); /* the chips' inner edges */
+	float car_cx = (cl + G.cx - G.D / 2) / 2, col_cx = (G.cx + G.D / 2 + cr) / 2;
+	ring_place();
+	set_chips(s);
+	set_links(s);
+	bool bt_set = s->bt == BT_LEAN || s->bt == BT_FULL; /* settled links shrink to their icons (set_link) */
+	G.bar_l = G.ml + (s->wifi == WIFI_LIVE ? PL(36) : PL(60)) + (bt_set ? PL(36) : PL(60));
+	G.bar_r = car_bar_r, G.bar_cy = G.H - G.mb - PL(22);
+	bool route = s->route && !(s->wifi_live && s->charging); /* charging takes the route's place (the app's) */
+	show(dest_card, route);
+	if (route) set_route(s, 0, 0);
+	/* the car's column: 5 dp in, the lights, 4 dp, the car fitted to the rest, then 7 % of its box lower */
+	float top = G.mt + px(5), lights_h = PLI(20 + 2) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_LIGHTS));
+	set_lights(s, car_cx, top);
+	float box_t = top + lights_h + PLI(4), box_b = G.row_b - px(5);
+	float ch = cb(8) + ui_car_pics[s->car].car->header.h + cb(10);
+	set_cabin(s, car_cx, (box_t + box_b - ch) / 2 + 0.07f * ch);
+	set_ring(s);
+	ring_dirty(s);
+	set_energy(s, col_cx);
+	set_g_phone(s, col_cx);
 }
 
 void dash_ui_set(const dash_state_t *s)
@@ -3566,11 +4590,20 @@ void dash_ui_set(const dash_state_t *s)
 	icon_color(glow_l, s->blind_l ? ALERT : REGEN);
 	icon_color(glow_r, s->blind_r ? ALERT : REGEN);
 	if (view == DASH_VIEW_PROJECT) { /* the phone-map split: only the compact strip (the ring reused in it) */
-		ring_geom_compact();
-		set_ring(s);
-		ring_dirty(s);
-		set_project(s);
+		if (G.phone) {
+			split_phone(s);
+		} else {
+			ring_geom_compact();
+			set_ring(s);
+			ring_dirty(s);
+			set_project(s);
+		}
 		set_links(s);
+		if (G.phone) set_snack(s); /* a button's press: what came of it */
+		if (G.phone && card_slot[DASH_CARD_CAR] >= 0) { /* the car's card: its path lines, as on the dash */
+			lv_obj_update_layout(project);
+			steer_dirty(s, CHANGED(steer_deg) || CHANGED(car) || CHANGED(gear));
+		}
 		P = *s;
 		first = false;
 		return;
@@ -3597,58 +4630,64 @@ void dash_ui_set(const dash_state_t *s)
 	bool route = s->route;
 	ring_geom_full(); /* the full-dash ring geometry first (the last frame may have been the split's small ring) */
 	G.cx = G.W / 2;
-	float q = dial_q(), w[5], sum = 0;
-	lv_point_t t1, t2;
-	w[0] = ui_car_pics[DASH_CAR_Y7].car->header.w + 2 * cb(6);
-	w[1] = route ? G.card_w : 0;
-	w[2] = 2 * (G.r + G.aw / 2);
-	lv_text_get_size(&t1, "88.8 kW", FS(REGULAR, 16, UI_S_FIG), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-	lv_text_get_size(&t2, "35 min   12:51 AM", FS(REGULAR, 18, UI_S_FIG), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-	w[3] = fmaxf(104 * q, fmaxf(PF(104) + t1.x, t2.x));
-	lv_text_get_size(&t1, "0.88 g", FS(REGULAR, 16, UI_S_FIG), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-	lv_text_get_size(&t2, "PEAK 0.88", FS(REGULAR, 12, UI_S_FIG), ri(PF(0.8)), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-	w[4] = bt_brakes(s) ? brakes_w() /* Bluetooth alone: the brakes in the ball's place */
-	       : s->wifi_live && !s->charging ? fmaxf(PG(72), fmaxf(t1.x, t2.x)) : 0; /* the ball over its figures, in P too */
-	for (int i = 0; i < 5; i++) sum += w[i];
-	/* The chips step in towards the top: bound by those level with the car picture (the first sits over it, beside
-	 * the lights row) and with the g-meter's ball. */
-	float car_top = G.mt + PLI(20 + 2) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_LIGHTS)) + PLI(4) + cb(8);
-	float chips_r = 0, chips_l = G.W;
-	for (int i = 0; i < 10; i++) {
-		float cx, cy;
-		chip_geom(i, &cx, &cy);
-		if (i < 5 && cy + PC(42) > car_top) chips_r = fmaxf(chips_r, cx + PC(52));
-		if (i == 0) chips_r = fmaxf(chips_r, G.ml + inset(G.link_top + PL(22)) + 2 * PL(60)); /* the links' row, widest */
-		if (i >= 5 && cy < G.H / 2 + g_height() / 2 && cy + PC(42) > G.H / 2 - g_height() / 2) chips_l = fminf(chips_l, cx);
-	}
-	/* The ring fixed at the centre (owner); each side's blocks spread evenly between it and the chips. */
-	float at[5];
-	for (int side = 0; side < 2; side++) {
-		int i0 = side ? 3 : 0, i1 = side ? 5 : 2, n = 0;
-		float from = side ? G.cx + w[2] / 2 : chips_r, to = side ? chips_l : G.cx - w[2] / 2, used = 0;
-		for (int i = i0; i < i1; i++) used += w[i], n += w[i] > 0;
-		float gap = (to - from - used) / (n + 1), x = from + gap;
-		for (int i = i0; i < i1; i++) {
-			at[i] = x;
-			if (w[i] > 0) x += w[i] + gap;
+	if (G.phone && ST.basic) {
+		basic_layout(s);
+	} else if (G.phone) {
+		phone_layout(s);
+	} else {
+		float q = dial_q(), w[5], sum = 0;
+		lv_point_t t1, t2;
+		w[0] = ui_car_pics[DASH_CAR_Y7].car->header.w + 2 * cb(6);
+		w[1] = route ? G.card_w : 0;
+		w[2] = 2 * (G.r + G.aw / 2);
+		lv_text_get_size(&t1, "88.8 kW", FS(REGULAR, 16, UI_S_FIG), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+		lv_text_get_size(&t2, "35 min   12:51 AM", FS(REGULAR, 18, UI_S_FIG), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+		w[3] = fmaxf(104 * q, fmaxf(PF(104) + t1.x, t2.x));
+		lv_text_get_size(&t1, "0.88 g", FS(REGULAR, 16, UI_S_FIG), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+		lv_text_get_size(&t2, "PEAK 0.88", FS(REGULAR, 12, UI_S_FIG), ri(PF(0.8)), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+		w[4] = bt_brakes(s) ? brakes_w() /* Bluetooth alone: the brakes in the ball's place */
+		       : s->wifi_live && !s->charging ? fmaxf(PG(72), fmaxf(t1.x, t2.x)) : 0; /* the ball over its figures, in P too */
+		for (int i = 0; i < 5; i++) sum += w[i];
+		/* The chips step in towards the top: bound by those level with the car picture (the first sits over it, beside
+		 * the lights row) and with the g-meter's ball. */
+		float car_top = G.mt + PLI(20 + 2) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_LIGHTS)) + PLI(4) + cb(8);
+		float chips_r = 0, chips_l = G.W;
+		for (int i = 0; i < 10; i++) {
+			float cx, cy;
+			chip_geom(i, &cx, &cy);
+			if (i < 5 && cy + PC(42) > car_top) chips_r = fmaxf(chips_r, cx + PC(52));
+			if (i == 0) chips_r = fmaxf(chips_r, G.ml + inset(G.link_top + PL(22)) + 2 * PL(60)); /* the links' row, widest */
+			if (i >= 5 && cy < G.H / 2 + g_height() / 2 && cy + PC(42) > G.H / 2 - g_height() / 2) chips_l = fminf(chips_l, cx);
 		}
+		/* The ring fixed at the centre; each side's blocks spread evenly between it and the chips. */
+		float at[5];
+		for (int side = 0; side < 2; side++) {
+			int i0 = side ? 3 : 0, i1 = side ? 5 : 2, n = 0;
+			float from = side ? G.cx + w[2] / 2 : chips_r, to = side ? chips_l : G.cx - w[2] / 2, used = 0;
+			for (int i = i0; i < i1; i++) used += w[i], n += w[i] > 0;
+			float gap = (to - from - used) / (n + 1), x = from + gap;
+			for (int i = i0; i < i1; i++) {
+				at[i] = x;
+				if (w[i] > 0) x += w[i] + gap;
+			}
+		}
+		(void)sum;
+		ring_place();
+
+		set_chips(s);
+		set_links(s);
+		show(dest_card, route);
+		if (route) set_route(s, at[1], G.H / 2);
+		/* the lights row at the top, the car under it down to the foot */
+		float car_cx = at[0] + w[0] / 2;
+		set_lights(s, car_cx, G.mt);
+		set_cabin(s, car_cx, G.mt + PLI(20 + 2) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_LIGHTS)) + PLI(4));
+
+		set_ring(s);
+		ring_dirty(s);
+		set_energy(s, at[3] + w[3] / 2);
+		set_g(s, at[4] + w[4] / 2);
 	}
-	(void)sum;
-	ring_place();
-
-	set_chips(s);
-	set_links(s);
-	show(dest_card, route);
-	if (route) set_route(s, at[1], G.H / 2);
-	/* the lights row at the top, the car under it down to the foot */
-	float car_cx = at[0] + w[0] / 2;
-	set_lights(s, car_cx, G.mt);
-	set_cabin(s, car_cx, G.mt + PLI(20 + 2) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_LIGHTS)) + PLI(4));
-
-	set_ring(s);
-	ring_dirty(s);
-	set_energy(s, at[3] + w[3] / 2);
-	set_g(s, at[4] + w[4] / 2);
 	set_touch(s);
 	/* last, on this frame's layout (the car placed, the chips and the route card where the draw will find them) */
 	lv_obj_update_layout(root);
@@ -3662,13 +4701,13 @@ void dash_state_blank(dash_state_t *s)
 	memset(s, 0, sizeof *s);
 	s->kph = true;
 	s->speed_hz = -1;
-	s->speed = s->front_kw = s->rear_kw = s->pedal_pct = s->brake_pct = s->regen_cap_kw = NAN;
+	s->speed = s->front_kw = s->rear_kw = s->pack_kw = s->pedal_pct = s->brake_pct = s->regen_cap_kw = NAN;
 	for (int i = 0; i < 4; i++) s->brake_nm[i] = NAN;
 	s->speed_limit = s->cruise_set = s->outside_c = s->charge_kw = s->charge_max_kw = NAN;
 	s->follow_gap = s->charge_limit_pct = -1;
 	s->charge_minutes = s->nav_minutes = s->co2_ppm = -1;
 	s->soc_pct = s->range = s->pack_temp_c = s->precond_c = s->climate_kw = s->degradation_pct = NAN;
-	s->minor_figures = true; /* the owner's default on the Dash */
+	s->minor_figures = true; /* the default on the Dash */
 	s->lv_kw = s->other_kw = s->imbalance_mv = NAN;
 	s->steer_deg = NAN;
 	s->press_pending = -1;

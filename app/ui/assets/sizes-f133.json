@@ -1,0 +1,13 @@
+{
+  "_": "The F133 screen's sizes (1920x720 at 1.875 px/dp, PX=1.875): the app's own, as its layout is (1 = the app's dp); the car canvas as the app fits it in its row (FittedBox: the row less the lights, over its 254 dp cabin).",
+  "chip": 1,
+  "link": 1,
+  "lights": 1,
+  "car_h": 465,
+  "nav": 1,
+  "ring": 1,
+  "dial": 1,
+  "fig": 1,
+  "g": 1,
+  "panel": 1
+}

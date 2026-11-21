@@ -34,6 +34,7 @@ static void cold_morning(dash_state_t *s)
 	s->grip = GRIP_SLIPPERY;
 	s->pack_temp_c = 3.5f, s->pack_heating = true, s->regen_cap_kw = 24;
 	s->draws = true, s->climate_kw = 2.9f, s->lv_kw = 14.63f * 54.6f / 1000, s->other_kw = 1.5f; /* the pack heating */
+	s->pack_kw = -380 * 41.6f / 1000; /* 0x132: 41.6 A into the pack at 380 V */
 	s->recirc = true, s->co2_ppm = 1650;
 	s->cabin_c[0] = 21, s->cabin_c[1] = 19, s->cabin_c[2] = 16;
 	TEXT(s->fan[0], "MED"), TEXT(s->fan[1], "MED");
@@ -56,6 +57,7 @@ static void highway_cruise(dash_state_t *s)
 	s->low_beam = true, s->outside_c = 4.5f, s->pack_temp_c = 24;
 	s->draws = true, s->climate_kw = 1.7f, s->co2_ppm = 820;
 	s->lv_kw = 14.63f * 54.6f / 1000, s->other_kw = 3.4f - 1.7f - 14.63f * 54.6f / 1000; /* 3.4 kW besides the motors */
+	s->pack_kw = 400 * 113.5f / 1000; /* 0x132: the pack at 400 V, 113.5 A */
 	s->cabin_c[0] = 22, s->cabin_c[1] = 21, s->cabin_c[2] = 20;
 	TEXT(s->fan[0], "4"), TEXT(s->fan[1], "HIGH");
 	seen(s);

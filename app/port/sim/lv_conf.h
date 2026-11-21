@@ -5,6 +5,8 @@
 #include "../../ui/conf/lv_conf.h"
 #undef LV_USE_LINUX_FBDEV
 #define LV_USE_LINUX_FBDEV 0
+#undef LV_LINUX_FBDEV_VSYNC /* a profile's DASH_VSYNC: the panel's, not here */
+#define LV_LINUX_FBDEV_VSYNC 0
 #undef LV_USE_EVDEV
 #define LV_USE_EVDEV 0
 #undef LV_USE_LODEPNG

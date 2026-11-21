@@ -12,6 +12,22 @@
 // Built on top (needs an Android phone + the user's cert to test): the plaintext version
 // exchange, auth-complete, service discovery (advertise 1280x480 H.264 video + touch), channel
 // open, and media -> the decode/rotate/blit sink (already proven; spike-vdec --fb-stream).
+//
+// One source for every screen; what differs is chosen at build time (-D; defined = on):
+//   AA_BT                 aa bt: the Bluetooth start over BlueZ (RFCOMM profiles over GDBus; gio-2.0 and gio-unix-2.0)
+//   AA_MCU                aa mcu: the Bluetooth start through the screen's power MCU, which is its classic Bluetooth:
+//                         mcud hands aa the phone's RFCOMM channel over its socket (BlueZ has no part in it)
+//   AA_USB                aa usb: wired, Android Open Accessory over usbfs (link -lpthread)
+//   AA_SYSTEM_AUDIO_ONLY  service discovery offers the system audio sink and the mic only, for a screen that must
+//                         never play the phone's audio: music and the navigation voice stay on the phone's Bluetooth
+//   PJ_PANEL_H, PJ_RGN_X/Y/W/H  the canvas and the picture's place on it (ui/project_region.h; defaults: the Dash's)
+// The Dash (the T113, the default): -DAA_BT on the device (with gio's cflags and libs), nothing on a build host.
+// The F133 screen (SRNUBI T313D: its 720x1920 portrait panel shown as a 1920x720 canvas, the picture in the left
+// half's lower 3/4; its AP is the OS's, so aa ap goes unused there):
+//   -DAA_MCU=1 -DAA_USB=1 -DAA_SYSTEM_AUDIO_ONLY=1 -DPJ_PANEL_H=720 -DPJ_RGN_X=0 -DPJ_RGN_Y=180 -DPJ_RGN_W=960
+//   -DPJ_RGN_H=540, linked with -lssl -lcrypto -lpthread
+// Found at run time rather than built in: a touchscreen that reports a portrait panel (taller than wide, the F133's)
+// is turned as the dash's display is (mt_canvas).
 #include "../core/pb.h"
 #include "aa_proto.h"
 #include "../ui/project_region.h"
@@ -41,6 +57,12 @@
 #include <sys/time.h>
 #include <poll.h>
 #include <time.h>
+#ifdef AA_USB   // usbfs, and a thread for the accessory's bulk IN
+#include <dirent.h>
+#include <pthread.h>
+#include <linux/usbdevice_fs.h>
+#include <linux/usb/ch9.h>
+#endif
 #ifdef AA_BT   // target build: BlueZ RFCOMM advertise/accept over GDBus (host selftest build omits glib)
 #include <gio/gio.h>
 #include <gio/gunixfdlist.h>
@@ -220,11 +242,21 @@ static int bt_extra_line(const char *line, bt_extra_t *e)
 	return 1;
 }
 
+// $TMPDIR/name (/tmp without it): where the self-tests put their throwaway certificates
+static const char *tmp_path(char *b, size_t n, const char *name)
+{
+	const char *d = getenv("TMPDIR");
+	snprintf(b, n, "%s/%s", d && *d ? d : "/tmp", name);
+	return b;
+}
+
 static int selftest(void)
 {
 	// an ephemeral self-signed cert/key for the server side (stands in for the user's head-unit cert)
-	if (gen_cert("/tmp/aa-st.crt", "/tmp/aa-st.key", 86400)) die("selftest: cert generation failed");
-	SSL_CTX *sc = tls_ctx("/tmp/aa-st.crt", "/tmp/aa-st.key", 1), *cc = tls_ctx("/tmp/aa-st.crt", "/tmp/aa-st.key", 0);
+	char crt[256], key[256];
+	tmp_path(crt, sizeof crt, "aa-st.crt"), tmp_path(key, sizeof key, "aa-st.key");
+	if (gen_cert(crt, key, 86400)) die("selftest: cert generation failed");
+	SSL_CTX *sc = tls_ctx(crt, key, 1), *cc = tls_ctx(crt, key, 0);
 	aa_tls_t s, c; tls_init(&s, sc, 1); tls_init(&c, cc, 0);
 	for (int i = 0; i < 20; i++) {       // drive both sides to a completed handshake
 		int rc = tls_handshake(&c), rs = tls_handshake(&s);
@@ -289,8 +321,9 @@ static uint16_t msg_id(const uint8_t *p, size_t n) { return n >= 2 ? (uint16_t)(
 // alike), tune both on the unit.
 typedef struct { int res, fw, fh, uw, uh, dpi, fps; } aa_video_t;   // frame w x h, the UI area in it, density, AA_FPS_*
 static const aa_video_t AA_VIDEO_720 = {AA_RES_720p, 1280, 720, PJ_RGN_W, PJ_RGN_H, 160, AA_FPS_30};
-// the 480p UI area's height: the picture's shape at 800 wide, rounded up to even as the decoder takes its window
-#define AA_LOW_UH (((800 * PJ_RGN_H + PJ_RGN_W - 1) / PJ_RGN_W + 1) & ~1)
+// the 480p UI area's height: the picture's shape at 800 wide, rounded up to 4s (the phone centres it, so each margin is
+// even, as NV12 needs) as the decoder takes its window: 332 on the Dash, 452 on the F133
+#define AA_LOW_UH (((800 * PJ_RGN_H + PJ_RGN_W - 1) / PJ_RGN_W + 3) & ~3)
 static const aa_video_t AA_VIDEO_480 = {AA_RES_480p, 800, 480, 800, AA_LOW_UH, 110, AA_FPS_30};
 _Static_assert((1280 - PJ_RGN_W) % 4 == 0 && (720 - PJ_RGN_H) % 4 == 0 && PJ_RGN_W <= 1280 && PJ_RGN_H <= 720 &&
 	       AA_LOW_UH <= 480 && (480 - AA_LOW_UH) % 4 == 0, "the UI area must fit its frame, centred on even pixels");
@@ -326,6 +359,9 @@ static size_t audio_chd(uint8_t *buf, size_t cap, int ch, int type, int rate, in
 
 // ServiceDiscoveryResponse: video (H.264 at vm's frame and frame rate), sensors, touch, the three audio sinks and the mic —
 // the set OpenAuto advertises; AA refuses to start without sensors, audio playback or a mic ("No audio/mic").
+// AA_SYSTEM_AUDIO_ONLY leaves out the media and speech sinks, for a screen the phone's audio must never play through
+// (the F133): the system sink is the playback AA needs, and the phone keeps music and the navigation voice on its own
+// Bluetooth to the car.
 static size_t build_service_discovery_response(uint8_t *buf, size_t cap, const aa_video_t *vm)
 {
 	uint8_t vc[16]; pb_out v = { vc, 0, sizeof vc, 0 };
@@ -368,8 +404,10 @@ static size_t build_service_discovery_response(uint8_t *buf, size_t cap, const a
 	pb_b(&o, AA_SDRESP_CHANNELS, chd, c.n);
 	pb_b(&o, AA_SDRESP_CHANNELS, schd, sc.n);
 	pb_b(&o, AA_SDRESP_CHANNELS, ichd, ic.n);
+#ifndef AA_SYSTEM_AUDIO_ONLY
 	pb_b(&o, AA_SDRESP_CHANNELS, media, mn);
 	pb_b(&o, AA_SDRESP_CHANNELS, speech, spn);
+#endif
 	pb_b(&o, AA_SDRESP_CHANNELS, sys, syn);
 	pb_b(&o, AA_SDRESP_CHANNELS, michd, mi.n);
 	pb_b(&o, AA_SDRESP_HEAD_UNIT_NAME, (const uint8_t *)"Wattline", 8);
@@ -433,7 +471,11 @@ static int msg_selftest(void)
 		}
 	}
 	if (!found) die("msg: SDR video config roundtrip");
+#ifdef AA_SYSTEM_AUDIO_ONLY
+	if (nch != 5) die("msg: SDR advertises %d channels, want 5 (video, sensor, input, system audio, mic)", nch);
+#else
 	if (nch != 7) die("msg: SDR advertises %d channels, want 7 (video, sensor, input, 3 audio, mic)", nch);
+#endif
 	{   // the touch screen advertised = the picture (the phone's UI area): touches are sent in its pixels
 		pb_in in2 = { sdr, sn, 0 }; pb_val f2; uint64_t tw = 0, th = 0;
 		while (pb_next(&in2, &f2) == 1) {
@@ -487,6 +529,7 @@ static int readn(int fd, uint8_t *b, size_t n)
 	while (g < n) {
 		if (rd_deadline && now_us() > rd_deadline) return -1;
 		ssize_t r = read(fd, b + g, n - g);
+		if (r < 0 && errno == EINTR) continue;   /* a stop's signal (SA_RESTART does not restart a read with SO_RCVTIMEO) */
 		if (r <= 0) return -1;
 		g += (size_t)r;
 	}
@@ -555,12 +598,22 @@ static int recv_msg(int fd, aa_tls_t *tls, uint8_t *chan, const uint8_t **msg, s
 	}
 }
 
+// the transport's write: the socket's (TCP), or aa usb's usb_write (a frame a bulk transfer, over the accessory's OUT
+// endpoint)
+static ssize_t (*xwrite)(int, const void *, size_t) = write;
+
 // a write to the phone failed or was cut short (SO_SNDTIMEO: the phone stopped reading): the frame stream is broken,
 // so every send fails at once from then on (callers that ack, ping or send touches don't check each send, and each would
 // wait out the timeout again) and the session ends at its loop's next turn. Cleared per phone, at its dial.
 static int tx_dead;
 
 // send a framed message; with tls, the [msgid][pb] is encrypted and the frame flagged ENCRYPTED.
+/* A stop (dash-aa stop: the AA button, the split's Exit) reaches aa serve as SIGTERM: a session up tells the
+ * phone first (ShutdownRequest, reason QUIT), so it ends Android Auto and leaves the AP itself, rather than finding the
+ * connection dead mid-session; its answer (or 2 s) ends the session, and aa serve then exits. 1 = asked, 2 = told. */
+static volatile sig_atomic_t aa_quit;
+static void aa_on_term(int s) { (void)s; if (!aa_quit) aa_quit = 1; }   /* a second one changes nothing */
+
 static int send_msg(int fd, aa_tls_t *tls, uint8_t chan, uint8_t msgtype, uint16_t msgid, const uint8_t *pb, size_t pblen)
 {
 	if (tx_dead) return -1;
@@ -571,9 +624,17 @@ static int send_msg(int fd, aa_tls_t *tls, uint8_t chan, uint8_t msgtype, uint16
 	if (tls) { SSL_write(tls->ssl, msg, mn); int cn = tls_take(tls, cipher, sizeof cipher); if (cn <= 0) return -1; payload = cipher; plen = (size_t)cn; enc = AA_ENC_ENCRYPTED; }
 	int fn = frame_put(frame, sizeof frame, chan, (uint8_t)(enc | msgtype), payload, plen);
 	if (fn < 0) return -1;
-	// one write: on this blocking socket a short count comes from SO_SNDTIMEO (or a stop and continue of this process,
-	// which nothing does), and writing the rest would wait the timeout out a second time
-	if (write(fd, frame, (size_t)fn) != (ssize_t)fn) { tx_dead = 1; return -1; }
+	// one write: on this blocking socket a short count comes from SO_SNDTIMEO, and writing the rest would wait the
+	// timeout out a second time. A stop's signal interrupts a write too (SA_RESTART does not restart one with
+	// SO_SNDTIMEO): then the rest goes on, so the frame stays whole for the goodbye that follows
+	size_t w = 0;
+	while (w < (size_t)fn) {
+		ssize_t r = xwrite(fd, frame + w, (size_t)fn - w);
+		if (r > 0) { w += (size_t)r; if (w < (size_t)fn && !aa_quit) break; continue; }
+		if (r < 0 && errno == EINTR) continue;
+		break;
+	}
+	if (w != (size_t)fn) { tx_dead = 1; return -1; }
 	return 0;
 }
 
@@ -607,7 +668,8 @@ static int do_ssl_handshake(int fd, aa_tls_t *tls)
 }
 
 // fork the decoder sink: spike-vdec --fb-stream reading H.264 on its stdin, drawing the frame's middle
-// PJ_RGN_W x PJ_RGN_H window at the picture rectangle (--region X W)
+// PJ_RGN_W x PJ_RGN_H window at the picture rectangle: --region X W for a picture of the panel's full height (the Dash:
+// its decoder takes only that form), else --region X Y W H (the F133's)
 #define STR_(x) #x
 #define STR(x) STR_(x)
 static pid_t sink_pid = -1;
@@ -624,7 +686,12 @@ static int spawn_sink(void)
 	sink_pid = c;
 	if (c == 0) {
 		dup2(p[0], 0); close(p[0]); close(p[1]);
+#if PJ_RGN_Y == 0 && PJ_RGN_H == PJ_PANEL_H
 		execlp("spike-vdec", "spike-vdec", "--fb-stream", "--region", STR(PJ_RGN_X), STR(PJ_RGN_W), (char *)NULL);
+#else
+		execlp("spike-vdec", "spike-vdec", "--fb-stream", "--region", STR(PJ_RGN_X), STR(PJ_RGN_Y), STR(PJ_RGN_W), STR(PJ_RGN_H),
+		       (char *)NULL);
+#endif
 		_exit(127);
 	}
 	close(p[0]);
@@ -684,7 +751,8 @@ typedef struct { int active, on, moved, x, y; } mt_slot_t;   /* active: finger d
 static mt_slot_t mt[MT_MAX];
 static int mt_cur, mt_gesture, mt_prev_any;   /* mt_gesture: 0 none, 1 ours, -1 ignored until every finger is up */
 static int mt_dropped;   /* SYN_DROPPED seen: events ignored until the frame's SYN_REPORT, then the kernel's state read */
-static int mt_max_x = PJ_PANEL_W - 1, mt_max_y = PJ_RGN_H - 1;
+static int mt_max_x = PJ_PANEL_W - 1, mt_max_y = PJ_PANEL_H - 1;
+static int mt_portrait;   /* the touchscreen reports the portrait panel (taller than wide: the F133's JD9366T, 720x1920) */
 static int input_open;
 static int touch_open(void)
 {
@@ -695,14 +763,26 @@ static int touch_open(void)
 	struct input_absinfo a;
 	if (!ioctl(f, EVIOCGABS(ABS_MT_POSITION_X), &a) && a.maximum > 0) mt_max_x = a.maximum;
 	if (!ioctl(f, EVIOCGABS(ABS_MT_POSITION_Y), &a) && a.maximum > 0) mt_max_y = a.maximum;
+	mt_portrait = mt_max_y > mt_max_x;
 	return f;
 }
-static int mt_panel_x(int raw) { return (int)((int64_t)raw * PJ_PANEL_W / (mt_max_x + 1)); }
-static int mt_panel_y(int raw) { return (int)((int64_t)raw * PJ_RGN_H / (mt_max_y + 1)); }
+/* finger k on the landscape canvas (PJ_PANEL_W x PJ_PANEL_H), where the dash draws. A portrait touchscreen is turned as
+ * the dash's display is (rotate = 270 in dash.conf, LVGL's turn): panel (px, py) is landscape (py, PJ_PANEL_H - 1 - px) */
+static void mt_canvas(int k, int *x, int *y)
+{
+	if (mt_portrait) {
+		*x = (int)((int64_t)mt[k].y * PJ_PANEL_W / (mt_max_y + 1));
+		*y = PJ_PANEL_H - 1 - (int)((int64_t)mt[k].x * PJ_PANEL_H / (mt_max_x + 1));
+	} else {
+		*x = (int)((int64_t)mt[k].x * PJ_PANEL_W / (mt_max_x + 1));
+		*y = (int)((int64_t)mt[k].y * PJ_PANEL_H / (mt_max_y + 1));
+	}
+}
 /* finger k in the phone's UI-area pixels: its place on the picture, scaled to this session's UI area */
 static void mt_ui(int k, int *x, int *y)
 {
-	int px = mt_panel_x(mt[k].x) - PJ_RGN_X, py = mt_panel_y(mt[k].y);
+	int px, py;
+	mt_canvas(k, &px, &py), px -= PJ_RGN_X, py -= PJ_RGN_Y;
 	px = px < 0 ? 0 : px >= PJ_RGN_W ? PJ_RGN_W - 1 : px;
 	py = py < 0 ? 0 : py >= PJ_RGN_H ? PJ_RGN_H - 1 : py;
 	*x = px * vid.uw / PJ_RGN_W, *y = py * vid.uh / PJ_RGN_H;
@@ -773,10 +853,11 @@ static void mt_frame(int fd, aa_tls_t *tls, uint64_t ts)
 		int first = -1;
 		for (int i = 0; i < MT_MAX && first < 0; i++) if (mt[i].active) first = i;
 		if (first >= 0) {
-			int x = mt_panel_x(mt[first].x);
+			int x, y;
+			mt_canvas(first, &x, &y);
 			mt_gesture = tls && input_open && phone_off_ok && (mt_force_visible || access(PJ_VISIBLE, F_OK) == 0) &&
-				     x >= PJ_RGN_X && x < PJ_RGN_X + PJ_RGN_W ? 1 : -1;   /* (not before the phone's clock is known) */
-		}
+				     x >= PJ_RGN_X && x < PJ_RGN_X + PJ_RGN_W && y >= PJ_RGN_Y && y < PJ_RGN_Y + PJ_RGN_H ? 1 : -1;
+		}   /* (and not before the phone's clock is known) */
 	}
 	if (mt_gesture == 1) {
 		for (int i = 0; i < MT_MAX; i++) if (mt[i].active && !mt[i].on) {   /* fingers down */
@@ -875,12 +956,22 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 		for (int k = 0; k < MT_MAX; k++) mt[k].on = mt[k].moved = 0, mt_prev_any |= mt[k].active;   // a finger down
 	}                                                                    // now: ignored until all are up
 	fprintf(stderr, "aa: session loop: waiting for the phone's first message\n");
-	int64_t next_ping = now_us() + AA_PING_EVERY_US, last_rx = now_us(), next_stat = now_us() + 5000000;
+	int64_t next_ping = now_us() + AA_PING_EVERY_US, last_rx = now_us(), next_stat = now_us() + 5000000, quit_until = 0;
 	for (;;) {
-		// the decoder died (bad or unsupported stream): end the session rather than leave its last picture up as if
-		// live; the phone reconnects and a fresh decoder starts
-		if (sink == -2) { fprintf(stderr, "aa: ending the session: no video decoder\n"); break; }
-		if (tx_dead) { fprintf(stderr, "aa: ending the session: a write to the phone failed (it stopped reading)\n"); break; }
+		if (aa_quit == 1) {   // stopped: the phone told first (dash-aa stops the decoder at the same time: no matter now)
+			uint8_t q[4]; pb_out o = { q, 0, sizeof q, 0 }; pb_u(&o, AA_SHUTDOWN_REASON, AA_SHUTDOWN_QUIT);
+			if (!tx_dead) send_msg(fd, tls, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_SHUTDOWN_REQUEST, q, o.n);
+			fprintf(stderr, "aa: stopped: telling the phone the session ends\n");
+			aa_quit = 2, quit_until = now_us() + 2000000;
+		}
+		if (aa_quit == 2) {
+			if (tx_dead || now_us() >= quit_until) { fprintf(stderr, "aa: ending the session: stopped (%s)\n", tx_dead ? "the phone gone" : "no answer in 2 s"); break; }
+		} else {
+			// the decoder died (bad or unsupported stream): end the session rather than leave its last picture up as if
+			// live; the phone reconnects and a fresh decoder starts
+			if (sink == -2) { fprintf(stderr, "aa: ending the session: no video decoder\n"); break; }
+			if (tx_dead) { fprintf(stderr, "aa: ending the session: a write to the phone failed (it stopped reading)\n"); break; }
+		}
 		int64_t t = now_us(), left = next_ping - t;
 		if (t - last_rx > AA_SILENT_US) { fprintf(stderr, "aa: phone silent for %d s, ending the session\n", AA_SILENT_US / 1000000); break; }
 		if (t >= next_stat) {   // what the video path did: frames and data in from the phone
@@ -901,6 +992,7 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 			if (tx_dead) continue;   /* to the loop's top: the session ends now */
 		}
 		struct pollfd pf[2] = { { fd, POLLIN, 0 }, { touch, POLLIN, 0 } };
+		if (aa_quit == 2) { int64_t q = quit_until - now_us(); if (q < left) left = q > 0 ? q : 0; }   // woken for its deadline
 		int pr = poll(pf, touch >= 0 ? 2 : 1, (int)(left / 1000) + 1);
 		if (pr < 0) { if (errno == EINTR) continue; break; }
 		if (pr == 0) continue;
@@ -946,6 +1038,9 @@ static void aa_session(int fd, aa_tls_t *tls, int sink, int *touchp)
 		} else if (chan == AA_CH_CONTROL && id == AA_CTL_SHUTDOWN_REQUEST) {
 			send_msg(fd, tls, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_SHUTDOWN_RESPONSE, (const uint8_t *)"", 0);
 			fprintf(stderr, "aa: phone asked to shut down\n");
+			break;
+		} else if (chan == AA_CH_CONTROL && id == AA_CTL_SHUTDOWN_RESPONSE) {
+			fprintf(stderr, "aa: the phone acknowledged the end of the session\n");
 			break;
 		} else if (chan == AA_CH_INPUT && id == AA_IN_BINDING_REQUEST) {
 			uint8_t r[8]; pb_out o = { r, 0, sizeof r, 0 }; pb_u(&o, AA_BINDRESP_STATUS, AA_STATUS_OK);
@@ -1049,6 +1144,12 @@ static int mt_selftest(void)
 	phone_off_ok = 1; F(0, 1, 500, 200); mt_frame(-1, fake, 7000); mt[0].active = 0; mt_frame(-1, fake, 8000);
 	if (mt_nlog != 2) die("touch selftest: a gesture before the phone's clock was known went out (%d events)", mt_nlog);
 	phone_off = 0, phone_off_seen = phone_off_ok = 0;
+	/* a portrait touchscreen (the F133's), turned 270 as the dash's display: 20, 10 into the picture lands at 20, 10 */
+	mt_portrait = 1, mt_max_x = PJ_PANEL_H - 1, mt_max_y = PJ_PANEL_W - 1;
+	mt[0].x = PJ_PANEL_H - 1 - (PJ_RGN_Y + 10), mt[0].y = PJ_RGN_X + 20;
+	int ux, uy; vid = AA_VIDEO_720; mt_ui(0, &ux, &uy);
+	if (ux != 20 * vid.uw / PJ_RGN_W || uy != 10 * vid.uh / PJ_RGN_H) die("touch selftest: portrait touch at %d,%d, want 20,10", ux, uy);
+	mt_portrait = 0, mt_max_x = PJ_PANEL_W - 1, mt_max_y = PJ_PANEL_H - 1;
 	#undef F
 	uint8_t b[400]; int idx[2] = { 0, 1 }; mt[0].x = 120; mt[1].x = 1279; mt[0].y = 0; mt[1].y = 479;   /* picture corners */
 	size_t n = build_mt(b, sizeof b, 9, idx, 2, 1, AA_TOUCH_POINTER_DOWN);
@@ -1073,8 +1174,10 @@ static void put_enc(int fd, aa_tls_t *t, uint8_t ch, uint8_t ft, const uint8_t *
 }
 static int rx_selftest(void)
 {
-	if (gen_cert("/tmp/aa-rx.crt", "/tmp/aa-rx.key", 86400)) die("rx selftest: cert");
-	SSL_CTX *sc = tls_ctx("/tmp/aa-rx.crt", "/tmp/aa-rx.key", 1), *cc = tls_ctx("/tmp/aa-rx.crt", "/tmp/aa-rx.key", 0);
+	char crt[256], key[256];
+	tmp_path(crt, sizeof crt, "aa-rx.crt"), tmp_path(key, sizeof key, "aa-rx.key");
+	if (gen_cert(crt, key, 86400)) die("rx selftest: cert");
+	SSL_CTX *sc = tls_ctx(crt, key, 1), *cc = tls_ctx(crt, key, 0);
 	aa_tls_t ph, hu; tls_init(&ph, sc, 1); tls_init(&hu, cc, 0);   // the phone is the TLS server, the HU the client
 	for (int i = 0; i < 20 && !(SSL_is_init_finished(ph.ssl) && SSL_is_init_finished(hu.ssl)); i++) {
 		if (tls_handshake(&hu) < 0 || tls_handshake(&ph) < 0) die("rx selftest: handshake");
@@ -1096,9 +1199,86 @@ static int rx_selftest(void)
 	return 0;
 }
 
+/* one phone's connection, from the version to its session's end, TCP or USB (fd: the socket; for aa usb and
+ * --conn-test, a socketpair); closes fd; true: a session ran */
+static int aa_conn(int fd, SSL_CTX *ctx, int *touchp)
+{
+	while (waitpid(-1, NULL, WNOHANG) > 0) {}   /* a decoder left behind (it would not die) that has died since */
+	tx_dead = 0;   /* this phone's: its version and handshake go through send_msg too */
+	struct timeval tmo = { 5, 0 }, live = { AA_SILENT_US / 1000000, 0 };   // per read: before auth, and in the session
+	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tmo, sizeof tmo);
+	rd_deadline = now_us() + 20000000;   // version + TLS within 20 s, however the bytes trickle in
+	aa_tls_t t; tls_init(&t, ctx, 0);
+	uint8_t vr[4] = { AA_VERSION_MAJOR >> 8, AA_VERSION_MAJOR & 0xff, AA_VERSION_MINOR >> 8, AA_VERSION_MINOR & 0xff };
+	send_msg(fd, NULL, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_VERSION_REQUEST, vr, sizeof vr);
+	uint8_t chan; const uint8_t *m; size_t mn;
+	int ok = recv_msg(fd, NULL, &chan, &m, &mn) == 0 && msg_id(m, mn) == AA_CTL_VERSION_RESPONSE;
+	fprintf(stderr, "aa: version %s\n", ok ? "agreed" : "refused");
+	int up = ok && do_ssl_handshake(fd, &t) == 0, lk = -1;
+	if (up) {   // one phone at a time (PJ_SESSION): taken once TLS is up (a dial that fails before holds nothing), held to
+		    // the session's end. aa opens the file nowhere else (closing another descriptor of it would drop this POSIX
+		    // lock), and the decoder child does not inherit it
+		struct flock fl = { .l_type = F_WRLCK, .l_whence = SEEK_SET };
+		if ((lk = open(PJ_SESSION, O_RDWR | O_CREAT | O_CLOEXEC, 0644)) >= 0 && fcntl(lk, F_SETLK, &fl))
+			fprintf(stderr, "aa: another phone's session is up: this phone refused\n"), close(lk), lk = -1, up = -1;
+	}
+	if (up == 1) {
+		fprintf(stderr, "aa: TLS up (%s, %s), session starting\n", SSL_get_version(t.ssl), SSL_get_cipher(t.ssl));
+		phone_off = 0, phone_off_seen = phone_off_ok = 0;   /* this phone's clock: learned from its video and pings */
+		rd_deadline = 0;
+		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &live, sizeof live);   // a frame stalled half-way ends the session
+		setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &live, sizeof live);   // and so does a phone that stops reading
+		// AUTH_COMPLETE is the PLAINTEXT handshake-done signal: the phone activates its SSL context on
+		// receiving it, and only frames AFTER it are encrypted. Sent encrypted, the phone logs "encrypted
+		// frame ... with no ssl context, waiting" and times out. So NULL (plain), like VERSION/SSL_HANDSHAKE.
+		uint8_t ac[8]; pb_out o = { ac, 0, sizeof ac, 0 }; pb_u(&o, AA_AC_STATUS, AA_STATUS_OK);
+		if (send_msg(fd, NULL, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_AUTH_COMPLETE, ac, o.n)) {
+			fprintf(stderr, "aa: the phone left before its session (AUTH_COMPLETE not sent)\n");
+			goto done;   /* no decoder and no split for a session that never starts */
+		}
+		char c; struct pollfd pp = { fd, POLLIN, 0 };   /* nor for one that leaves at once: its first byte first */
+		if (poll(&pp, 1, AA_SILENT_US / 1000) != 1 || recv(fd, &c, 1, MSG_PEEK | MSG_DONTWAIT) <= 0) { fprintf(stderr, "aa: the phone left before its session\n"); goto done; }
+		int sink = spawn_sink();
+		if (sink < 0) { fprintf(stderr, "aa: no video decoder (%s): no session\n", strerror(errno)); goto done; }
+		close(open("/run/dash-project", O_CREAT | O_WRONLY, 0644));   // the dash UI yields the video region
+		close(open(PJ_AA_SESSION, O_CREAT | O_WRONLY | O_CLOEXEC, 0644));
+		unlink(PJ_AA_FOCUS);   // one left from before
+		aa_session(fd, &t, sink, touchp);
+		// stop the decoder and wait it out BEFORE dropping the marker: the UI repaints the dash when the marker
+		// goes, and a decoder still drawing would leave its last picture over it
+		if (sink >= 0) close(sink);
+		// reaped only here (SIGCHLD left as it is): a decoder that died mid-session stays a zombie until this waitpid,
+		// so its pid cannot go to another process before the kill
+		if (sink_pid > 0) {   /* 2 s to go, then killed (a stopped decoder outlasts SIGTERM); one stuck in the kernel even
+			                 * then is left behind, never to run again (no picture drawn), and reaped at a later dial */
+			kill(sink_pid, SIGTERM);
+			int r = 0;
+			for (int i = 0; i < 40 && (r = waitpid(sink_pid, NULL, WNOHANG)) == 0; i++) {
+				if (i == 20) kill(sink_pid, SIGKILL);
+				usleep(100000);
+			}
+			if (r == 0) fprintf(stderr, "aa: the decoder (pid %d) does not die: left behind\n", (int)sink_pid);
+			sink_pid = -1;
+		}
+		unlink("/run/dash-project");
+		unlink(PJ_AA_SESSION), unlink(PJ_AA_FOCUS), unlink(PJ_FPS);   // the decoder, killed, leaves its fps behind
+		fprintf(stderr, "aa: session ended\n");
+	} else if (ok && !up) {
+		unsigned long err = ERR_get_error();
+		fprintf(stderr, "aa: TLS handshake failed: %s\n", err ? ERR_error_string(err, NULL) : "peer closed or timed out");
+	}
+done:
+	for (int k = 0; k < AA_NCHAN; k++) free(rx_asm[k].p), rx_asm[k] = (aa_asm_t){0};   /* the next phone starts small */
+	tls_free(&t); close(fd);
+	if (lk >= 0) close(lk);   // the next phone's turn
+	return up == 1;
+}
+
 static int aa_serve(const char *cert, const char *key)
 {
 	signal(SIGPIPE, SIG_IGN);
+	// SIGTERM: aa_quit. SA_RESTART keeps reads and writes going; poll() still returns EINTR, so the loops notice
+	struct sigaction st = { 0 }; st.sa_handler = aa_on_term; st.sa_flags = SA_RESTART; sigaction(SIGTERM, &st, NULL);
 	setvbuf(stderr, NULL, _IOLBF, 0);   // line-buffered: the serve log survives a hard kill (dash-aa stop)
 	int ls = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0); if (ls < 0) die("socket: %s", strerror(errno));   /* not the decoder's */
 	int one = 1; setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
@@ -1108,81 +1288,285 @@ static int aa_serve(const char *cert, const char *key)
 	SSL_CTX *ctx = tls_ctx(cert, key, 0);   // the head unit is the TLS client: it sends the ClientHello
 	fprintf(stderr, "aa: listening on %d (phone must be on the AP; cert %s)\n", AA_PORT, cert);
 	for (;;) {
+		if (aa_quit) { fprintf(stderr, "aa: stopped\n"); return 0; }
+		struct pollfd lp = { ls, POLLIN, 0 };   // not a bare accept: SA_RESTART would restart it past a stop
+		if (poll(&lp, 1, 1000) != 1) continue;
 		int fd = accept(ls, NULL, NULL); if (fd < 0) continue;
-		while (waitpid(-1, NULL, WNOHANG) > 0) {}   /* a decoder left behind (it would not die) that has died since */
 		fcntl(fd, F_SETFD, FD_CLOEXEC);   /* nor the phone's socket */
-		tx_dead = 0;   /* this phone's: its version and handshake go through send_msg too */
 		// as aasdk (TCPWrapper) and headunit (hu_tcp): small writes (media ACKs, touches, pings) go out at once,
 		// not held until the phone acknowledges the previous one -- with one frame in flight, that stalls video
 		setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
 		fprintf(stderr, "aa: phone dialled in on %d\n", AA_PORT);
-		struct timeval tmo = { 5, 0 }, live = { AA_SILENT_US / 1000000, 0 };   // per read: before auth, and in the session
-		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tmo, sizeof tmo);
-		rd_deadline = now_us() + 20000000;   // version + TLS within 20 s, however the bytes trickle in
-		aa_tls_t t; tls_init(&t, ctx, 0);
-		uint8_t vr[4] = { AA_VERSION_MAJOR >> 8, AA_VERSION_MAJOR & 0xff, AA_VERSION_MINOR >> 8, AA_VERSION_MINOR & 0xff };
-		send_msg(fd, NULL, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_VERSION_REQUEST, vr, sizeof vr);
-		uint8_t chan; const uint8_t *m; size_t mn;
-		int ok = recv_msg(fd, NULL, &chan, &m, &mn) == 0 && msg_id(m, mn) == AA_CTL_VERSION_RESPONSE;
-		fprintf(stderr, "aa: version %s\n", ok ? "agreed" : "refused");
-		int up = ok && do_ssl_handshake(fd, &t) == 0, lk = -1;
-		if (up) {   // one phone at a time (PJ_SESSION): taken once TLS is up (a dial that fails before holds nothing), held to
-			    // the session's end. aa opens the file nowhere else (closing another descriptor of it would drop this POSIX
-			    // lock), and the decoder child does not inherit it
-			struct flock fl = { .l_type = F_WRLCK, .l_whence = SEEK_SET };
-			if ((lk = open(PJ_SESSION, O_RDWR | O_CREAT | O_CLOEXEC, 0644)) >= 0 && fcntl(lk, F_SETLK, &fl))
-				fprintf(stderr, "aa: another phone's session is up: this phone refused\n"), close(lk), lk = -1, up = -1;
-		}
-		if (up == 1) {
-			fprintf(stderr, "aa: TLS up (%s, %s), session starting\n", SSL_get_version(t.ssl), SSL_get_cipher(t.ssl));
-			phone_off = 0, phone_off_seen = phone_off_ok = 0;   /* this phone's clock: learned from its video and pings */
-			rd_deadline = 0;
-			setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &live, sizeof live);   // a frame stalled half-way ends the session
-			setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &live, sizeof live);   // and so does a phone that stops reading
-			// AUTH_COMPLETE is the PLAINTEXT handshake-done signal: the phone activates its SSL context on
-			// receiving it, and only frames AFTER it are encrypted. Sent encrypted, the phone logs "encrypted
-			// frame ... with no ssl context, waiting" and times out. So NULL (plain), like VERSION/SSL_HANDSHAKE.
-			uint8_t ac[8]; pb_out o = { ac, 0, sizeof ac, 0 }; pb_u(&o, AA_AC_STATUS, AA_STATUS_OK);
-			if (send_msg(fd, NULL, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_AUTH_COMPLETE, ac, o.n)) {
-				fprintf(stderr, "aa: the phone left before its session (AUTH_COMPLETE not sent)\n");
-				goto done;   /* no decoder and no split for a session that never starts */
-			}
-			char c; struct pollfd pp = { fd, POLLIN, 0 };   /* nor for one that leaves at once: its first byte first */
-			if (poll(&pp, 1, AA_SILENT_US / 1000) != 1 || recv(fd, &c, 1, MSG_PEEK | MSG_DONTWAIT) <= 0) { fprintf(stderr, "aa: the phone left before its session\n"); goto done; }
-			int sink = spawn_sink();
-			if (sink < 0) { fprintf(stderr, "aa: no video decoder (%s): no session\n", strerror(errno)); goto done; }
-			close(open("/run/dash-project", O_CREAT | O_WRONLY, 0644));   // the dash UI yields the video region
-			close(open(PJ_AA_SESSION, O_CREAT | O_WRONLY | O_CLOEXEC, 0644));
-			unlink(PJ_AA_FOCUS);   // one left from before
-			aa_session(fd, &t, sink, &touch);
-			// stop the decoder and wait it out BEFORE dropping the marker: the UI repaints the dash when the marker
-			// goes, and a decoder still drawing would leave its last picture over it
-			if (sink >= 0) close(sink);
-			// reaped only here (SIGCHLD left as it is): a decoder that died mid-session stays a zombie until this waitpid,
-			// so its pid cannot go to another process before the kill
-			if (sink_pid > 0) {   /* 2 s to go, then killed (a stopped decoder outlasts SIGTERM); one stuck in the kernel even
-				                 * then is left behind, never to run again (no picture drawn), and reaped at a later dial */
-				kill(sink_pid, SIGTERM);
-				int r = 0;
-				for (int i = 0; i < 40 && (r = waitpid(sink_pid, NULL, WNOHANG)) == 0; i++) {
-					if (i == 20) kill(sink_pid, SIGKILL);
-					usleep(100000);
-				}
-				if (r == 0) fprintf(stderr, "aa: the decoder (pid %d) does not die: left behind\n", (int)sink_pid);
-				sink_pid = -1;
-			}
-			unlink("/run/dash-project");
-			unlink(PJ_AA_SESSION), unlink(PJ_AA_FOCUS), unlink(PJ_FPS);   // the decoder, killed, leaves its fps behind
-			fprintf(stderr, "aa: session ended\n");
-		} else if (ok && !up) {
-			unsigned long err = ERR_get_error();
-			fprintf(stderr, "aa: TLS handshake failed: %s\n", err ? ERR_error_string(err, NULL) : "peer closed or timed out");
-		}
-	done:
-		for (int k = 0; k < AA_NCHAN; k++) free(rx_asm[k].p), rx_asm[k] = (aa_asm_t){0};   /* the next phone starts small */
-		tls_free(&t); close(fd);
-		if (lk >= 0) close(lk);   // the next phone's turn
+		aa_conn(fd, ctx, &touch);
+	}   // (a stop during a session: the loop's top, once aa_conn has said goodbye and closed it)
+}
+
+#ifdef AA_USB
+// ---- wired: Android Open Accessory over usbfs (no libusb needed) ----
+// A phone in its normal mode answers AOA's vendor requests: GET_PROTOCOL (51), the identity strings (SEND_STRING, 52:
+// the Android Auto app's accessory filter takes manufacturer "Android", model "Android Auto"), START (53). It comes back
+// as Google's accessory (18d1:2d00, 2d01 with adb), whose interface 0 has a bulk IN and a bulk OUT endpoint carrying the
+// same frames as the TCP socket. A thread copies bulk IN into a socketpair, so aa_conn reads and polls a socket as over
+// Wi-Fi; its writes go out one frame a bulk transfer (usb_write). aa usb serves one phone's connection and exits: its
+// wrapper cuts the port's power (VBUS) and runs it again, as the stock firmware does before every start, so the phone
+// always comes back out of accessory mode for a fresh session.
+#define AOA_VID 0x18d1
+enum { AOA_GET_PROTOCOL = 51, AOA_SEND_STRING = 52, AOA_START = 53 };
+static const char *const aoa_ident[6] = {   /* manufacturer, model, description, version, URI, serial (a placeholder) */
+	"Android", "Android Auto", "Android Auto", "2.0.1", "https://www.android.com/auto/", "HU-AAAAAA001" };
+typedef struct { uint16_t vid, pid; uint8_t cls; unsigned ep_in, ep_out, mps; } usb_dev_t;
+static int usb_fd = -1;
+static unsigned usb_ep_out, usb_mps = 512;
+
+// a bulk write's timeout is the session socket's own send timeout (aa_conn sets it once the session starts); before
+// that, 20 s: the phone's app may still be starting
+static ssize_t usb_write(int fd, const void *b, size_t n)
+{
+	struct timeval tv = { 0, 0 }; socklen_t tl = sizeof tv;
+	getsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, &tl);
+	unsigned ms = tv.tv_sec || tv.tv_usec ? (unsigned)(tv.tv_sec * 1000 + tv.tv_usec / 1000) : 20000;
+	struct usbdevfs_bulktransfer t = { .ep = usb_ep_out, .len = (unsigned)n, .timeout = ms, .data = (void *)b };
+	int r = ioctl(usb_fd, USBDEVFS_BULK, &t);
+	if (r == (int)n && n % usb_mps == 0) {   /* whole packets end with a zero-length one, else the phone waits for more */
+		t.len = 0;
+		if (ioctl(usb_fd, USBDEVFS_BULK, &t) < 0) return -1;
 	}
+	return r;
+}
+
+// a usbfs node's descriptors (the device's, then its configurations', as read() gives them) -> ids, class, and the first
+// configuration's interface 0 bulk endpoints (the accessory's); 0, or -1 if they are not a device's
+static int usb_parse(const uint8_t *b, size_t n, usb_dev_t *d)
+{
+	if (n < 18 || b[0] < 18 || b[1] != USB_DT_DEVICE) return -1;
+	*d = (usb_dev_t){ .vid = (uint16_t)(b[8] | b[9] << 8), .pid = (uint16_t)(b[10] | b[11] << 8), .cls = b[4], .mps = 512 };
+	int if0 = 0, configs = 0;
+	for (size_t i = b[0]; i + 2 <= n && b[i] >= 2 && i + b[i] <= n; i += b[i]) {
+		if (b[i + 1] == USB_DT_CONFIG && ++configs > 1) break;
+		if (b[i + 1] == USB_DT_INTERFACE && b[i] >= 9) if0 = b[i + 2] == 0 && b[i + 3] == 0;   /* interface 0, setting 0 */
+		else if (b[i + 1] == USB_DT_ENDPOINT && b[i] >= 7 && if0 && (b[i + 3] & USB_ENDPOINT_XFERTYPE_MASK) == USB_ENDPOINT_XFER_BULK) {
+			if (b[i + 2] & USB_DIR_IN) d->ep_in = b[i + 2];
+			else d->ep_out = b[i + 2], d->mps = (b[i + 4] | b[i + 5] << 8) & 0x7ff;
+		}
+	}
+	if (!d->mps) d->mps = 512;
+	return 0;
+}
+
+// a phone's accessory descriptors (device; configuration; interface 0, the accessory: bulk 0x81 in, 0x02 out; interface
+// 1, adb) and a second configuration that must not count -> interface 0's endpoints
+static int usb_selftest(void)
+{
+	static const uint8_t d[] = {
+		18, USB_DT_DEVICE, 0x00, 0x02, 0, 0, 0, 64, 0xd1, 0x18, 0x01, 0x2d, 0, 1, 1, 2, 3, 1,
+		9, USB_DT_CONFIG, 55, 0, 2, 1, 0, 0x80, 250,
+		9, USB_DT_INTERFACE, 0, 0, 2, 0xff, 0xff, 0, 0,
+		7, USB_DT_ENDPOINT, 0x81, USB_ENDPOINT_XFER_BULK, 0x00, 0x02, 0,
+		7, USB_DT_ENDPOINT, 0x02, USB_ENDPOINT_XFER_BULK, 0x00, 0x02, 0,
+		9, USB_DT_INTERFACE, 1, 0, 2, 0xff, 0x42, 1, 0,
+		7, USB_DT_ENDPOINT, 0x83, USB_ENDPOINT_XFER_BULK, 0x00, 0x02, 0,
+		7, USB_DT_ENDPOINT, 0x04, USB_ENDPOINT_XFER_BULK, 0x00, 0x02, 0,
+		9, USB_DT_CONFIG, 32, 0, 1, 2, 0, 0x80, 250,
+		9, USB_DT_INTERFACE, 0, 0, 2, 0xff, 0xff, 0, 0,
+		7, USB_DT_ENDPOINT, 0x85, USB_ENDPOINT_XFER_BULK, 0x40, 0x00, 0,
+		7, USB_DT_ENDPOINT, 0x06, USB_ENDPOINT_XFER_BULK, 0x40, 0x00, 0,
+	};
+	usb_dev_t u;
+	if (usb_parse(d, sizeof d, &u) || u.vid != AOA_VID || u.pid != 0x2d01 || u.ep_in != 0x81 || u.ep_out != 0x02 || u.mps != 512)
+		die("usb selftest: the accessory's endpoints (in 0x%02x out 0x%02x, %u-byte packets)", u.ep_in, u.ep_out, u.mps);
+	if (!usb_parse(d, 17, &u) || !usb_parse(d + 18, sizeof d - 18, &u)) die("usb selftest: not a device's descriptors, taken");
+	printf("AA-USB-SELFTEST OK: the accessory's bulk endpoints from its descriptors\n");
+	return 0;
+}
+
+static int usb_ctrl(int fd, uint8_t type, uint8_t req, uint16_t val, uint16_t idx, void *data, uint16_t len)
+{
+	struct usbdevfs_ctrltransfer c = { .bRequestType = type, .bRequest = req, .wValue = val, .wIndex = idx, .wLength = len,
+					   .timeout = 1000, .data = data };
+	return ioctl(fd, USBDEVFS_CONTROL, &c);
+}
+
+// The phone, opened as an accessory with interface 0 claimed: every second, each USB device (/dev/bus/usb/BBB/DDD, from
+// devtmpfs) is looked at: an accessory is opened (one left from an earlier run is used as it is, as AOA says; its power
+// cut by the wrapper first is the sure start); any other device but a hub is asked for AOA once (a refusal: not again).
+// Returns its usbfs fd, *d its endpoints.
+static int usb_accessory(usb_dev_t *d)
+{
+	static char asked[16][64]; static unsigned nasked;   /* nodes asked already (devnums only grow: no clash soon) */
+	for (int said = 0;; sleep(1)) {
+		DIR *bus = opendir("/dev/bus/usb");
+		if (!bus) { if (!said++) fprintf(stderr, "aa: no /dev/bus/usb (no USB host, or no mdev): waiting\n"); continue; }
+		struct dirent *be, *de;
+		while ((be = readdir(bus))) {
+			char dir[48]; DIR *dv;
+			if (be->d_name[0] == '.' || snprintf(dir, sizeof dir, "/dev/bus/usb/%.8s", be->d_name) >= (int)sizeof dir || !(dv = opendir(dir))) continue;
+			while ((de = readdir(dv))) {
+				char path[64]; uint8_t desc[4096]; ssize_t n; usb_dev_t u; int fd, seen = 0;
+				if (de->d_name[0] == '.' || snprintf(path, sizeof path, "%s/%.8s", dir, de->d_name) >= (int)sizeof path) continue;
+				if ((fd = open(path, O_RDWR | O_CLOEXEC)) < 0) continue;
+				if ((n = read(fd, desc, sizeof desc)) < 18 || usb_parse(desc, (size_t)n, &u) || u.cls == USB_CLASS_HUB) { close(fd); continue; }
+				if (u.vid == AOA_VID && u.pid >= 0x2d00 && u.pid <= 0x2d05) {   /* an accessory */
+					unsigned ifc = 0;
+					int bad = !u.ep_in || !u.ep_out ? -1 : ioctl(fd, USBDEVFS_CLAIMINTERFACE, &ifc) ? errno : 0;
+					if (!bad) { closedir(dv), closedir(bus); *d = u; return fd; }
+					for (unsigned k = 0; k < nasked && k < 16; k++) seen |= !strcmp(asked[k], path);
+					if (!seen) {   /* said once a node: it is looked at again every second, the log is on /data */
+						snprintf(asked[nasked++ % 16], sizeof asked[0], "%s", path);
+						if (bad < 0) fprintf(stderr, "aa: accessory %s without its two bulk endpoints\n", path);
+						else fprintf(stderr, "aa: accessory %s: interface 0: %s\n", path, strerror(bad));
+					}
+					close(fd); continue;
+				}
+				for (unsigned k = 0; k < nasked && k < 16; k++) seen |= !strcmp(asked[k], path);
+				if (seen) { close(fd); continue; }
+				snprintf(asked[nasked++ % 16], sizeof asked[0], "%s", path);
+				uint8_t ver[2] = { 0, 0 };
+				if (usb_ctrl(fd, USB_DIR_IN | USB_TYPE_VENDOR, AOA_GET_PROTOCOL, 0, 0, ver, 2) == 2 && (ver[0] | ver[1] << 8) >= 1) {
+					int ok = 1;
+					for (int i = 0; i < 6 && ok; i++)
+						ok = usb_ctrl(fd, USB_DIR_OUT | USB_TYPE_VENDOR, AOA_SEND_STRING, 0, (uint16_t)i, (void *)aoa_ident[i],
+							      (uint16_t)(strlen(aoa_ident[i]) + 1)) >= 0;
+					ok = ok && usb_ctrl(fd, USB_DIR_OUT | USB_TYPE_VENDOR, AOA_START, 0, 0, NULL, 0) >= 0;
+					fprintf(stderr, "aa: %s (%04x:%04x) speaks AOA %u: %s\n", path, u.vid, u.pid, ver[0] | ver[1] << 8,
+						ok ? "asked to start Android Auto (accessory mode)" : "its switch failed");
+				}
+				close(fd);
+			}
+			closedir(dv);
+		}
+		closedir(bus);
+	}
+}
+
+typedef struct { int sock, ufd; unsigned ep; } usb_rx_t;
+static void *usb_rx(void *arg)   /* bulk IN -> the session's socket, until the phone goes (or aa exits: usbfs waits are killable) */
+{
+	const usb_rx_t *u = arg;
+	static uint8_t b[16384];   /* a multiple of the packet size: a transfer never overflows it */
+	for (;;) {
+		struct usbdevfs_bulktransfer t = { .ep = u->ep, .len = sizeof b, .timeout = 0, .data = b };   /* no timeout: one would */
+		int n = ioctl(u->ufd, USBDEVFS_BULK, &t);                                                   /* drop the bytes it got */
+		if (n < 0 || (n > 0 && writen(u->sock, b, (size_t)n))) break;
+	}
+	shutdown(u->sock, SHUT_RDWR);   /* the session reads the end */
+	return NULL;
+}
+
+// aa usb: one phone's connection over USB; 0 if its session ran. The reader thread dies with the process.
+static int aa_usb_serve(const char *cert, const char *key)
+{
+	signal(SIGPIPE, SIG_IGN);
+	setvbuf(stderr, NULL, _IOLBF, 0);
+	int touch = touch_open();
+	SSL_CTX *ctx = tls_ctx(cert, key, 0);
+	fprintf(stderr, "aa: waiting for a phone on USB (cert %s)\n", cert);
+	usb_dev_t d; pthread_t th; int sv[2];
+	int ufd = usb_accessory(&d);
+	fprintf(stderr, "aa: the phone is on as an accessory (%04x:%04x, bulk in 0x%02x, out 0x%02x, %u-byte packets)\n",
+		d.vid, d.pid, d.ep_in, d.ep_out, d.mps);
+	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv)) die("socketpair: %s", strerror(errno));
+	static usb_rx_t rx;   /* the reader thread reads it until the process ends: not on this function's stack */
+	rx = (usb_rx_t){ sv[1], ufd, d.ep_in };
+	usb_fd = ufd, usb_ep_out = d.ep_out, usb_mps = d.mps, xwrite = usb_write;
+	if (pthread_create(&th, NULL, usb_rx, &rx)) die("no USB reader thread");
+	return aa_conn(sv[0], ctx, &touch) ? 0 : 1;
+}
+#endif // AA_USB
+
+// ---- the connection self-test (aa --conn-test): a phone over a socketpair, through version, TLS, discovery, a channel,
+// a ping, its shutdown; then a stop (SIGTERM): the head unit tells the phone ----
+// A session raises the dash's markers (/run/dash-project: its split view), so not where a dash runs: the build host.
+static int conn_want(int fd, aa_tls_t *t, uint8_t ch, uint16_t id, const uint8_t **m, size_t *mn)
+{
+	uint8_t c;
+	for (int i = 0; i < 50; i++)   /* the head unit's own pings come between */
+		if (recv_msg(fd, t, &c, m, mn) || *mn < 2) return -1;
+		else if (c == ch && msg_id(*m, *mn) == id) return 0;
+	return -1;
+}
+static void conn_hello(int fd, aa_tls_t *ph)   /* the phone's side, from the version to its service discovery request */
+{
+	const uint8_t *m; size_t mn; uint8_t cb[AA_MAX_FRAME_PAYLOAD]; int cn;
+	if (conn_want(fd, NULL, AA_CH_CONTROL, AA_CTL_VERSION_REQUEST, &m, &mn)) die("conn-test: no version request");
+	uint8_t vr[6] = { 0, AA_VERSION_MAJOR, 0, AA_VERSION_MINOR, 0, AA_VER_MATCH };
+	send_msg(fd, NULL, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_VERSION_RESPONSE, vr, sizeof vr);
+	while (!SSL_is_init_finished(ph->ssl)) {   /* the head unit's records in, the phone's out */
+		if (conn_want(fd, NULL, AA_CH_CONTROL, AA_CTL_SSL_HANDSHAKE, &m, &mn)) die("conn-test: the handshake stopped");
+		tls_feed(ph, m + 2, mn - 2);
+		if (tls_handshake(ph) < 0) die("conn-test: the phone's handshake failed");
+		while ((cn = tls_take(ph, cb, sizeof cb)) > 0) send_msg(fd, NULL, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_SSL_HANDSHAKE, cb, (size_t)cn);
+	}
+	if (conn_want(fd, NULL, AA_CH_CONTROL, AA_CTL_AUTH_COMPLETE, &m, &mn)) die("conn-test: no auth complete (plain)");
+	send_msg(fd, ph, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_SERVICE_DISCOVERY_REQUEST, (const uint8_t *)"", 0);
+}
+static int conn_selftest(void)
+{
+	if (access("/run/dash-ready", F_OK) == 0) die("conn-test: a dash runs here (its split view would open): on the build host");
+	char crt[256], key[256];   /* as selftest's */
+	tmp_path(crt, sizeof crt, "aa-cn.crt"), tmp_path(key, sizeof key, "aa-cn.key");
+	if (gen_cert(crt, key, 86400)) die("conn-test: cert");
+	SSL_CTX *hc = tls_ctx(crt, key, 0), *pc = tls_ctx(crt, key, 1);   /* the head unit is the client, the phone the server */
+	int sv[2]; if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv)) die("conn-test: socketpair");
+	signal(SIGPIPE, SIG_IGN);
+	pid_t hu = fork();
+	if (hu == 0) { close(sv[1]); int touch = -1; _exit(aa_conn(sv[0], hc, &touch) ? 0 : 3); }
+	close(sv[0]);
+	int fd = sv[1]; struct timeval tmo = { 10, 0 }; setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tmo, sizeof tmo);
+	aa_tls_t ph; tls_init(&ph, pc, 1);
+	const uint8_t *m; size_t mn;
+	conn_hello(fd, &ph);
+	if (conn_want(fd, &ph, AA_CH_CONTROL, AA_CTL_SERVICE_DISCOVERY_RESPONSE, &m, &mn)) die("conn-test: no service discovery");
+	uint64_t mw = 0, mh = 0, tw = 0, th = 0; pb_in in = { m + 2, mn - 2, 0 }; pb_val f;
+	while (pb_next(&in, &f) == 1) {
+		const uint8_t *av, *vc, *ic, *tc; size_t avl, vcl, icl, tcl;
+		if (f.field != AA_SDRESP_CHANNELS || f.wt != 2) continue;
+		if (pb_get_b(f.p, f.len, AA_CHD_AV_CHANNEL, &av, &avl) && pb_get_b(av, avl, AA_AVCH_VIDEO_CONFIGS, &vc, &vcl))
+			pb_get_u(vc, vcl, AA_VC_MARGIN_W, &mw), pb_get_u(vc, vcl, AA_VC_MARGIN_H, &mh);
+		if (pb_get_b(f.p, f.len, AA_CHD_INPUT_CHANNEL, &ic, &icl) && pb_get_b(ic, icl, AA_INCH_TOUCH_SCREEN, &tc, &tcl))
+			pb_get_u(tc, tcl, AA_TC_WIDTH, &tw), pb_get_u(tc, tcl, AA_TC_HEIGHT, &th);
+	}
+	aa_video_t want = video_wanted();   /* (no settings file on the build host: this build's own choice) */
+	if (mw != (uint64_t)(want.fw - want.uw) || mh != (uint64_t)(want.fh - want.uh) || tw != (uint64_t)want.uw || th != (uint64_t)want.uh)
+		die("conn-test: video margins %llux%llu, touch %llux%llu", (unsigned long long)mw, (unsigned long long)mh, (unsigned long long)tw, (unsigned long long)th);
+	uint8_t co[8]; pb_out o = { co, 0, sizeof co, 0 }; pb_u(&o, AA_COREQ_CHANNEL_ID, AA_CH_INPUT);
+	send_msg(fd, &ph, AA_CH_INPUT, AA_MSG_CONTROL, AA_CTL_CHANNEL_OPEN_REQUEST, co, o.n);
+	if (conn_want(fd, &ph, AA_CH_INPUT, AA_CTL_CHANNEL_OPEN_RESPONSE, &m, &mn)) die("conn-test: the input channel not opened");
+	uint8_t pg[16]; pb_out po = { pg, 0, sizeof pg, 0 }; pb_u(&po, AA_PING_TS, 123456789);
+	send_msg(fd, &ph, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_PING_REQUEST, pg, po.n);
+	uint64_t ts = 0;
+	if (conn_want(fd, &ph, AA_CH_CONTROL, AA_CTL_PING_RESPONSE, &m, &mn) || !pb_get_u(m + 2, mn - 2, AA_PING_TS, &ts) || ts != 123456789)
+		die("conn-test: no ping answer");
+	send_msg(fd, &ph, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_SHUTDOWN_REQUEST, (const uint8_t *)"", 0);
+	if (conn_want(fd, &ph, AA_CH_CONTROL, AA_CTL_SHUTDOWN_RESPONSE, &m, &mn)) die("conn-test: no shutdown answer");
+	int st; waitpid(hu, &st, 0);
+	if (!WIFEXITED(st) || WEXITSTATUS(st)) die("conn-test: the head unit's connection ended %d, not as a session", WIFEXITED(st) ? WEXITSTATUS(st) : -1);
+	close(fd); tls_free(&ph);
+	/* a stop (SIGTERM, as dash-aa stop sends it, with aa serve's handler): the head unit tells the phone
+	 * (ShutdownRequest, reason QUIT) and ends the session once the phone answers */
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv)) die("conn-test: socketpair");
+	hu = fork();
+	if (hu == 0) {
+		close(sv[1]);
+		struct sigaction sa = { 0 }; sa.sa_handler = aa_on_term; sa.sa_flags = SA_RESTART; sigaction(SIGTERM, &sa, NULL);
+		int touch = -1; _exit(aa_conn(sv[0], hc, &touch) ? 0 : 3);
+	}
+	close(sv[0]);
+	fd = sv[1]; setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tmo, sizeof tmo);
+	tls_init(&ph, pc, 1);
+	conn_hello(fd, &ph);
+	if (conn_want(fd, &ph, AA_CH_CONTROL, AA_CTL_SERVICE_DISCOVERY_RESPONSE, &m, &mn)) die("conn-test: stop: no service discovery");
+	usleep(200000);   /* its session loop running */
+	kill(hu, SIGTERM);
+	uint64_t why = 0;
+	if (conn_want(fd, &ph, AA_CH_CONTROL, AA_CTL_SHUTDOWN_REQUEST, &m, &mn) || !pb_get_u(m + 2, mn - 2, AA_SHUTDOWN_REASON, &why) || why != AA_SHUTDOWN_QUIT)
+		die("conn-test: stopped, the head unit did not tell the phone (reason %llu)", (unsigned long long)why);
+	send_msg(fd, &ph, AA_CH_CONTROL, AA_MSG_SPECIFIC, AA_CTL_SHUTDOWN_RESPONSE, (const uint8_t *)"", 0);
+	waitpid(hu, &st, 0);
+	if (!WIFEXITED(st) || WEXITSTATUS(st)) die("conn-test: stopped, the head unit's connection ended %d, not as a session", WIFEXITED(st) ? WEXITSTATUS(st) : -1);
+	close(fd); tls_free(&ph); SSL_CTX_free(hc); SSL_CTX_free(pc);
+	printf("AA-CONN-TEST OK: version, TLS, auth, discovery (margins %llux%llu, touch %llux%llu), channel, ping, shutdown; a stop says goodbye (quit) over a socketpair\n",
+	       (unsigned long long)mw, (unsigned long long)mh, (unsigned long long)tw, (unsigned long long)th);
+	return 0;
 }
 
 // ---- wireless BT handshake: [uint16 BE len][uint16 BE id][protobuf] over an RFCOMM fd ----
@@ -1198,6 +1582,17 @@ static int bt_recv(int fd, uint16_t *id, uint8_t *buf, size_t cap, size_t *n)
 	if (len > cap || readn(fd, buf, len)) return -1;
 	*n = len; return 0;
 }
+// the AP's credentials, the answer to the phone's WifiInfoRequest
+static int bt_send_info(int fd, const char *ssid, const char *key, const char *bssid)
+{
+	uint8_t pb[256]; pb_out w = { pb, 0, sizeof pb, 0 };
+	pb_b(&w, AA_BT_WIR_SSID, (const uint8_t *)ssid, strlen(ssid));
+	pb_b(&w, AA_BT_WIR_KEY, (const uint8_t *)key, strlen(key));
+	pb_b(&w, AA_BT_WIR_BSSID, (const uint8_t *)bssid, strlen(bssid));
+	pb_u(&w, AA_BT_WIR_SECURITY, AA_SEC_WPA2_PERSONAL);
+	pb_u(&w, AA_BT_WIR_AP_TYPE, AA_AP_DYNAMIC);
+	return bt_send(fd, AA_BT_WIFI_INFO_RESPONSE, pb, w.n);
+}
 // hand the phone the AP credentials over the connected RFCOMM fd; after this it joins the AP and dials TCP 5288
 static int aa_bt_handshake(int fd, const char *ip, int port, const char *ssid, const char *key, const char *bssid)
 {
@@ -1209,13 +1604,7 @@ static int aa_bt_handshake(int fd, const char *ip, int port, const char *ssid, c
 	for (int i = 0; i < 8 && id != AA_BT_WIFI_INFO_REQUEST; i++)   // the phone also sends WifiStartResponse (7); skip to the request
 		if (bt_recv(fd, &id, m, sizeof m, &mn)) return -1;
 	if (id != AA_BT_WIFI_INFO_REQUEST) return -1;
-	pb_out w = { pb, 0, sizeof pb, 0 };
-	pb_b(&w, AA_BT_WIR_SSID, (const uint8_t *)ssid, strlen(ssid));
-	pb_b(&w, AA_BT_WIR_KEY, (const uint8_t *)key, strlen(key));
-	pb_b(&w, AA_BT_WIR_BSSID, (const uint8_t *)bssid, strlen(bssid));
-	pb_u(&w, AA_BT_WIR_SECURITY, AA_SEC_WPA2_PERSONAL);
-	pb_u(&w, AA_BT_WIR_AP_TYPE, AA_AP_DYNAMIC);
-	return bt_send(fd, AA_BT_WIFI_INFO_RESPONSE, pb, w.n);
+	return bt_send_info(fd, ssid, key, bssid);
 }
 
 // BT message-layer self-test over a socketpair (no Bluetooth stack needed)
@@ -1243,6 +1632,67 @@ static int bt_selftest(void)
 	printf("AA-BT-SELFTEST OK: WifiStartRequest + WifiInfoResponse handshake roundtrip\n");
 	return 0;
 }
+
+#ifdef AA_MCU
+// ---- the Bluetooth start through the screen's MCU (the F133): the phone's RFCOMM channel from mcud ----
+// The SRNUBI T313D's power MCU is also its classic Bluetooth, and its firmware owns the Android Auto RFCOMM service (the
+// SDP record): this kernel has no RFCOMM, and the AIC8800's own controller is LE only. mcud, in the screen's OS, owns
+// the MCU's line and gives the channel to a client of its socket: "aa\n" asks for it, "open\n" comes when a phone opens
+// it (at once if one has), then the RFCOMM bytes both ways until it closes (EOF: the phone's HFP link gone, or another
+// channel opened). On it, as over BlueZ: the AP's address and credentials, then the link held until it closes (the
+// phone's "car still here"), a repeated WifiInfoRequest answered; then the next opening.
+static int mcu_channel(const char *sock)   /* connected, and the channel open: its fd; -1 if not */
+{
+	struct sockaddr_un a = { .sun_family = AF_UNIX };
+	snprintf(a.sun_path, sizeof a.sun_path, "%s", sock);
+	int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	if (fd < 0) return -1;
+	char l[8]; size_t n = 0;   /* "open\n" a byte at a time: the phone's bytes follow it */
+	if (!connect(fd, (struct sockaddr *)&a, sizeof a) && !writen(fd, (const uint8_t *)"aa\n", 3))
+		while (n < sizeof l && read(fd, l + n, 1) == 1 && l[n++] != '\n') {}
+	if (n == 5 && !memcmp(l, "open\n", 5)) return fd;
+	close(fd);
+	return -1;
+}
+static _Noreturn void aa_mcu_serve(const char *ip, const char *ssid, const char *key, const char *bssid)
+{
+	const char *sock = getenv("MCUD_SOCK") ? getenv("MCUD_SOCK") : "/run/mcud.sock";   /* another: the host test */
+	signal(SIGPIPE, SIG_IGN);
+	setvbuf(stderr, NULL, _IOLBF, 0);
+	fprintf(stderr, "aa: waiting for a phone on the MCU's Bluetooth (%s)\n", sock);
+	for (int quiet = 0;;) {
+		int fd = mcu_channel(sock);
+		if (fd < 0) {   /* mcud not there (yet), or gone */
+			if (!quiet) fprintf(stderr, "aa: no channel from mcud: trying again every 2 s\n"), quiet = 1;
+			sleep(2);
+			continue;
+		}
+		quiet = 0;
+		fprintf(stderr, "aa: a phone opened the Android Auto channel; handing AP creds\n");
+		sleep(1);   /* as the stock firmware, a second after the MCU's SW before the first message */
+		struct timeval tv = { 10, 0 }, none = { 0, 0 };
+		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+		int rc = -1;
+		for (int i = 0; i < 3 && rc; i++) {   /* the request again if the phone said nothing in 10 s (stock: 3 tries) */
+			errno = 0;
+			if (!(rc = aa_bt_handshake(fd, ip, AA_PORT, ssid, key, bssid))) break;
+			if (errno != EAGAIN && errno != EWOULDBLOCK) break;
+		}
+		if (rc) fprintf(stderr, "aa: BT creds handshake failed\n");
+		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &none, sizeof none);   // block: the link held to its end
+		uint16_t id; uint8_t m[1024]; size_t mn; int nb = 0;
+		while (bt_recv(fd, &id, m, sizeof m, &mn) == 0) {   // logged a few times only: a phone could repeat these for hours
+			if (nb < 20) fprintf(stderr, "aa: BT rx id %u (%zu bytes): link held\n", id, mn);
+			else if (nb == 20) fprintf(stderr, "aa: further BT messages not logged\n");
+			if (nb <= 20) nb++;
+			if (id == AA_BT_WIFI_INFO_REQUEST && bt_send_info(fd, ssid, key, bssid)) break;   /* asked again */
+		}
+		while (read(fd, m, sizeof m) > 0) {}   /* a message bigger than m: the rest drained, the link held to its end */
+		close(fd);
+		fprintf(stderr, "aa: the channel closed\n");
+	}
+}
+#endif // AA_MCU
 
 #ifdef AA_BT
 // ---- BlueZ glue: advertise the AA RFCOMM service (SDP) and accept the phone's connection ----
@@ -1682,7 +2132,8 @@ static int aa_ap_up(const char *iface, const char *ssid, const char *key, const 
 	FILE *f = fopen("/run/aa-hostapd.conf", "w");
 	if (!f) return -1;
 	fchmod(fileno(f), 0600);
-	fprintf(f, "interface=%s\ndriver=nl80211\nssid=%s\nhw_mode=a\nchannel=36\nieee80211n=1\nwmm_enabled=1\n"
+	// ctrl_interface: dash-aa's stop tells each phone on it (hostapd_cli deauthenticate) before hostapd goes
+	fprintf(f, "interface=%s\ndriver=nl80211\nctrl_interface=/run/aa-hostapd\nssid=%s\nhw_mode=a\nchannel=36\nieee80211n=1\nwmm_enabled=1\n"
 		   "auth_algs=1\nwpa=2\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\nwpa_passphrase=%s\nap_isolate=1\n", iface, ssid, key);   // ap_isolate: clients cannot reach each other
 	fclose(f);
 	snprintf(c, sizeof c, ": > /data/log/aa-hostapd.log; hostapd -B -P /run/aa-hostapd.pid -f /data/log/aa-hostapd.log /run/aa-hostapd.conf");
@@ -1704,6 +2155,19 @@ static int aa_ap_up(const char *iface, const char *ssid, const char *key, const 
 	return 0;
 }
 
+// ap, bt, mcu: a <key> of "-" means the passphrase is stdin's first line, so it is in no command line (every process
+// can read another's, /proc/PID/cmdline): `printf '%s\n' "$PSK" | aa mcu "$IP" "$SSID" - "$BSSID"` (printf, a shell
+// builtin, runs no program)
+static const char *key_arg(const char *a)
+{
+	static char k[128];   // a WPA passphrase is 8 to 63 characters
+	if (strcmp(a, "-")) return a;
+	if (!fgets(k, sizeof k, stdin)) k[0] = 0;
+	k[strcspn(k, "\r\n")] = 0;
+	if (!k[0]) die("no passphrase on stdin");
+	return k;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc > 1 && !strcmp(argv[1], "--touch-test")) {   /* print the touch events a session would send, for N s */
@@ -1711,15 +2175,21 @@ int main(int argc, char **argv)
 		if (tf < 0) return 1;
 		input_open = 1; mt_force_visible = 1; phone_off_ok = 1;
 		vid = video_wanted();   /* the coordinates a session would send now */
-		printf("touch-test: touchscreen 0..%d x 0..%d, picture x %d..%d, sent as 0..%d x 0..%d; touch now (%d s)\n", mt_max_x, mt_max_y,
-		       PJ_RGN_X, PJ_RGN_X + PJ_RGN_W - 1, vid.uw - 1, vid.uh - 1, secs); fflush(stdout);
+		printf("touch-test: touchscreen 0..%d x 0..%d (%s), picture x %d..%d y %d..%d of the %dx%d canvas, sent as 0..%d x 0..%d; "
+		       "touch now (%d s)\n", mt_max_x, mt_max_y, mt_portrait ? "portrait, turned 270" : "landscape", PJ_RGN_X, PJ_RGN_X + PJ_RGN_W - 1,
+		       PJ_RGN_Y, PJ_RGN_Y + PJ_RGN_H - 1, PJ_PANEL_W, PJ_PANEL_H, vid.uw - 1, vid.uh - 1, secs); fflush(stdout);
 		for (int64_t end = now_us() + (int64_t)secs * 1000000; now_us() < end; ) {
 			struct pollfd pf = { tf, POLLIN, 0 };
 			if (poll(&pf, 1, 200) > 0) touch_read(tf, -2, (aa_tls_t *)&mt_nlog);
 		}
 		return 0;
 	}
-	if (argc > 1 && !strcmp(argv[1], "--selftest")) return selftest() | msg_selftest() | rx_selftest() | mt_selftest() | bt_selftest();
+	if (argc > 1 && !strcmp(argv[1], "--conn-test")) return conn_selftest();   /* the build host only (it says why) */
+	if (argc > 1 && !strcmp(argv[1], "--selftest")) return selftest() | msg_selftest() | rx_selftest() | mt_selftest() | bt_selftest()
+#ifdef AA_USB
+		| usb_selftest()
+#endif
+		;
 	if ((argc == 3 || argc == 4) && !strcmp(argv[1], "certcheck")) {   // certcheck <crt> [key]: 0 if usable (see cert_check)
 		int r = cert_check(argv[2], argc == 4 ? argv[3] : NULL);
 		if (r) fprintf(stderr, "aa: %s: %s\n", argv[2], r == 1 ? "self-signed: phones reject it (a Google-signed head-unit certificate is needed)"
@@ -1741,12 +2211,26 @@ int main(int argc, char **argv)
 		}
 		return aa_serve(cert, key);
 	}
-	if (argc == 6 && !strcmp(argv[1], "ap")) return aa_ap_up(argv[2], argv[3], argv[4], argv[5]); // ap <iface> <ssid> <key> <ip>
+	if (argc == 6 && !strcmp(argv[1], "ap")) return aa_ap_up(argv[2], argv[3], key_arg(argv[4]), argv[5]); // ap <iface> <ssid> <key> <ip>
+#ifdef AA_USB
+	if ((argc == 4 || argc == 2) && !strcmp(argv[1], "usb"))   // usb [<cert.pem> <key.pem>]: the wired receiver (AOA)
+		return aa_usb_serve(argc == 4 ? argv[2] : "/etc/wattline/aa.crt", argc == 4 ? argv[3] : "/etc/wattline/aa.key");
+#endif
+#ifdef AA_MCU
+	if (argc == 6 && !strcmp(argv[1], "mcu")) aa_mcu_serve(argv[2], argv[3], key_arg(argv[4]), argv[5]); // mcu <ip> <ssid> <key> <bssid>
+#endif
 #ifdef AA_BT
-	if (argc == 6 && !strcmp(argv[1], "bt")) return aa_bt_serve(argv[2], argv[3], argv[4], argv[5]); // bt <ip> <ssid> <key> <bssid>
+	if (argc == 6 && !strcmp(argv[1], "bt")) return aa_bt_serve(argv[2], argv[3], key_arg(argv[4]), argv[5]); // bt <ip> <ssid> <key> <bssid>
 #endif
 	fprintf(stderr, "usage: aa --selftest | aa serve [<cert.pem> <key.pem>]\n"
 			"       aa ap <iface> <ssid> <key> <ip> | aa bt <ip> <ssid> <key> <bssid>\n"
-			"  (serve: no cert args auto-generates a persistent self-signed cert at /etc/wattline/)\n");
+			"  (serve: no cert args auto-generates a persistent self-signed cert at /etc/wattline/)\n"
+			"  (<key> as -: the passphrase on stdin's first line, out of the process list)\n");
+#ifdef AA_USB
+	fprintf(stderr, "       aa usb [<cert.pem> <key.pem>]: the phone on USB (Android Open Accessory), the certificate as serve's\n");
+#endif
+#ifdef AA_MCU
+	fprintf(stderr, "       aa mcu <ip> <ssid> <key> <bssid>: the Bluetooth start through the screen's MCU (mcud)\n");
+#endif
 	return 1;
 }

@@ -4,7 +4,7 @@
 #include "app.h"
 #include "../core/cmdr_msg.h"
 
-void cmdr_hook_start(const conf_t *cf, int wifi_first);
+bool cmdr_hook_start(const conf_t *cf, int wifi_first);   // false: no system bus (yet): to be tried again
 void cmdr_hook_wifi_first(int on);
 int64_t cmdr_hook_settle_until(void);
 bool cmdr_hook_aside_pending(int64_t now);  // a step-aside asked, not yet answered (capped at 20 s)       // when the last step-aside's settle ends (0: none)          // the settings' switch: Bluetooth waits for the WiFi stream

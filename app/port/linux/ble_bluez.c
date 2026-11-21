@@ -377,8 +377,9 @@ static int io_random(void *ctx, uint8_t *b, size_t n) {
 int ble_bluez_open(cmdr_io *io, const char *adapter_path) {
   GError *e = NULL;
   GDBusConnection *bus = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, &e);
-  if (!bus) {
-    fprintf(stderr, "ble: system bus: %s\n", e->message);
+  if (!bus) {   // said once: the dash tries again every few seconds until D-Bus is up (dash.c), for good if it never is
+    static int said;
+    if (!said++) fprintf(stderr, "ble: system bus: %s\n", e->message);
     g_error_free(e);
     return -1;
   }

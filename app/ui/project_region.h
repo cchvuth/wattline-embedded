@@ -10,14 +10,31 @@
 #pragma once
 #include <stdint.h>
 
+// Another screen builds with its own values (-D, plain numbers), from its device profile (device/<name>.mk): the F133
+// screen's 1920x720 canvas has the picture in the left half's lower 3/4 (the dash's phone layout).
+#ifndef PJ_PANEL_W
 #define PJ_PANEL_W 1920
+#endif
+#ifndef PJ_PANEL_H
+#define PJ_PANEL_H 480
+#endif
+#ifndef PJ_RGN_X
 #define PJ_RGN_X 120    /* left edge: just inside the slant's widest point (115 px, at the top) */
+#endif
+#ifndef PJ_RGN_Y
+#define PJ_RGN_Y 0
+#endif
+#ifndef PJ_RGN_W
 #define PJ_RGN_W 1160   /* to the 2/3 line (1280) */
+#endif
+#ifndef PJ_RGN_H
 #define PJ_RGN_H 480    /* the panel's full height */
+#endif
 
 // The dash UI raises PJ_VISIBLE while the picture is on screen (the split view) and drops it otherwise. The AA
 // receiver reads the touchscreen itself (every finger, the hardware's own timestamps) and sends touches to the
-// phone only while it exists. The touchscreen reports panel pixels of the landscape canvas.
+// phone only while it exists. The touchscreen reports panel pixels of the landscape canvas (the F133's, of its portrait
+// panel: the receiver turns them as the dash's display is turned, 270 degrees).
 #define PJ_VISIBLE "/run/dash-pj-visible"
 // "1" after dark (the car's headlights on: the dash's own night brightness rule), "0" by day: the AA receiver tells the
 // phone (its night-mode sensor), so Maps darkens with the car.

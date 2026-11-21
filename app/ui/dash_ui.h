@@ -3,6 +3,11 @@
 #include "lvgl.h"
 #include "dash_state.h"
 
+/* The layout set, from the device profile (device/<name>.mk, docs/DEVICES.md): 0 the Dash's 1920x480 strip, 1 the phone
+ * app's layouts (full, basic, split) on a plain panel (the F133 screen's 1920x720). The icon set is baked for it. */
+#ifndef DASH_PHONE_LAYOUT
+#define DASH_PHONE_LAYOUT 0
+#endif
 /* Builds the dash on [scr], laid out once for the screen's size (H 480 at the example canvas). */
 void dash_ui_init(lv_obj_t *scr);
 /* Shows [s]; only what changed is touched, so LVGL redraws only those areas. */
@@ -42,13 +47,22 @@ typedef struct {
 	char panda_host[64];      /* the Commander's Panda interface (WiFi CAN) */
 	int panda_port;
 	char join[33];            /* not saved: join this network now (it goes first; the rest stay as fallback), "" none */
+	bool basic;               /* the phone layout's basic layout (the ring between cards), not its full one; the gear's tap */
+	int cards[4];             /* basic: the card each slot shows, left to right (DASH_CARD_*) */
+	int split_card;           /* the phone layout's split: the card right of the ring (DASH_CARD_*); a swipe up or down on it */
+	int ring_page;            /* basic's and the split's ring: DASH_RING_* (main.dart _ringPage); a swipe on it */
 } dash_settings_t;
+/* the basic layout's cards, as the app's (main.dart _basicRow, kBasicCards: G is its drive card) */
+enum { DASH_CARD_ENERGY, DASH_CARD_G, DASH_CARD_CAR, DASH_CARD_BUTTONS, DASH_CARD_ROUTE, DASH_CARD_POWER, DASH_CARDS };
+/* the ring's faces (main.dart _ring's pages): the power ring, the speedometer (widgets.dart _Speedo) */
+enum { DASH_RING_POWER, DASH_RING_SPEEDO, DASH_RING_PAGES };
 enum { DASH_SETTINGS_SAVE, DASH_CMDR_APPROVE, DASH_CMDR_FORGET, DASH_PAIR_START, DASH_PAIR_CANCEL,
        DASH_SETTINGS_OPEN /* the screen shown: the app may hand fresher values back (SSH turned on by pairing) */,
        DASH_NET_SCAN /* the Network tab shown: a fresh scan for its Nearby list */,
        DASH_AA_START, DASH_AA_STOP /* the on-screen button: bring wireless Android Auto up / tear it down */,
        DASH_OTA_CHECK, DASH_OTA_INSTALL, DASH_OTA_RESTART /* Advanced: software update (dash-update check / auto / reboot) */,
-       DASH_AA_FORGET /* Advanced: forget the phones paired for Android Auto (dash-aa forget) */ };
+       DASH_AA_FORGET /* Advanced: forget the phones paired for Android Auto (dash-aa forget) */,
+       DASH_NOR_COPY /* Advanced: a card install copied to the built-in flash (dash-nor copy: the F133 screen) */ };
 typedef void (*dash_settings_cb)(int what, const dash_settings_t *s, void *ctx);
 void dash_ui_set_settings_cb(dash_settings_cb cb, void *ctx);
 void dash_ui_settings(const dash_settings_t *s); /* the saved values, as the screen should show them */
@@ -64,3 +78,4 @@ extern const char *dash_ui_pj_marker; /* "/run/dash-project": an AA session is u
 extern const char *dash_ui_aa_cert;   /* "/etc/wattline/aa.crt": the AA button only with a head-unit certificate */
 extern const char *dash_ui_aa_up;     /* "/run/dash-aa": Android Auto is on (dash-aa start raises it) */
 extern const char *dash_ui_pj_fps;    /* PJ_FPS: the phone's pictures shown per second (spike-vdec writes it) */
+extern const char *dash_ui_nor_status; /* "/run/dash-nor.status": a card install to copy to the built-in flash */

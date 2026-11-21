@@ -398,13 +398,14 @@ static void test_tables(void) {
 
 static void test_trying(void) {   // 'WiFi is trying while it looks, joins or says hello' (the Dash's states)
   fresh();
-  CHECK(link_trying(&L));
+  CHECK(!link_trying(&L));                   // not started (the session opens saying "trying" on its own)
   link_connect(&L, now);
   CHECK(L.state == LINK_HELLO && link_trying(&L));
   L.state = LINK_RETRYING; CHECK(!link_trying(&L));
   L.state = LINK_QUIET; CHECK(!link_trying(&L));
   L.state = LINK_LIVE; CHECK(!link_trying(&L));
   link_disconnect(&L, now);
+  CHECK(L.state == LINK_IDLE && !link_trying(&L));   // parked (Android Auto has the radio): Bluetooth goes ahead
 }
 
 static void test_motors(void) {

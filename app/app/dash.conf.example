@@ -59,7 +59,7 @@ bright_follow_offset = 0
 bright_ease_ms = 300      # every change eases over this long
 bright_stale_ms = 5000    # the car's brightness this old counts as unknown (0x273 comes every 500 ms)
 
-# Display and touch (checked on the unit)
+# Display and touch (checked on the unit): the T113 Dash's; another device's in docs/DEVICES.md
 fb = /dev/fb0
 rotate = 270
 touch = /dev/input/event0

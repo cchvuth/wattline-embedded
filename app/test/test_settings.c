@@ -126,6 +126,25 @@ int main(void) {
   settings_load(&back, &cf);
   CHECK(!strcmp(back.tz, "CET-1CEST,M3.5.0,M10.5.0/3") && !strcmp(back.panda_host, "10.0.0.7") && back.panda_port == 2000);
   CHECK(!strcmp(back.net[1].ssid, "Home") && !back.net[1].pass[0] && !strcmp(back.net[2].ssid, "Cafe"));
+  // the phone layout's basic layout and its cards (the F133's): written only off the full layout's defaults
+  CHECK(!strstr(slurp("settings.conf"), "basic"));   // never moved (the Dash): the file as before
+  back.basic = true, back.cards[0] = DASH_CARD_ROUTE;
+  CHECK(settings_save(&back) == 0 && strstr(slurp("settings.conf"), "\nbasic = 1\ncards = 4, 2, 0, 1\n"));
+  { dash_settings_t again; settings_load(&again, &cf); CHECK(again.basic && again.cards[0] == DASH_CARD_ROUTE && again.cards[3] == DASH_CARD_G); }
+  back.basic = false, back.cards[0] = DASH_CARD_BUTTONS;   // back to the full layout: the lines go
+  CHECK(settings_save(&back) == 0 && !strstr(slurp("settings.conf"), "basic"));
+  // the split's card and the ring's face (the F133's): the battery's card and the power ring, written once swiped off them
+  CHECK(back.split_card == DASH_CARD_ENERGY && back.ring_page == DASH_RING_POWER && !strstr(slurp("settings.conf"), "split_card"));
+  back.split_card = DASH_CARD_POWER, back.ring_page = DASH_RING_SPEEDO, back.cards[3] = DASH_CARD_POWER;   // the sixth card
+  CHECK(settings_save(&back) == 0 && strstr(slurp("settings.conf"), "\nbasic = 0\ncards = 3, 2, 0, 5\nsplit_card = 5\nring_page = 1\n"));
+  { dash_settings_t again; settings_load(&again, &cf);
+    CHECK(again.split_card == DASH_CARD_POWER && again.ring_page == DASH_RING_SPEEDO && again.cards[3] == DASH_CARD_POWER); }
+  { char p[256]; snprintf(p, sizeof p, "%s/settings.conf", root);   // a card or a face this build does not know: as before
+    FILE *f = fopen(p, "a"); CHECK(f && fputs("split_card = 9\nring_page = -1\n", f) >= 0); if (f) fclose(f);
+    dash_settings_t again; settings_load(&again, &cf);
+    CHECK(again.split_card == DASH_CARD_POWER && again.ring_page == DASH_RING_SPEEDO); }
+  back.split_card = DASH_CARD_ENERGY, back.ring_page = DASH_RING_POWER, back.cards[3] = DASH_CARD_G;   // the defaults:
+  CHECK(settings_save(&back) == 0 && !strstr(slurp("settings.conf"), "split_card") && !strstr(slurp("settings.conf"), "cards"));
 
   back.dev_ssh = true;          // only SSH changes: the list is kept as it was (its "" passes keep the file's)
   CHECK(settings_save(&back) == 0);

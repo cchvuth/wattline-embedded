@@ -148,6 +148,10 @@ void app_on_settings(int what, const dash_settings_t *st, void *ctx) {
     log_msg("settings: restart for the update");
     settings_reboot();
     break;
+  case DASH_NOR_COPY:      // Advanced, built-in flash: the card install written there (status in /run/dash-nor.status)
+    log_msg("settings: copy the card install to the built-in flash");
+    settings_nor("copy");
+    break;
   case DASH_SETTINGS_OPEN:  // looked at again by the loop (settings_refresh), not from inside the UI's own call
     app_settings_refresh = true;
     break;
@@ -186,6 +190,7 @@ void cmdr_hook_ask(void) { asks++; } void cmdr_hook_forget(void) {}
 void settings_aa(bool start) { (void)start; }
 void settings_aa_forget(void) {}
 void settings_ota(const char *what) { (void)what; }
+void settings_nor(const char *what) { (void)what; }
 void settings_reboot(void) {}
 const char *cmdr_hook_why(void) { return "no Commander advertising"; }
 int cmdr_hook_ready(void) { return ready; }

@@ -19,7 +19,7 @@ static void post_at(int op, int a, int b, char gear, int64_t at) {
 }
 static void post(int op, int a, int b, char gear) { post_at(op, a, b, gear, 0); }
 
-void cmdr_hook_start(const conf_t *cf, int wifi_first) {
+bool cmdr_hook_start(const conf_t *cf, int wifi_first) {
   cmdr_cfg cfg = cmdr_cfg_default;
   cfg.wifi_first = wifi_first;
   cfg.id_path = cf->cmdr_id;
@@ -27,9 +27,15 @@ void cmdr_hook_start(const conf_t *cf, int wifi_first) {
   cfg.settle_ms = cf->bt_settle_ms, cfg.buttons_ms = cf->bt_buttons_ms;   // dash.conf's bt_* timings
   cfg.rejoin_ms = cf->bt_data_ms, cfg.back_ms = cf->bt_back_ms;
   B = ble_start(&cfg, "/org/bluez/hci0");
-  if (!B) { log_msg("bluetooth: no system bus, no Commander session"); return; }
-  post(BLE_WIFI, 0, 1, 0);   // the link's first try is just starting: the session must not open with "not trying"
+  if (!B) {   // (the caller tries again: said once)
+    static bool said;
+    if (!said) log_msg("bluetooth: no system bus yet: no Commander session until there is one"), said = true;
+    return false;
+  }
+  post(BLE_WIFI, 0, 1, 0);   // until the next sync says how the link is: the session must not open with "not trying"
   post(BLE_CONNECT, 0, 0, 0);
+  log_msg("bluetooth: Commander session started");
+  return true;
 }
 
 void cmdr_hook_stop(void) {

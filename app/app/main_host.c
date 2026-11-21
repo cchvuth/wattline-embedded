@@ -7,13 +7,14 @@
 #include "settings.h"
 #include "lvgl.h"
 #include "../ui/dash_ui.h"
+#include "../ui/project_region.h"
 #include "src/libs/lodepng/lodepng.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-enum { W = 1920, H = 480 };
+enum { W = PJ_PANEL_W, H = PJ_PANEL_H };   // the device's canvas (its profile's)
 static int64_t start, next_line, next_png, every = 200;
 static const char *png_dir;
 static uint8_t *fb;
