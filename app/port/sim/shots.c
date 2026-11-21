@@ -118,7 +118,7 @@ static int bar_buttons(lv_area_t a[10])
 	int n = 0;
 	for (int y = 4; y < PJ_RGN_Y; y += 8)
 		for (int x = PJ_RGN_X + W / 20; x < PJ_RGN_X + PJ_RGN_W; x += 8) {
-			lv_obj_t *o = lv_indev_search_obj(lv_layer_top(), &(lv_point_t){x, y});
+			lv_obj_t *o = lv_indev_search_obj(lv_screen_active(), &(lv_point_t){x, y});
 			if (!o || lv_obj_get_width(o) > W / 12 || lv_obj_get_height(o) > PJ_RGN_Y / 2 || !lv_obj_get_child_count(o) ||
 			    lv_obj_get_x(o) < PJ_RGN_X + W / 20 || find_label(o, "EXIT")) continue;
 			lv_area_t c;
@@ -242,6 +242,8 @@ int main(int argc, char **argv)
 		scenes[1].fill(&s); /* highway */
 		snprintf(s.toast, sizeof s.toast, "Frunk opens in P only");
 		bad |= shot(d, out, "touch-press-refused", &s, DASH_VIEW_DASH);
+		s.pack_temp_c = 9, s.precond_c = 30; /* heating the pack for a charger on the route: its target after the temperature */
+		bad |= shot(d, out, "edge-precondition", &s, DASH_VIEW_DASH);
 		scenes[6].fill(&s);
 		s.bt = BT_APPROVING;
 		bad |= shot(d, out, "touch-approval", &s, DASH_VIEW_DASH);

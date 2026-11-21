@@ -1757,7 +1757,8 @@ static void set_cabin(const dash_state_t *s, float cx, float top)
 		if (isnan(s->tyre_psi[i])) set_text(cab.tyre[i], "—");
 		else if (s->psi) set_text(cab.tyre[i], "%d", (int)lroundf(s->tyre_psi[i]));
 		else set_text(cab.tyre[i], "%.1f", s->tyre_psi[i] / 14.5038f);
-		if (CHANGED(psi) || CHANGED(car)) lv_label_set_text(cab.psi[i], s->psi ? "psi" : "bar"); /* the picture rebuilt says psi */
+		set_text(cab.psi[i], "%s", s->psi ? "psi" : "bar"); /* at every frame (kept when the same): a change made while
+								      * the car was not shown (basic without its card) was missed */
 		/* the pair (14 at a 1.1 line over 9 at 1.0) centred in a 30 dp box on the axle */
 		float h1 = cb(14) * 1.1f, h2 = cb(9), y0 = axle - cb(15) + (cb(30) - h1 - h2) / 2;
 		const lv_font_t *f1 = lv_obj_get_style_text_font(cab.tyre[i], 0), *f2 = lv_obj_get_style_text_font(cab.psi[i], 0);
@@ -2162,15 +2163,32 @@ static void set_energy(const dash_state_t *s, float cx)
 	bool cold = (isnan(t) ? 99 : t) <= 10, heating = s->pack_heating || !isnan(s->precond_c);
 	part_t p[6];
 	int n = 0;
-	char tt[32];
+	char tt[32], to[32];
 	if (charging) p[n++] = IMG(&ic_bolt_dial, REGEN);
 	if (!isnan(t)) {
-		if (cold) p[n] = IMG(&ic_snow_dial, COLD), p[n].gap = n ? q : 0, n++;
-		float d = shown_deg(t), a = fabsf(d);
+		/* What the pack is being heated to, for a charger on the route: the app's amber "→ 30°" after its temperature
+		 * (Roboto has no arrow: the heating's own, in amber, points at it). The app scales that wider row down, icons
+		 * and all, into the dial's opening (66 dp); here the snowflake and the bolt give way (the ice blue and the charge's lines say them) and the figures
+		 * are set in the biggest of a few sizes that fits: no layer at each redraw, and no font for every width */
+		bool target = !isnan(s->precond_c);
+		float d = shown_deg(t), a = fabsf(d), fs = 14 * q;
 		if (a < 10) snprintf(tt, sizeof tt, "%.1f°", a < 0.05f ? 0.0f : d);
 		else snprintf(tt, sizeof tt, "%d°", (int)lroundf(d));
-		p[n] = TXT(font_px(REGULAR, ri(14 * q)), cold ? COLD : W70, tt), p[n].gap = n ? q : 0, n++;
-		if (heating) p[n] = IMG(&ic_up_dial, ALERT), p[n++].gap = q;
+		if (target) {
+			char both[64];
+			snprintf(to, sizeof to, "%d°", (int)lroundf(shown_deg(s->precond_c)));
+			snprintf(both, sizeof both, "%s%s", tt, to);
+			float room = 60 * q - ic_up_dial.header.w - 2 * q; /* (clear of the arc) */
+			for (int k = 0;; k++, fs -= 2 * q) { /* 14, 12, 10 */
+				lv_point_t sz;
+				lv_text_get_size(&sz, both, font_px(REGULAR, ri(fs)), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+				if (sz.x <= room || k == 2) break;
+			}
+			n = 0; /* (nor the bolt: the charge's own lines say it, and the row has no room for both) */
+		} else if (cold) p[n] = IMG(&ic_snow_dial, COLD), p[n].gap = n ? q : 0, n++;
+		p[n] = TXT(font_px(REGULAR, ri(fs)), cold ? COLD : W70, tt), p[n].gap = n ? q : 0, n++;
+		if (heating) p[n] = IMG(&ic_up_dial, target ? WARN : ALERT), p[n++].gap = q;
+		if (target) p[n] = TXT(font_px(REGULAR, ri(fs)), WARN, to), p[n++].gap = q;
 	}
 	show(dial_temp, (charging || !isnan(t)) && n);
 	if (n) {
@@ -2228,17 +2246,20 @@ static void set_energy(const dash_state_t *s, float cx)
 	char val[5][24];
 #define KW_ROW(name, v) do { \
 		lab[rows] = name; \
-		snprintf(val[rows], 24, isnan(v) ? "—" : "%.1f kW", v); \
+		snprintf(val[rows], 24, !s->wifi_live || isnan(v) ? "—" : "%.1f kW", v); \
 		rows++; \
 	} while (0)
-	if (s->wifi_live && s->draws) {
+	/* the card (basic, the split; main.dart _basicRow) has them all whatever the switch says, the draws as dashes
+	 * without WiFi, the charge's lines in their place while charging */
+	bool in_card = G.phone && layout_key != 0, minor = s->minor_figures || in_card;
+	if (in_card ? !charging : s->wifi_live && s->draws) {
 		KW_ROW("CLIMATE", s->climate_kw);
-		if (s->minor_figures) {
+		if (minor) {
 			KW_ROW("12 V", s->lv_kw);
 			KW_ROW("OTHER", s->other_kw);
 		}
 	}
-	if (s->minor_figures) {
+	if (minor) {
 		lab[rows] = "IMBALANCE";
 		if (isnan(s->imbalance_mv)) snprintf(val[rows], 24, "—");
 		else snprintf(val[rows], 24, "%d mV", (int)lroundf(s->imbalance_mv));
@@ -2667,7 +2688,7 @@ void dash_ui_project_region(int *x, int *y, int *w, int *h)
 static void project_build(void)
 {
 	float vw = pj_vw(), sw = G.W - vw, sx = vw, pad = px(10);
-	project = box(lv_layer_top());
+	project = box(lv_screen_active()); /* a page (dash_ui_show): on the top layer the screen's black was painted under it */
 	lv_obj_set_clickable(project, true); /* else a tap on the strips falls through to the hidden dash (door chips!) */
 	place(project, 0, 0, G.W, G.H);
 	fill(project, BLACK);
@@ -4040,6 +4061,7 @@ void dash_ui_show(int v)
 	 * the screen's objects that covers it, so a page there is drawn alone, where on the top layer the screen beneath
 	 * was painted first (as much again as the page, for every redraw: opening it, each key typed) */
 	lv_obj_t *page = v == DASH_VIEW_CAR_PANEL ? panel : v == DASH_VIEW_NETWORK ? net_edit : v == DASH_VIEW_PAIR ? pair_view : NULL;
+	if (v == DASH_VIEW_PROJECT) page = project;
 	if (page) lv_obj_move_foreground(page);
 	show(net_edit, v == DASH_VIEW_NETWORK);
 	show(pair_view, v == DASH_VIEW_PAIR);
@@ -4198,11 +4220,16 @@ static float side_l, side_r; /* the Dash's layout: the car's side, from the left
 static void set_snack(const dash_state_t *s)
 {
 	bool approving = s->bt == BT_APPROVING; /* the one step that needs a hand: said until it is done */
-	bool say = (approving || s->toast[0]) && view != DASH_VIEW_CAR_PANEL; /* (the car panel says both in its own line) */
+	/* (the car panel says both in its own line, and the settings' Commander tab the step, where the prompt hid its foot) */
+	approving &= !(view == DASH_VIEW_SETTINGS && set_tab == 0);
+	bool say = (approving || s->toast[0]) && view != DASH_VIEW_CAR_PANEL;
 	if (!say) {
 		show(snack, false);
 		return;
 	}
+	/* a tap on a toast stops there (the app's SnackBar); the prompt, up for a minute, lets it through: in basic the
+	 * links and the buttons of the foot are under it */
+	lv_obj_set_clickable(snack, !approving);
 	show(snack_wheel, approving && !strip()); /* (the strip has no room for the picture) */
 	const char *t = !approving ? s->toast : strip() ? "Double-press the right scroll wheel"
 			: "Approve this " UNIT " for the Commander: in the car, double-press the right scroll wheel";
@@ -4220,7 +4247,8 @@ static void set_snack(const dash_state_t *s)
 	const lv_font_t *f = lv_obj_get_style_text_font(snack_text, 0);
 	lv_text_get_size(&sz, t, f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
 	/* the strip's is one line across its foot, a long text cut short: the ring's own foot (the cruise line) is just above */
-	lv_label_set_long_mode(snack_text, strip() ? LV_LABEL_LONG_MODE_DOTS : LV_LABEL_LONG_MODE_WRAP);
+	lv_label_long_mode_t lm = strip() ? LV_LABEL_LONG_MODE_DOTS : LV_LABEL_LONG_MODE_WRAP;
+	if (lv_label_get_long_mode(snack_text) != lm) lv_label_set_long_mode(snack_text, lm); /* (set, it redraws the label) */
 	lv_obj_set_height(snack_text, strip() ? lv_font_get_line_height(f) : LV_SIZE_CONTENT);
 	lv_obj_set_width(snack_text, ri(strip() ? max : fminf(sz.x + 1, max)));
 	lv_obj_update_layout(snack);
@@ -4526,7 +4554,7 @@ static void cards_parts(bool basic)
 	show(lights_row, on[DASH_CARD_CAR] || on[DASH_CARD_G]);
 	if (!on[DASH_CARD_ROUTE]) show(dest_card, false);
 	if (!on[DASH_CARD_G]) {
-		lv_obj_t *g[] = {gball, g_val, g_peak, brake_temps, pedal_name, pedal_val, brake_car};
+		lv_obj_t *g[] = {gball, g_val, g_peak, brake_temps, pedal, pedal_name, pedal_val, brake_car};
 		for (size_t i = 0; i < sizeof g / sizeof g[0]; i++) show(g[i], false);
 	}
 	show(pdial, basic && on[DASH_CARD_POWER]); /* not the full layout's */
