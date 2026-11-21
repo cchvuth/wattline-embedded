@@ -30,7 +30,9 @@ MARK=/run/dash-aa
 # The session's logs, in $LOG: the boot's log folder (the card's, or RAM without one: S02sd), not /data: on the NOR that
 # is a small JFFS2, where a log line can wait seconds behind an erase (the receiver sat in it at its exit, and the
 # stop with it) and wears the flash.
-LOG=/var/log/sd; [ -d $LOG ] || LOG=/tmp
+# (a card gone read-only after a FAT error: in RAM then; the shell runs nothing whose log cannot be opened, and ends
+# on a ":" whose redirection fails)
+LOG=/var/log/sd; ( : >> $LOG/aa-ap.log ) 2>/dev/null || LOG=/tmp
 # Hooks for additions kept outside this repository (absent on a plain image), output in $LOG/hook-<name>.log:
 #  - /data/hooks/aa-start: once the access point is up, before aa serve and aa mcu. Gets IFACE, SSID, PSK and IP. (A
 #    helper may take a channel of its own from mcud, on /run/mcud.sock.)
@@ -50,7 +52,7 @@ hook() {
 ap_up() {
 	( umask 077; printf 'ctrl_interface=/run/aa-ap\nap_isolate=1\nnetwork={\n\tmode=2\n\tssid=%s\n\tfrequency=5180\n\tkey_mgmt=WPA-PSK\n\tproto=RSN\n\tpairwise=CCMP\n\tgroup=CCMP\n\tpsk="%s"\n}\n' \
 		"$(printf %s "$SSID" | xxd -p | tr -d '\n')" "$PSK" > /run/aa-ap.conf )
-	: > $LOG/aa-ap.log
+	( : > $LOG/aa-ap.log ) 2>/dev/null
 	wpa_supplicant -B -i "$IFACE" -D nl80211 -c /run/aa-ap.conf -P /run/aa-ap.pid -f $LOG/aa-ap.log || return 1
 	i=0; until wpa_cli -p /run/aa-ap -i "$IFACE" status 2>/dev/null | grep -q '^wpa_state=COMPLETED'; do
 		[ $i -lt 20 ] || return 1; usleep 500000; i=$((i + 1)); done
@@ -129,7 +131,8 @@ stop() {
 	elif [ "$IFACE" = wlan0 ] || ! pidof wpa_supplicant >/dev/null; then
 		/etc/init.d/S45wifi-auto start >/dev/null 2>&1
 	else
-		wpa_cli -i wlan0 reconnect >/dev/null 2>&1   # the station's link, dropped at start (as the T113)
+		# the station's link, dropped at start (as the T113); its daemon not answering: started anew
+		wpa_cli -i wlan0 reconnect >/dev/null 2>&1 || /etc/init.d/S45wifi-auto start >/dev/null 2>&1
 	fi
 }
 

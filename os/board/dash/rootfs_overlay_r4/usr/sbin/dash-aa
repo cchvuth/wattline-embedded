@@ -49,6 +49,7 @@ stop() {
 	# the picture and the receiver off at once, whatever the hook takes (and again below: a helper may restart them):
 	# aa bt too, so the phone's Bluetooth link goes and it stops redialling the AP's session meanwhile. aa serve, with a
 	# session up, first tells the phone the session ends (its ShutdownRequest, up to 2 s): the AP stays until it is gone
+	rm -f /run/aa-keep   # (first: the start's loops would start them again)
 	killall aa spike-vdec 2>/dev/null
 	hook aa-stop
 	[ -f /run/aa-pair-timer ] && kill "$(cat /run/aa-pair-timer)" 2>/dev/null; rm -f /run/aa-pair-timer   # an old window's end
@@ -126,8 +127,21 @@ start|restore)
 	iw dev "$IFACE" set power_save off 2>/dev/null; iw dev wlan0 set power_save off 2>/dev/null
 	btc system-alias Wattline >/dev/null 2>&1 || true   # the name the phone sees (not the default BlueZ x.y)
 	hook aa-start   # before the pairing window: a pairing while it runs (up to 12 s) would find no agent yet
-	AA_LISTEN=$IP aa serve >/data/log/aa-serve.log 2>&1 &   # listening before aa bt sends any phone to it
-	printf '%s\n' "$PSK" | aa bt "$IP" "$SSID" - "$BSSID" >/data/log/aa-bt.log 2>&1 &   # its pairing agent up before the window opens
+	# The receiver (listening before aa bt sends any phone to it) and the Bluetooth start (its pairing agent up before
+	# the window opens), each started again if it dies while the session is on (/run/aa-keep: stop removes it first), 20
+	# times at most. A receiver that died mid-session left its markers: the split showed its last picture for good, and
+	# a phone found nothing listening; they go with it.
+	: > /run/aa-keep
+	( : > /data/log/aa-serve.log; : > /data/log/aa-bt.log ) 2>/dev/null   # (in a subshell: /data read-only must not end the start here)
+	( n=0; while [ -e /run/aa-keep ] && [ $n -lt 20 ]; do
+		AA_LISTEN=$IP aa serve >>/data/log/aa-serve.log 2>&1
+		rm -f /run/dash-project /run/dash-aa-session /run/dash-aa-focus /run/dash-pj-fps
+		[ -e /run/aa-keep ] && sleep 1; n=$((n + 1))
+	done ) &
+	( n=0; while [ -e /run/aa-keep ] && [ $n -lt 20 ]; do
+		printf '%s\n' "$PSK" | aa bt "$IP" "$SSID" - "$BSSID" >>/data/log/aa-bt.log 2>&1
+		[ -e /run/aa-keep ] && sleep 2; n=$((n + 1))
+	done ) &
 	# New phones can pair only in the first 2 minutes after the button (someone at the Dash), not for the whole session;
 	# a phone paired before connects at any time. The AA channel itself needs a paired link (aa.c).
 	if [ "$1" = start ]; then   # someone at the Dash tapped it (not a restore at boot)
