@@ -1,11 +1,12 @@
 ################################################################################
 #
-# spike-vdec: R4 spike decoder/rotate test (src/spike-vdec.c; the parser also runs on a build host: --parse)
+# spike-vdec: Android Auto's video, decoded by the video engine and shown on the panel, built from the app's checkout
+# (/native/vdec: one source for the Dash and the F133 screen; its parser also runs on a build host: --parse)
 #
 ################################################################################
 
 SPIKE_VDEC_VERSION = local
-SPIKE_VDEC_SITE = $(BR2_EXTERNAL_DASH_PATH)/package/spike-vdec/src
+SPIKE_VDEC_SITE = /native/vdec
 SPIKE_VDEC_SITE_METHOD = local
 SPIKE_VDEC_LICENSE = MIT
 

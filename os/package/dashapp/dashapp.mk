@@ -1,6 +1,6 @@
 ################################################################################
 #
-# dashapp: the dash program, built from the dash-native checkout (mounted at /native) with its app.mk.
+# dashapp: the dash program, built from the app checkout (app/, mounted at /native) with its app.mk.
 # build/signals_gen.h is generated on the Mac (make -f app.mk build/signals_gen.h, needs ../wattline): it comes
 # along and is never remade here; every other build output of the checkout stays behind.
 #

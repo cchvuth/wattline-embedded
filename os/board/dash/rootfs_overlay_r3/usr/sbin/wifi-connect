@@ -6,6 +6,12 @@
 # bgscan: rescans while joined, so a better-placed network takes over (home WiFi in the garage, then the car's on the
 # road); wifi-event renews DHCP on every (re)join, so the new network's address replaces the old one's.
 # The old wpa_supplicant is stopped first, even with no networks left (a removed one must not stay joined).
+# wifi-connect -: the SSID/passphrase pairs on stdin, a line each (as /data/wifi/networks.conf). S45wifi-auto's way: no
+# passphrase in any process's arguments, which ps shows (and this script's own children keep them)
+if [ "$1" = - ]; then
+	set --
+	while IFS= read -r S || [ -n "$S" ]; do K=; IFS= read -r K; set -- "$@" "$S" "$K"; done
+fi
 killall -q wpa_cli udhcpc wpa_supplicant
 rm -f /run/wifi-id
 i=0; while pidof wpa_supplicant >/dev/null && [ $i -lt 10 ]; do sleep 1; i=$((i+1)); done

@@ -1,6 +1,6 @@
 ################################################################################
 #
-# wattline-aa: the wireless Android Auto receiver, built from the dash-native checkout
+# wattline-aa: the wireless Android Auto receiver, built from the app checkout (app/, mounted at /native)
 # (/native: aa/aa.c + core/pb.c), linked against the target OpenSSL. Installs /usr/bin/aa.
 #
 ################################################################################

@@ -4,9 +4,14 @@
 # Called as: wifi-event IFACE CONNECTED|DISCONNECTED
 [ "$2" = CONNECTED ] || exit 0
 # The same network back after a blip keeps its address (no DHCP gap); only a change of network gets a new lease.
-[ "$WPA_ID" = "$(cat /run/wifi-id 2>/dev/null)" ] && exit 0
+was=$(cat /run/wifi-id 2>/dev/null)
+[ "$WPA_ID" = "$was" ] && exit 0
 echo "$WPA_ID" > /run/wifi-id
-killall -q -USR2 udhcpc   # release the old address
-sleep 1                   # the release done before the renew is asked
+# The first join since wifi-connect started udhcpc (it removes /run/wifi-id): no address to give back, so the network is
+# asked at once. The release and its second were a second of every boot's wait for an address.
+if [ -n "$was" ]; then
+	killall -q -USR2 udhcpc   # release the old address
+	sleep 1                   # the release done before the renew is asked
+fi
 killall -q -USR1 udhcpc   # and ask the network now joined
 exit 0

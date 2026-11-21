@@ -20,7 +20,7 @@
 # Trust: the release's SHA256SUMS must carry a valid Ed25519 signature by the project key baked into the image
 # (/etc/wattline-ota.pub.raw), and the bundle must match its line there. TLS (curl + CA bundle) is a second layer.
 set -u
-REPO=${DASH_UPDATE_REPO:-cchvuth/wattline-embedded-t113}
+REPO=${DASH_UPDATE_REPO:-cchvuth/wattline-embedded}
 API=${DASH_UPDATE_API:-https://api.github.com/repos/$REPO/releases?per_page=20}
 PUB=/etc/wattline-ota.pub.raw
 CMDLINE=${DASH_UPDATE_CMDLINE:-/proc/cmdline}   # these two and DASH_UPDATE_P1: for board/dash/test/dash-update-test.sh

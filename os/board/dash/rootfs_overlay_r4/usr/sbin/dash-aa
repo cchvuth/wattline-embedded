@@ -42,11 +42,25 @@ hook() {
 }
 stop() {
 	# the picture and the receiver off at once, whatever the hook takes (and again below: a helper may restart them):
-	# aa bt too, so the phone's Bluetooth link goes and it stops redialling the AP's session meanwhile
-	killall spike-vdec aa 2>/dev/null
+	# aa bt too, so the phone's Bluetooth link goes and it stops redialling the AP's session meanwhile. aa serve, with a
+	# session up, first tells the phone the session ends (its ShutdownRequest, up to 2 s): the AP stays until it is gone
+	killall aa spike-vdec 2>/dev/null
 	hook aa-stop
 	[ -f /run/aa-pair-timer ] && kill "$(cat /run/aa-pair-timer)" 2>/dev/null; rm -f /run/aa-pair-timer   # an old window's end
-	killall spike-vdec aa hostapd udhcpd 2>/dev/null   # the decoder first, so its last picture stops being drawn
+	killall aa spike-vdec 2>/dev/null   # aa first (its stop flag set before the decoder's pipe closes: it says goodbye
+	                                    # rather than end on a dead decoder), the decoder a moment later
+	i=0; while pidof aa spike-vdec >/dev/null 2>&1 && [ $i -lt 25 ]; do sleep 0.2; i=$((i+1)); done   # <= 5 s
+	# the phones still on the AP told, while it still sends: a deauthentication each (hostapd's control socket, which
+	# aa ap configures), so none stays on a network gone quiet; then the AP and its DHCP
+	IFACE=$(sed -n 's/^interface=//p' /run/aa-hostapd.conf 2>/dev/null)
+	if [ -n "$IFACE" ] && [ -S "/run/aa-hostapd/$IFACE" ]; then
+		_sent=
+		for _m in $(hostapd_cli -p /run/aa-hostapd -i "$IFACE" all_sta 2>/dev/null | grep -E '^([0-9a-f]{2}:){5}[0-9a-f]{2}$'); do
+			hostapd_cli -p /run/aa-hostapd -i "$IFACE" deauthenticate "$_m" >/dev/null 2>&1 && _sent=1
+		done
+		[ -n "$_sent" ] && sleep 0.3   # the frames on air before the AP goes
+	fi
+	killall hostapd udhcpd 2>/dev/null
 	# gone before anything else (a quick stop -> start would meet the old hostapd on the interface)
 	i=0; while pidof aa hostapd udhcpd spike-vdec >/dev/null 2>&1 && [ $i -lt 25 ]; do sleep 0.2; i=$((i+1)); done   # <= 5 s
 	killall -9 spike-vdec aa hostapd udhcpd 2>/dev/null
@@ -88,16 +102,22 @@ start|restore)
 	: > /run/dash-aa-radio
 	[ -n "$got" ] && rmdir /run/wifi-auto.lock
 	wpa_cli -i wlan0 disconnect >/dev/null 2>&1 || true
-	iw reg set SE >/dev/null 2>&1 || true   # EU domain: enables the 5 GHz AP channels (36-48, non-DFS); AA needs 5 GHz
+	# the device's country (/data/wifi/country, two letters), else an EU country's rules: the 5 GHz AP channels (36-48,
+	# non-DFS) that AA needs
+	CC=$(cat /data/wifi/country 2>/dev/null | tr -dc A-Za-z | tr a-z A-Z)
+	[ ${#CC} = 2 ] || CC=DE
+	iw reg set "$CC" >/dev/null 2>&1 || true
 	echo "dash-aa: AP on $IFACE ($BSSID) ssid=$SSID ip=$IP"
 	mkdir -p /data/log   # per-session logs (overwritten each start): aa-hostapd, aa-udhcpd, aa-bt, aa-serve
-	aa ap "$IFACE" "$SSID" "$PSK" "$IP" || { echo "dash-aa: the AP did not come up" >&2; stop; exit 1; }
+	# aa ap and aa bt get the passphrase on stdin, not in their arguments (any process can read those); printf is the
+	# shell's own
+	printf '%s\n' "$PSK" | aa ap "$IFACE" "$SSID" - "$IP" || { echo "dash-aa: the AP did not come up" >&2; stop; exit 1; }
 	# The AP carries live video: keep the radio out of power save for the session (latency, not a correctness fix).
 	iw dev "$IFACE" set power_save off 2>/dev/null; iw dev wlan0 set power_save off 2>/dev/null
 	btc system-alias Wattline >/dev/null 2>&1 || true   # the name the phone sees (not the default BlueZ x.y)
 	hook aa-start   # before the pairing window: a pairing while it runs (up to 12 s) would find no agent yet
 	aa serve >/data/log/aa-serve.log 2>&1 &   # listening before aa bt sends any phone to it
-	aa bt "$IP" "$SSID" "$PSK" "$BSSID" >/data/log/aa-bt.log 2>&1 &   # its pairing agent up before the window opens
+	printf '%s\n' "$PSK" | aa bt "$IP" "$SSID" - "$BSSID" >/data/log/aa-bt.log 2>&1 &   # its pairing agent up before the window opens
 	# New phones can pair only in the first 2 minutes after the button (someone at the Dash), not for the whole session;
 	# a phone paired before connects at any time. The AA channel itself needs a paired link (aa.c).
 	if [ "$1" = start ]; then   # someone at the Dash tapped it (not a restore at boot)

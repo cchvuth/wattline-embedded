@@ -2,8 +2,8 @@
 # dash-update-test.sh EXT: run the image's dash-update (EXT/board/dash/rootfs_overlay_r4/usr/sbin/dash-update) under
 # busybox against a local HTTPS stand-in for GitHub's releases, signed with a throwaway Ed25519 key, once per case,
 # and check the state it reports, ota.txt and the slots. p1 is a folder (mount/umount shimmed); nothing else is faked.
-# Run as root in a scratch container (it writes /etc/image-id, /etc/wattline-ota.pub.raw, /data, /run):
-#   docker run --rm -v ~/projs/dash-os:/ext:ro debian:stable sh -c 'apt-get update -qq && apt-get install -y -qq
+# Run as root in a scratch container, from the repository root (it writes /etc/image-id, /etc/wattline-ota.pub.raw, /data, /run):
+#   docker run --rm -v "$PWD/os":/ext:ro debian:stable sh -c 'apt-get update -qq && apt-get install -y -qq
 #     busybox curl openssl ca-certificates python3 gcc libc6-dev libssl-dev >/dev/null && sh /ext/board/dash/test/dash-update-test.sh /ext'
 set -u
 EXT=$1; W=/tmp/dut; FAIL=0

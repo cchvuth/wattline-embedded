@@ -3,6 +3,6 @@ config BR2_PACKAGE_WATTLINE_AA
 	select BR2_PACKAGE_OPENSSL
 	help
 	  Wattline wireless Android Auto receiver (native C: OpenSSL + the dash
-	  protobuf). Built from the dash-native checkout (aa/aa.c + core/pb.c).
+	  protobuf). Built from the app checkout (aa/aa.c + core/pb.c).
 	  Installs /usr/bin/aa. The head-unit certificate is user-supplied on the
 	  card, never shipped.
