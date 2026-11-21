@@ -1,8 +1,8 @@
 name: CI
 
-# Builds + tests the head-unit app (app/) and the firmware's C tools on every push/PR.
-# The full firmware IMAGE (os/) is a Buildroot build (toolchain + kernel + packages, ~1-2 h);
-# it is not built here yet — see "Firmware image" in the notes below.
+# Builds + tests the head-unit app (app/, both device profiles) and the firmwares' C tools on every push/PR.
+# The full firmware IMAGES (os/, os-f133/) are Buildroot builds (toolchain + kernel + packages, ~1-2 h);
+# they are not built here yet — see "Firmware image" in the README.
 #
 # The app's signal tables are generated from the Flutter app repo (cchvuth/wattline:
 # lib/signals.dart, test/obd_test.dart). CI checks that out next to the repo so app/'s
@@ -19,7 +19,7 @@ jobs:
   app-tests:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (os/ + app/)
+      - name: Checkout (os/, os-f133/, app/)
         uses: actions/checkout@v4
       - name: Checkout signal source (cchvuth/wattline)
         uses: actions/checkout@v4
@@ -28,15 +28,15 @@ jobs:
           path: wattline              # app/ Makefile reads ../wattline/lib/signals.dart
           token: ${{ secrets.WATTLINE_TOKEN || github.token }}
       - name: Install build deps
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential python3
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential python3 pkg-config libglib2.0-dev
       - name: Fetch vendored LVGL (gitignored in the repo)
         run: git clone --depth 1 -b v9.6.0 https://github.com/lvgl/lvgl app/third_party/lvgl-9.6.0
       - name: Unit tests (decode, derive, bright, settings, wifi, actions, sec1)
         run: mkdir -p app/build && make -C app test
       - name: Commander tests (messages, session, link)
         run: make -C app -f cmdr.mk test
-      - name: Headless app builds
-        run: make -C app -f app.mk host
+      - name: Headless app builds (the T113 Dash, the F133 screen)
+        run: make -C app -f app.mk host && make -C app -f app.mk host DEVICE=f133
 
   firmware-tools:
     runs-on: ubuntu-latest
@@ -44,20 +44,29 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev libglib2.0-dev
-      - name: Build + self-test the Android Auto receiver (aa)
+      - name: Build + self-test the Android Auto receiver (aa), and a session with a fake phone (--conn-test)
         run: |
           cc -O2 -Wall -DAA_BT $(pkg-config --cflags gio-2.0 gio-unix-2.0) \
             -o /tmp/aa app/aa/aa.c app/core/pb.c -lssl -lcrypto $(pkg-config --libs gio-2.0 gio-unix-2.0)
-          /tmp/aa --selftest
+          /tmp/aa --selftest && /tmp/aa --conn-test
       - name: Host-compile the H.264 decoder (spike-vdec) and check its picture conversion (--rotate)
-        run: cc -O2 -Wall -Werror -o /tmp/spike-vdec os/package/spike-vdec/src/spike-vdec.c && /tmp/spike-vdec --rotate
+        run: cc -O2 -Wall -Werror -o /tmp/spike-vdec app/vdec/spike-vdec.c && /tmp/spike-vdec --rotate
+      - name: The F133 screen's tools (mcud against a pty playing its MCU; aa mcu through mcud; nor.sh with fake flash; norw's checks; dash-nor; the update's try and keep)
+        run: |
+          cc -O2 -Wall -o /tmp/mcud os-f133/package/mcud/src/mcud.c && python3 -I os-f133/package/mcud/src/test_mcud.py /tmp/mcud
+          cc -O2 -Wall -DAA_MCU=1 -o /tmp/aa-mcu app/aa/aa.c app/core/pb.c -lssl -lcrypto -lpthread
+          python3 -I os-f133/test/test_aa_mcu.py /tmp/mcud /tmp/aa-mcu
+          docker run --rm -v "$PWD/os-f133/tools/nor":/n:ro debian:stable sh /n/test_nor_sh.sh
+          cc -O2 -Wall -o /tmp/norw os-f133/tools/nor/norw.c && sh os-f133/tools/nor/test_norw.sh /tmp/norw
+          docker run --rm -v "$PWD":/r:ro debian:stable sh /r/os-f133/test/test_dash_nor.sh
+          docker run --rm -v "$PWD":/r:ro debian:stable sh /r/os-f133/test/test_ota_try.sh
 
   decoder-neon:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
       - name: The decoder's NEON picture conversion against its plain C (--rotate, on ARM)
-        run: cc -O2 -Wall -Werror -o /tmp/spike-vdec os/package/spike-vdec/src/spike-vdec.c && /tmp/spike-vdec --rotate
+        run: cc -O2 -Wall -Werror -o /tmp/spike-vdec app/vdec/spike-vdec.c && /tmp/spike-vdec --rotate
 
   ota-tests:
     runs-on: ubuntu-latest

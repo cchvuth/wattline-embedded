@@ -1,9 +1,11 @@
-# Wattline — embedded T113 head unit
+# Wattline — embedded head units
 
-- `os/`  — Buildroot firmware (kernel, packages, overlays; R0–R4)
-- `app/` — LVGL head-unit application (dashboard UI, wireless Android Auto receiver)
+- `app/` — LVGL head-unit application (dashboard UI, wireless Android Auto receiver and its video decoder), one source
+  for every device: `app/device/<name>.mk` holds what differs
+- `os/`  — Buildroot firmware for the T113 Dash (kernel, packages, overlays; R0–R4)
+- `os-f133/` — Buildroot firmware for the SRNUBI T313D screen (Allwinner F133): see [os-f133/README.md](os-f133/README.md)
 
-See the [latest release](https://github.com/cchvuth/wattline-embedded-t113/releases) to download a card image and burn it (`sdcard.img.xz`). The stock eMMC is never touched — pull the card and the stock firmware boots.
+For the T113 Dash, see the [latest release](https://github.com/cchvuth/wattline-embedded/releases) to download a card image and burn it (`sdcard.img.xz`). The stock eMMC is never touched — pull the card and the stock firmware boots.
 
 ## Android Auto certificate
 
@@ -80,4 +82,14 @@ To publish an update, build the image, then make the release's update assets and
 os/board/dash/mk-ota.sh <output dir>/images <private key> <release folder>
 ```
 
-This writes `wattline-ota-<version>.tar.gz` (the version comes from the image's own `/etc/image-id`), then `SHA256SUMS` over every file in the folder (put `sdcard.img.xz` there first) and `SHA256SUMS.sig` (Ed25519). The private key is never in the repo or a release; the image carries only its public half (`os/board/dash/wattline-ota.pub.raw`). Tests, each run in a scratch container (see their headers): `os/board/dash/test/dash-update-test.sh` (the updater against a local HTTPS release server) and `os/board/dash/test/dash-scr-test.sh` (the boot script in U-Boot's sandbox).
+This writes `wattline-ota-<version>.tar.gz` (the version comes from the image's own `/etc/image-id`), then `SHA256SUMS` over every file in the folder (put `sdcard.img.xz` there first) and `SHA256SUMS.sig` (Ed25519). A release carries both devices' bundles (the F133's `os-f133/board/f133/mk-ota.sh` writes into the same folder first): each updater reads only the 20 latest releases, so a run of releases for one device would hide the other's. The private key is never in the repo or a release; the image carries only its public half (`os/board/dash/wattline-ota.pub.raw`). Tests, each run in a scratch container (see their headers): `os/board/dash/test/dash-update-test.sh` (the updater against a local HTTPS release server) and `os/board/dash/test/dash-scr-test.sh` (the boot script in U-Boot's sandbox).
+
+## License
+
+MIT ([LICENSE](LICENSE)) for this project's own code. The kernel and U-Boot patches, the panel and touch drivers and
+the kernel modules are GPL-2.0, like the code they belong to. Third-party code keeps its own licence (see each one's
+header or LICENSE file): the vendored LVGL, Wi-Fi drivers and fonts, and the F133's DRAM init in its U-Boot patches
+(Allwinner's, from xfel).
+
+Provided as is, without warranty: not for safety-critical use, and installing it may void the device's warranty. Not
+affiliated with Tesla or EnhAuto.
