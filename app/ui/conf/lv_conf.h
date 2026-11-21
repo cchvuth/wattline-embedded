@@ -9,6 +9,15 @@
 #define LV_TINY_TTF_CACHE_GLYPH_CNT 64
 #undef LV_MEM_SIZE
 #define LV_MEM_SIZE (12 * 1024 * 1024U)
+/* The C library's memset and memcpy (LVGL's own are byte loops): an arc clears its mask row by row, and the draw buffers
+ * and layers are filled with them */
+#undef LV_USE_STDLIB_STRING
+#define LV_USE_STDLIB_STRING LV_STDLIB_CLIB
+/* The circles' anti-aliased edges kept for more radii than LVGL's 4: the dash draws a dozen (the ring's arcs, the dial,
+ * the g-meter, the chips' and buttons' round corners), and each one not kept is worked out again for every part of the
+ * screen redrawn (radius x 4 bytes each) */
+#undef LV_DRAW_SW_CIRCLE_CACHE_SIZE
+#define LV_DRAW_SW_CIRCLE_CACHE_SIZE 32
 #undef LV_USE_QRCODE
 #define LV_USE_QRCODE 1 /* the SSH pairing view */
 /* Areas to redraw per frame before LVGL gives up and redraws the whole screen (32 by default): in the Android Auto
@@ -42,4 +51,10 @@
 #undef LV_TINY_TTF_CACHE_GLYPH_CNT
 #define LV_TINY_TTF_CACHE_GLYPH_CNT DASH_TTF_GLYPHS
 #endif
+/* The blends into the XRGB8888 draw buffer (text, arcs, round corners, icons, images) a word at a time, not LVGL's byte
+ * by byte (ui/conf/blend_xrgb.h): the same pixels */
+#undef LV_USE_DRAW_SW_ASM
+#define LV_USE_DRAW_SW_ASM LV_DRAW_SW_ASM_CUSTOM
+#undef LV_DRAW_SW_ASM_CUSTOM_INCLUDE
+#define LV_DRAW_SW_ASM_CUSTOM_INCLUDE "blend_xrgb.h"
 #endif

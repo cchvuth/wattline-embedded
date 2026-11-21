@@ -13,7 +13,7 @@ HOST_CC ?= cc
 HOST_CFLAGS := -std=gnu11 -O2 -g -DLV_CONF_INCLUDE_SIMPLE -Iport/sim -I$(LVGL) -I$(LVGL)/src
 # the profile's, every build (the device's compiler adds DEVICE_CPU)
 DEV_FLAGS := $(DEVICE_DEFS) $(EXTRA_DEFS) -I$(UI_GEN)   # EXTRA_DEFS: a one-off build's extra -D (measuring)
-$(BUILD)/host/%.o: %.c port/sim/lv_conf.h ui/conf/lv_conf.h port/linux/lv_conf.h
+$(BUILD)/host/%.o: %.c port/sim/lv_conf.h ui/conf/lv_conf.h port/linux/lv_conf.h ui/conf/blend_xrgb.h
 	@mkdir -p $(dir $@); $(HOST_CC) $(HOST_CFLAGS) $(DEV_FLAGS) -c $< -o $@
 $(BUILD)/host/ui/%.o $(BUILD)/host/port/sim/%.o: HOST_CFLAGS += $(WARN)
 $(BUILD)/host/ui/dash_ui.o $(BUILD)/host/port/sim/shots.o $(BUILD)/host/ui/scenes.o: ui/dash_ui.h ui/dash_state.h ui/scenes.h \
@@ -31,7 +31,7 @@ compare: shots   # against the app's dash scenes at the Dash's canvas (tools/app
 # --- the device (arm: the Dash's ARM, or the profile's CPU): the profile's Buildroot toolchain, run inside the build
 # container (tools/arm-ui.sh)
 ARM_CFLAGS := -std=gnu11 -O2 -DLV_CONF_INCLUDE_SIMPLE -Iui/conf -I$(LVGL) -I$(LVGL)/src
-$(BUILD)/arm-ui/%.o: %.c ui/conf/lv_conf.h port/linux/lv_conf.h
+$(BUILD)/arm-ui/%.o: %.c ui/conf/lv_conf.h port/linux/lv_conf.h ui/conf/blend_xrgb.h
 	@mkdir -p $(dir $@); $(ARM_CC) $(ARM_CFLAGS) $(DEVICE_CPU) $(DEV_FLAGS) -c $< -o $@
 $(BUILD)/arm-ui/ui/%.o: ARM_CFLAGS += $(WARN)
 $(BUILD)/arm-ui/ui/dash_ui.o $(BUILD)/arm-ui/ui/main_dash.o $(BUILD)/arm-ui/ui/scenes.o: ui/dash_ui.h ui/dash_state.h \

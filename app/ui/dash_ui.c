@@ -7,6 +7,9 @@
 #include "aa_icon.h"
 #include "../core/cmdr_msg.h" /* cmdr_action: what a tap asks for */
 #include "project_region.h"    /* the phone picture's rectangle, shared with the AA receiver */
+#include "src/draw/lv_draw_image_private.h"      /* the wheel scaled once (wheel_2x): LVGL's transform, */
+#include "src/draw/sw/lv_draw_sw.h"              /* its area and the decoded image */
+#include "src/image/lv_image_decoder_private.h"
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -242,18 +245,45 @@ typedef struct {
 #define TXT(f, c, s) ((part_t){.text = (s), .font = (f), .color = (c)})
 #define IMG(i, c) ((part_t){.img = (i), .color = (c)})
 
+/* What a run shows, kept to tell a change: its parts and their words (copied: the callers' are on their stacks). Compared
+ * field by field, not through a formatted key: a run is set every frame, and formatting its floats was a third of an
+ * unchanged frame's work. */
+typedef struct {
+	int n; /* -1: words too long to keep (never the same) */
+	part_t p[16];
+	char words[640];
+} run_seen_t;
+static bool run_same(const run_seen_t *k, const part_t *p, int n)
+{
+	if (!k || k->n != n) return false;
+	for (int i = 0; i < n; i++) {
+		const part_t *a = &k->p[i], *b = &p[i];
+		if (a->font != b->font || a->img != b->img || a->color != b->color || a->ls != b->ls || a->gap != b->gap ||
+		    !a->text != !b->text || (a->text && strcmp(a->text, b->text)))
+			return false;
+	}
+	return true;
+}
 static void run_set(lv_obj_t *run, const part_t *p, int n)
 {
-	/* Rebuilt only when what it says changes. */
-	char key[640] = "", *k = key; /* room for every part: a cut key would miss a change at the end */
-	for (int i = 0; i < n && k < key + sizeof key - 40; i++)
-		k += snprintf(k, key + sizeof key - k, "%s|%p|%p|%x|%g|%g;", p[i].text ? p[i].text : "", (void *)p[i].font,
-			      (const void *)p[i].img, (unsigned)p[i].color, p[i].ls, p[i].gap);
-	char *old = lv_obj_get_user_data(run);
-	if (old && !strcmp(old, key)) return;
-	lv_free(old);
-	lv_obj_set_user_data(run, lv_strdup(key));
-	lv_obj_clean(run);
+	run_seen_t *k = lv_obj_get_user_data(run);
+	if (run_same(k, p, n)) return;
+	/* The same parts (text or icon, in order) as shown: each child set in place, so only what changed is redrawn
+	 * (cleaned and built again, every child's box was, and each new label's at the run's corner) */
+	bool same = k && k->n == n && (int)lv_obj_get_child_count(run) == n;
+	for (int i = 0; same && i < n; i++) same = !k->p[i].text == !p[i].text;
+	if (!k && !(k = lv_malloc(sizeof *k))) return;
+	lv_obj_set_user_data(run, k);
+	k->n = n;
+	char *at = k->words;
+	for (int i = 0; i < n; i++) {
+		k->p[i] = p[i];
+		if (!p[i].text) continue;
+		size_t len = strlen(p[i].text) + 1;
+		if (at + len > k->words + sizeof k->words) { k->n = -1; break; }
+		k->p[i].text = memcpy(at, p[i].text, len), at += len;
+	}
+	if (!same) lv_obj_clean(run);
 
 	float x[16], w[16], h[16], asc = 0, desc = 0, row_h = 0, total = 0;
 	for (int i = 0; i < n; i++) {
@@ -292,12 +322,18 @@ static void run_set(lv_obj_t *run, const part_t *p, int n)
 	for (int i = 0; i < n; i++) {
 		float top = (row_h - group_h[i]) / 2;
 		if (p[i].text) {
-			lv_obj_t *l = label(run, p[i].font, p[i].color);
-			lv_obj_set_style_text_letter_space(l, ri(p[i].ls), 0);
-			lv_label_set_text(l, p[i].text);
+			lv_obj_t *l = same ? lv_obj_get_child(run, i) : label(run, p[i].font, p[i].color);
+			if (same) {
+				if (lv_obj_get_style_text_font(l, 0) != p[i].font) lv_obj_set_style_text_font(l, p[i].font, 0);
+				text_color(l, p[i].color);
+				SET_NUM(l, lv_obj_get_style_text_letter_space, lv_obj_set_style_text_letter_space, ri(p[i].ls));
+			} else
+				lv_obj_set_style_text_letter_space(l, ri(p[i].ls), 0);
+			if (strcmp(lv_label_get_text(l), p[i].text)) lv_label_set_text(l, p[i].text);
 			lv_obj_set_pos(l, ri(x[i]), ri(top + group_base[i] - ascent(p[i].font)));
 		} else {
-			lv_obj_t *im = icon(run, p[i].img, p[i].color);
+			lv_obj_t *im = same ? lv_obj_get_child(run, i) : icon(run, p[i].img, p[i].color);
+			if (same) img_src(im, p[i].img), icon_color(im, p[i].color);
 			lv_obj_set_pos(im, ri(x[i]), ri(top));
 		}
 	}
@@ -688,26 +724,72 @@ static void ring_figs_geom(float dy) /* dy: how far the speed column sits lower 
 
 /* ---------- the battery dial (widgets.dart _Battery, _DialPainter): drawn at 104 x 98, shown 128 wide ---------- */
 static float dial_q(void) { return px(128) * UI_S_DIAL / 104; }
+/* The box round an arc's band, from radius r1 to r2 about cx, cy, a0 to a1 degrees, and a few pixels for the edges. */
+static void arc_box(float cx, float cy, float r1, float r2, int a0, int a1, lv_area_t *box)
+{
+	float x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
+#define BAND_PT(rr, deg) do { float x_ = cx + (rr) * cosf(DEG(deg)), y_ = cy + (rr) * sinf(DEG(deg)); \
+		x0 = fminf(x0, x_), y0 = fminf(y0, y_), x1 = fmaxf(x1, x_), y1 = fmaxf(y1, y_); } while (0)
+	BAND_PT(r1, a0); BAND_PT(r2, a0); BAND_PT(r1, a1); BAND_PT(r2, a1);
+	for (int q = (int)ceilf(a0 / 90.0f) * 90; q <= a1; q += 90) BAND_PT(r2, q); /* where it reaches furthest out */
+#undef BAND_PT
+	*box = (lv_area_t){(int32_t)floorf(x0) - 3, (int32_t)floorf(y0) - 3, (int32_t)ceilf(x1) + 3, (int32_t)ceilf(y1) + 3};
+}
+/* The dial's two arcs as drawn: the charge, and while charging the rest to the limit (dim green); whole degrees, c 0
+ * none. Kept as drawn, so a new charge redraws only the degrees its end moved (dial_dirty). */
+typedef struct { int a0, a1; uint32_t c; } dial_arc_t;
+static void dial_arcs(const dash_state_t *s, dial_arc_t a[2])
+{
+	float frac = isnan(s->soc_pct) ? 0 : fmaxf(0, fminf(100, s->soc_pct)) / 100, sw = 270 * frac;
+	uint32_t color = (isnan(s->soc_pct) ? 100 : s->soc_pct) < 20 ? ALERT : REGEN;
+	a[0] = sw > 0.2f ? (dial_arc_t){135, ri(135 + sw), color} : (dial_arc_t){0};
+	a[1] = (dial_arc_t){0};
+	bool charging = s->wifi_live && s->charging;
+	if (charging && s->charge_limit_pct > frac * 100) { /* still to go in: dim green on to the limit */
+		float st = 135 + sw, sw2 = 270 * (fminf(s->charge_limit_pct, 100) / 100 - frac);
+		if (sw2 > 0.2f) a[1] = (dial_arc_t){ri(st), ri(st + sw2), 0xFF12422D};
+	}
+}
 static void dial_draw(lv_event_t *e)
 {
 	lv_layer_t *layer = lv_event_get_layer(e);
 	lv_area_t a;
 	lv_obj_get_coords(lv_event_get_target(e), &a);
-	const dash_state_t *s = &S;
 	float q = dial_q(), r = (52 - 4) * q, cx = a.x1 + 52 * q, cy = a.y1 + 52 * q;
-	float frac = isnan(s->soc_pct) ? 0 : fmaxf(0, fminf(100, s->soc_pct)) / 100;
-	uint32_t color = (isnan(s->soc_pct) ? 100 : s->soc_pct) < 20 ? ALERT : REGEN;
 	lv_draw_arc_dsc_t d;
 	lv_draw_arc_dsc_init(&d);
 	d.center.x = ri(cx);
 	d.center.y = ri(cy);
-#define DIAL_ARC(st, sw, c, wd) do { if ((sw) > 0.2f) { d.width = ri(wd); d.radius = ri(r + (wd) / 2); d.start_angle = ri(st); \
-		d.end_angle = ri((st) + (sw)); d.color = rgb(c); d.opa = opa(c); lv_draw_arc(layer, &d); } } while (0)
-	DIAL_ARC(135, 270, W24, 1.5f * q);
-	DIAL_ARC(135, 270 * frac, color, 6 * q);
-	bool charging = s->wifi_live && s->charging;
-	if (charging && s->charge_limit_pct > frac * 100) /* still to go in: dim green on to the limit */
-		DIAL_ARC(135 + 270 * frac, 270 * (fminf(s->charge_limit_pct, 100) / 100 - frac), 0xFF12422D, 6 * q);
+#define DIAL_ARC(st, end, c, wd) do { d.width = ri(wd); d.radius = ri(r + (wd) / 2); d.start_angle = (st); \
+		d.end_angle = (end); d.color = rgb(c); d.opa = opa(c); lv_draw_arc(layer, &d); } while (0)
+	DIAL_ARC(135, 405, W24, 1.5f * q);
+	dial_arc_t arcs[2];
+	dial_arcs(&S, arcs);
+	for (int i = 0; i < 2; i++)
+		if (arcs[i].c) DIAL_ARC(arcs[i].a0, arcs[i].a1, arcs[i].c, 6 * q);
+}
+/* Redraws the dial's arcs where they changed: the degrees the charge's end moved over (all of an arc before and after
+ * when it changed colour or came or went), not the whole dial (its figures in the middle, every arc again). */
+static void dial_dirty(const dash_state_t *s)
+{
+	static dial_arc_t shown[2];
+	dial_arc_t now[2];
+	dial_arcs(s, now);
+	lv_area_t a, b;
+	lv_obj_get_coords(dial, &a);
+	float q = dial_q(), r2 = ri((52 - 4) * q + 3 * q), r1 = r2 - ri(6 * q), cx = ri(a.x1 + 52 * q), cy = ri(a.y1 + 52 * q);
+	for (int i = 0; i < 2; i++) {
+		dial_arc_t o = first ? (dial_arc_t){0} : shown[i], n = now[i];
+		if (!memcmp(&o, &n, sizeof o)) continue;
+		if (o.c && o.c == n.c && o.a0 == n.a0) { /* its end moved */
+			arc_box(cx, cy, r1, r2, LV_MIN(o.a1, n.a1), LV_MAX(o.a1, n.a1), &b);
+			lv_obj_invalidate_area(dial, &b);
+			continue;
+		}
+		if (o.c) arc_box(cx, cy, r1, r2, o.a0, o.a1, &b), lv_obj_invalidate_area(dial, &b);
+		if (n.c) arc_box(cx, cy, r1, r2, n.a0, n.a1, &b), lv_obj_invalidate_area(dial, &b);
+	}
+	memcpy(shown, now, sizeof shown);
 }
 
 /* ---------- the g-meter (widgets.dart _GBall, _GPainter) ---------- */
@@ -2018,16 +2100,7 @@ static void ring_place(void)
 }
 
 /* The box round the ring's band (every arc, the zero ticks) from a0 to a1 degrees, and a few pixels for the edges. */
-static void band_box(int a0, int a1, lv_area_t *box)
-{
-	float r1 = G.r - G.aw, r2 = G.r + G.aw, x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
-#define BAND_PT(rr, deg) do { float x_ = G.cx + (rr) * cosf(DEG(deg)), y_ = G.cy + (rr) * sinf(DEG(deg)); \
-		x0 = fminf(x0, x_), y0 = fminf(y0, y_), x1 = fmaxf(x1, x_), y1 = fmaxf(y1, y_); } while (0)
-	BAND_PT(r1, a0); BAND_PT(r2, a0); BAND_PT(r1, a1); BAND_PT(r2, a1);
-	for (int q = (int)ceilf(a0 / 90.0f) * 90; q <= a1; q += 90) BAND_PT(r2, q); /* where it reaches furthest out */
-#undef BAND_PT
-	*box = (lv_area_t){(int32_t)floorf(x0) - 3, (int32_t)floorf(y0) - 3, (int32_t)ceilf(x1) + 3, (int32_t)ceilf(y1) + 3};
-}
+static void band_box(int a0, int a1, lv_area_t *box) { arc_box(G.cx, G.cy, G.r - G.aw, G.r + G.aw, a0, a1, box); }
 /* Redraws only the ring's parts whose values changed: the degrees an arc moved over (its end, as a figure moves; all of
  * it before and after when it changed colour or came or went), a sector's box when the ring itself changed, its foot;
  * on the speedometer the needle. The two sectors' boxes, every frame a motor's power moved, were nearly half of a
@@ -2218,7 +2291,7 @@ static void set_energy(const dash_state_t *s, float cx)
 		lv_obj_set_pos(dial, ri(cx - 52 * q), ri(top));
 		lv_obj_set_pos(stats_box, ri(cx - st_w / 2), ri(y));
 		G.energy_cx = cx, G.energy_foot = y + st_h;
-		if (CHANGED(soc_pct) || CHANGED(charge_limit_pct) || CHANGED(charging)) lv_obj_invalidate(dial);
+		dial_dirty(s);
 		return;
 	}
 	float eh = dh + pad + (card ? ch_h + 2 * pad : 0) + st_h;
@@ -2234,7 +2307,7 @@ static void set_energy(const dash_state_t *s, float cx)
 	}
 	lv_obj_set_pos(stats_box, ri(cx - st_w / 2), ri(y));
 	G.energy_cx = cx, G.energy_foot = y + st_h;
-	if (CHANGED(soc_pct) || CHANGED(charge_limit_pct) || CHANGED(charging)) lv_obj_invalidate(dial);
+	dial_dirty(s);
 }
 
 static bool g_figures(const dash_state_t *s, bool card);
@@ -2853,7 +2926,7 @@ static lv_obj_t *column(lv_obj_t *parent, float gap)
 static void panel_build(void)
 {
 	float left = G.ml + inset(0) + PB(8); /* clear of the hidden top corners all the way down */
-	panel = box(lv_layer_top());
+	panel = box(lv_screen_active()); /* a page: on the screen, over all of it while shown (pages_top) */
 	place(panel, 0, 0, G.W, G.H);
 	fill(panel, BLACK);
 	lv_obj_set_clickable(panel, true); /* the page takes every touch while open */
@@ -3381,6 +3454,38 @@ static void tab_tap(lv_event_t *e)
 	if (i == 3) save(DASH_NET_SCAN); /* the Network tab: a fresh Nearby list */
 }
 void dash_ui_settings_tab(int i) { if (i >= 0 && i < SET_TABS && set_page[0]) tab_select(i); }
+/* The Commander page's wheel at twice its size: worked out once by LVGL's own transform, for the whole image (what it
+ * gives each part of the screen redrawn, pixel for pixel: its source pixel depends on the destination pixel alone), and
+ * shown as it is where LVGL would put it. Transformed again for every part redrawn, it was a quarter of the frame that
+ * opens the Settings. Without the memory: scaled as before. */
+static void wheel_2x(lv_obj_t *img)
+{
+	static lv_image_dsc_t big;
+	lv_image_decoder_dsc_t dec;
+	lv_image_set_src(img, &img_wheel);
+	lv_image_set_inner_align(img, LV_IMAGE_ALIGN_CENTER);
+	if (lv_image_decoder_open(&dec, &img_wheel, NULL) != LV_RESULT_OK) return (void)lv_image_set_scale(img, 512);
+	const lv_draw_buf_t *src = dec.decoded;
+	int32_t w = src->header.w, h = src->header.h;
+	lv_draw_image_dsc_t d; /* as lv_image draws it: scaled about its middle, anti-aliased */
+	lv_draw_image_dsc_init(&d);
+	d.src = &img_wheel, d.scale_x = d.scale_y = 512, d.pivot = (lv_point_t){w / 2, h / 2}, d.antialias = 1;
+	lv_area_t a, at = {0, 0, w - 1, h - 1}, box = {0, 0, lv_obj_get_style_width(img, 0) - 1, lv_obj_get_style_height(img, 0) - 1};
+	lv_image_buf_get_transformed_area(&a, w, h, 0, 512, 512, &d.pivot);
+	lv_area_align(&box, &at, LV_ALIGN_CENTER, 0, 0); /* where lv_image puts the unscaled image in its box */
+	int32_t bw = lv_area_get_width(&a), bh = lv_area_get_height(&a);
+	uint8_t *px = big.data ? (uint8_t *)big.data : lv_malloc((size_t)bw * bh * 4);
+	if (px && src->header.cf == LV_COLOR_FORMAT_ARGB8888) {
+		lv_draw_sw_transform(&a, src->data, w, h, src->header.stride, &d, NULL, src->header.cf, px);
+		big = (lv_image_dsc_t){.header = {.magic = LV_IMAGE_HEADER_MAGIC, .cf = LV_COLOR_FORMAT_ARGB8888_PREMULTIPLIED, .w = bw,
+						  .h = bh, .stride = bw * 4}, .data_size = bw * bh * 4, .data = px};
+		lv_image_set_src(img, &big); /* (anti-aliased, LVGL's transform gives premultiplied pixels) */
+		lv_image_set_inner_align(img, LV_IMAGE_ALIGN_TOP_LEFT);
+		lv_image_set_offset_x(img, at.x1 + a.x1), lv_image_set_offset_y(img, at.y1 + a.y1);
+	} else
+		lv_image_set_scale(img, 512);
+	lv_image_decoder_close(&dec);
+}
 static void settings_build(void)
 {
 	float top = PB(6), x0 = G.ml + inset(top) + PB(6), w = G.W - 2 * x0, h = G.H - 2 * top, pad = PB(20);
@@ -3443,10 +3548,8 @@ static void settings_build(void)
 	lv_obj_set_style_pad_column(c, ri(PB(28)), 0);
 	set_wheel = lv_image_create(c);
 	lv_obj_remove_style_all(set_wheel);
-	lv_image_set_src(set_wheel, &img_wheel);
-	lv_image_set_scale(set_wheel, 512); /* 135 x 105 at 2: 270 x 210 */
 	lv_obj_set_size(set_wheel, ri(img_wheel.header.w * 2.0f), ri(img_wheel.header.h * 2.0f));
-	lv_image_set_inner_align(set_wheel, LV_IMAGE_ALIGN_CENTER);
+	wheel_2x(set_wheel); /* 135 x 105 at 2: 270 x 210 */
 	float pw = w - xp - pad, sw = fminf(PB(460), pw - img_wheel.header.w * 2.0f - PB(28)); /* this page: the dialog's width */
 	lv_obj_t *steps = column(c, PB(10));
 	lv_obj_set_size(steps, ri(sw), LV_SIZE_CONTENT);
@@ -3722,6 +3825,19 @@ static void kb_key(lv_event_t *e)
 		if (kb_mode == 1 && t[1] == 0 && t[0] >= 'A' && t[0] <= 'Z') kb_set_mode(0); /* one capital, then back */
 	}
 }
+/* A key down or up: the keyboard's pressed state set here first, with the display's invalidation off. LVGL sets it on
+ * the whole keyboard, and a pressed look among its keys' styles made that redraw every key (most of the screen), down
+ * and up again, for each key typed; the keyboard itself then redraws the key under the finger (and the field what it
+ * types), so only those change. */
+static void kb_press(lv_event_t *e)
+{
+	lv_obj_t *m = lv_event_get_current_target(e);
+	lv_display_t *d = lv_obj_get_display(m);
+	bool on = lv_display_is_invalidation_enabled(d);
+	lv_display_enable_invalidation(d, false);
+	lv_obj_set_state(m, LV_STATE_PRESSED, lv_event_get_code(e) == LV_EVENT_PRESSED);
+	lv_display_enable_invalidation(d, on);
+}
 static void ta_focus(lv_event_t *e)
 {
 	kb_ta = lv_event_get_target(e);
@@ -3730,7 +3846,7 @@ static void ta_focus(lv_event_t *e)
 static void net_edit_build(void)
 {
 	float top = PB(6), x0 = G.ml + inset(top) + PB(6), w = G.W - 2 * x0, pad = PB(16);
-	net_edit = box(lv_layer_top());
+	net_edit = box(lv_screen_active()); /* a page (pages_top) */
 	place(net_edit, 0, 0, G.W, G.H);
 	fill(net_edit, M3_DIALOG);
 	lv_obj_set_clickable(net_edit, true);
@@ -3786,6 +3902,9 @@ static void net_edit_build(void)
 		lv_obj_set_style_border_width(m, 0, LV_PART_ITEMS);
 		lv_obj_set_style_shadow_width(m, 0, LV_PART_ITEMS);
 		lv_obj_add_event_cb(m, kb_key, LV_EVENT_VALUE_CHANGED, NULL);
+		lv_obj_add_event_cb(m, kb_press, LV_EVENT_PRESSED | LV_EVENT_PREPROCESS, NULL);
+		lv_obj_add_event_cb(m, kb_press, LV_EVENT_RELEASED | LV_EVENT_PREPROCESS, NULL);
+		lv_obj_add_event_cb(m, kb_press, LV_EVENT_PRESS_LOST | LV_EVENT_PREPROCESS, NULL);
 		lv_obj_set_click_focusable(m, false); /* a key press keeps the field's focus look */
 	}
 	show(net_edit, false);
@@ -3903,6 +4022,11 @@ void dash_ui_show(int v)
 	show(panel, v == DASH_VIEW_CAR_PANEL);
 	show(settings, v == DASH_VIEW_SETTINGS);
 	if (v == DASH_VIEW_SETTINGS) lv_obj_move_foreground(settings); /* above all the dash's own (the screen's) */
+	/* The opaque pages live on the screen too, the one shown its topmost child: LVGL starts a redraw at the topmost of
+	 * the screen's objects that covers it, so a page there is drawn alone, where on the top layer the screen beneath
+	 * was painted first (as much again as the page, for every redraw: opening it, each key typed) */
+	lv_obj_t *page = v == DASH_VIEW_CAR_PANEL ? panel : v == DASH_VIEW_NETWORK ? net_edit : v == DASH_VIEW_PAIR ? pair_view : NULL;
+	if (page) lv_obj_move_foreground(page);
 	show(net_edit, v == DASH_VIEW_NETWORK);
 	show(pair_view, v == DASH_VIEW_PAIR);
 	show(project, v == DASH_VIEW_PROJECT);
@@ -3978,7 +4102,7 @@ static void pair_cancel(lv_event_t *e)
 static void pair_build(void)
 {
 	float top = PB(6), x0 = G.ml + inset(top) + PB(10), pad = PB(16), qs = G.H - 2 * top - 2 * pad;
-	pair_view = box(lv_layer_top());
+	pair_view = box(lv_screen_active()); /* a page (pages_top) */
 	place(pair_view, 0, 0, G.W, G.H);
 	fill(pair_view, M3_DIALOG);
 	lv_obj_set_clickable(pair_view, true);
