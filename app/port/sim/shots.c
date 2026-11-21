@@ -248,6 +248,8 @@ int main(int argc, char **argv)
 		scenes[6].fill(&s);
 		snprintf(s.toast, sizeof s.toast, "Unlock sent: unlocks with the driver inside");
 		bad |= shot(d, out, "touch-car-panel", &s, DASH_VIEW_CAR_PANEL);
+		s.bt = BT_APPROVING; /* a press there while unlinked asked for the approval: its step in the panel's line */
+		bad |= shot(d, out, "touch-car-panel-approval", &s, DASH_VIEW_CAR_PANEL);
 		dash_settings_t st = {.minor_figures = true, .hour12 = true, .brightness_pct = 70, .follow_car = true, .car = 4, .sparse = true, .wifi_first = true, .net_count = 3,
 				      .net = {{"S3XY_OBD", ""}, {"Home WiFi", ""}, {"Phone hotspot", ""}},
 				      .tz = "CET-1CEST,M3.5.0,M10.5.0/3", .panda_host = "192.168.4.1", .panda_port = 1338,
@@ -268,6 +270,12 @@ int main(int argc, char **argv)
 		s.blind_l = true, s.ind_r = true; /* a car in the left blind spot, the right indicator on */
 		bad |= shot(d, out, "project-blind", &s, DASH_VIEW_PROJECT);
 		s.blind_l = false, s.ind_r = false;
+		s.bt = BT_APPROVING; /* the approval's step in the split: on the dash's side, off the picture */
+		bad |= shot(d, out, "project-approval", &s, DASH_VIEW_PROJECT);
+		scenes[1].fill(&s);
+		snprintf(s.toast, sizeof s.toast, "Climate: refused (the car's WiFi stream is off: ScanMyTesla off in the S3XY app)");
+		bad |= shot(d, out, "project-toast", &s, DASH_VIEW_PROJECT); /* a long one: within the dash's side, off the picture */
+		s.toast[0] = 0;
 		s.wifi = WIFI_IDLE; /* the phone on the Dash's own AP: Wi-Fi says AA (the wide box), Bluetooth settled (narrow) */
 		bad |= shot(d, out, "project-aa-links", &s, DASH_VIEW_PROJECT);
 		scenes[1].fill(&s);
@@ -580,6 +588,12 @@ int main(int argc, char **argv)
 		swipe(W * 3 / 4, H * 2 / 3, W * 3 / 4, H / 4); /* the battery's slot: past the drive, car and buttons cards shown */
 		bad |= expect(saved.cards[2] == DASH_CARD_ROUTE && saved.split_card == DASH_CARD_POWER, "basic's slot: the route's card");
 		bad |= shot(d, out, "swipe-basic-route", &s, -1);
+		swipe(W * 3 / 4, H / 2, W * 3 / 4 - W / 5, H / 2); /* sideways, from the slot to over the ring: its next card */
+		int next = saved.cards[2];
+		swipe(W * 3 / 4, H / 2, W * 3 / 4 + W / 8, H / 2);
+		bad |= expect(next != DASH_CARD_ROUTE && saved.cards[2] == DASH_CARD_ROUTE, "basic's slot swiped left, then right: its next card, and back");
+		swipe(W / 2 + W / 20, H / 2, W / 2 + W / 5, H / 2); /* from the ring to over the slot */
+		bad |= expect(saved.ring_page == DASH_RING_POWER && saved.cards[2] == DASH_CARD_ROUTE, "sideways on the ring: nothing");
 		bad |= expect(!presses, "no press from any swipe");
 		st.basic = false; /* last, the split again: a hold on a button names it, in the bar (its tooltip stays: no timers here) */
 		dash_ui_settings(&st);

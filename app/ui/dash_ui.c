@@ -10,7 +10,9 @@
 #include "src/draw/lv_draw_image_private.h"      /* the wheel scaled once (wheel_2x): LVGL's transform, */
 #include "src/draw/sw/lv_draw_sw.h"              /* its area and the decoded image */
 #include "src/image/lv_image_decoder_private.h"
+#include "src/indev/lv_indev_private.h"          /* where a swipe began (swipe) */
 #include <fcntl.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <arpa/inet.h>
@@ -70,7 +72,7 @@ static bool strip(void);
 static int card_slot[DASH_CARDS]; /* each card's slot (basic's 0..3; the split's SPLIT_SLOT, its buttons BAR_SLOT), -1 none */
 static float slot_x[5];           /* the slots' left edges and the last one's right edge, for the swipes */
 static lv_obj_t *dots[4][DASH_CARDS]; /* each slot's page dots (widgets.dart _Cards), its card's lit */
-static int layout_key = -1;       /* the parts as last shown: 0 the full layout, > 0 basic and its cards, < 0 the split's card */
+static int layout_key = INT_MIN;       /* the parts as last shown: 0 the full layout, > 0 basic and its cards, < 0 the split's card */
 #define SPLIT_SLOT 3              /* the split's card: the right slot's dots */
 #define BAR_SLOT 4                /* the split's bar over the picture: the buttons, always (not a card there) */
 static float split_x;             /* the split's card's left edge (the ring left of it), for the swipes */
@@ -78,6 +80,12 @@ static float split_x;             /* the split's card's left edge (the ring left
 static dash_settings_t ST = {.minor_figures = true, .brightness_pct = 80, .follow_car = true, .unit_miles = -1, .unit_f = -1, .unit_psi = -1,
 			      .cards = {DASH_CARD_BUTTONS, DASH_CARD_CAR, DASH_CARD_ENERGY, DASH_CARD_G}};
 
+/* what this unit is called in its own texts: the Dash, or the phone layout's screen */
+#if DASH_PHONE_LAYOUT
+#define UNIT "screen"
+#else
+#define UNIT "Dash"
+#endif
 static float px(float dp) { return dp * 1.25f * G.k; }
 /* The Dash draws each group bigger than the app (ui/assets/sizes.json; the icons are baked at these sizes). */
 #define PC(dp) (px(dp) * UI_S_CHIP)   /* the side chips */
@@ -2621,7 +2629,7 @@ static uint32_t aa_pending_at;
 static bool aa_start_running(void)
 {
 	uint32_t t = lv_tick_elaps(aa_pending_at);
-	return t < 3000 || (t < AA_START_MS && access(aa_start_lock, F_OK) == 0);
+	return t < 5000 || (t < AA_START_MS && access(aa_start_lock, F_OK) == 0); /* (5 s: one core, a stop just ended) */
 }
 static void aa_tap(lv_event_t *e)
 {
@@ -3474,8 +3482,9 @@ static void wheel_2x(lv_obj_t *img)
 	lv_image_buf_get_transformed_area(&a, w, h, 0, 512, 512, &d.pivot);
 	lv_area_align(&box, &at, LV_ALIGN_CENTER, 0, 0); /* where lv_image puts the unscaled image in its box */
 	int32_t bw = lv_area_get_width(&a), bh = lv_area_get_height(&a);
-	uint8_t *px = big.data ? (uint8_t *)big.data : lv_malloc((size_t)bw * bh * 4);
-	if (px && src->header.cf == LV_COLOR_FORMAT_ARGB8888) {
+	bool argb = src->header.cf == LV_COLOR_FORMAT_ARGB8888; /* (any other: LVGL scales it at each draw) */
+	uint8_t *px = big.data ? (uint8_t *)big.data : argb ? lv_malloc((size_t)bw * bh * 4) : NULL;
+	if (px && argb) {
 		lv_draw_sw_transform(&a, src->data, w, h, src->header.stride, &d, NULL, src->header.cf, px);
 		big = (lv_image_dsc_t){.header = {.magic = LV_IMAGE_HEADER_MAGIC, .cf = LV_COLOR_FORMAT_ARGB8888_PREMULTIPLIED, .w = bw,
 						  .h = bh, .stride = bw * 4}, .data_size = bw * bh * 4, .data = px};
@@ -3559,7 +3568,7 @@ static void settings_build(void)
 	lv_label_set_long_mode(set_bt_line, LV_LABEL_LONG_MODE_WRAP);
 	lv_obj_t *btns = row(steps); /* side by side: the status line's room */
 	lv_obj_set_style_pad_column(btns, ri(PB(16)), 0);
-	outlined(btns, NULL, "Approve this Dash", approve_tap, 0);
+	outlined(btns, NULL, "Approve this " UNIT, approve_tap, 0);
 	fg_cmdr.btn = outlined(btns, NULL, "Forget Commander", forget_tap, 0);
 	set_step = label(steps, FS(MEDIUM, 16, UI_S_PANEL), W70);
 	lv_obj_set_width(set_step, ri(sw));
@@ -3649,7 +3658,7 @@ static void settings_build(void)
 	c = set_page[4];
 	group_title(c, "Developer");
 	switch_note_row(c, "SSH", "Needs a paired key, or one on the card", 2, aw);
-	button_row(c, text_block(c, "Pair a computer", "The Dash shows a page and a code: that computer adds its key, within 5 minutes"),
+	button_row(c, text_block(c, "Pair a computer", "The " UNIT " shows a page and a code: that computer adds its key, within 5 minutes"),
 		   "Pair", pair_tap, aw); /* only from this tap: someone at the Dash */
 #ifndef DASH_NO_RECORD /* a profile with no room for recordings (the F133's data partition: 512 KiB) has no switch */
 	switch_note_row(c, "Record drives", "CAN and Commander data to the card, for replays at the desk", 4, aw);
@@ -3973,6 +3982,14 @@ static void settings_reveal(void)
 		if (part[i].x1 <= part[i].x2 && part[i].y1 <= part[i].y2) lv_obj_invalidate_area(settings, &part[i]);
 }
 
+/* The units' switches: the owner's pick, or (none yet) what is shown: the car's unit, °F going with miles. Again each
+ * frame while the settings are open: miles switched there takes °F with it, and the car's own unit can arrive. */
+static void units_sw(const dash_state_t *s)
+{
+	lv_obj_set_state(set_sw[9], LV_STATE_CHECKED, ST.unit_miles >= 0 ? ST.unit_miles : !s->kph);
+	lv_obj_set_state(set_sw[10], LV_STATE_CHECKED, ST.unit_f >= 0 ? ST.unit_f : s->fahrenheit);
+	lv_obj_set_state(set_sw[11], LV_STATE_CHECKED, ST.unit_psi >= 0 ? ST.unit_psi : s->psi);
+}
 void dash_ui_show(int v)
 {
 	if (v == DASH_VIEW_SETTINGS) save(DASH_SETTINGS_OPEN);
@@ -3997,16 +4014,13 @@ void dash_ui_show(int v)
 		lv_obj_set_parent(outside_l, to);
 		lv_obj_set_parent(link_w.box, to); /* the Wi-Fi / Bluetooth status: kept in the split, in the left strip */
 		lv_obj_set_parent(link_b.box, to);
-		/* the edge glows (blind spot, indicators) too, under everything; the left one cut at the picture: the decoder
-		 * draws there, so nothing of LVGL's may be repainted over it */
+		/* the edge glows (blind spot, indicators) too, under everything; the left one at the dash's side's left edge,
+		 * beside the picture: the decoder draws there, so nothing of LVGL's may be repainted over it (and the Dash's
+		 * sliver left of it is under the housing's slant) */
 		lv_obj_set_parent(glow_l, to), lv_obj_set_parent(glow_r, to);
 		lv_obj_move_to_index(glow_r, 0), lv_obj_move_to_index(glow_l, 0);
-		if (G.phone) { /* the left glow at the dash's side's left edge, beside the picture; the cards' parts */
-			lv_obj_set_x(glow_l, now_pj ? ri(pj_vw()) : 0);
-			if (now_pj) pj_parts(true);
-		} else {
-			lv_obj_set_width(glow_l, now_pj ? PJ_RGN_X : (int32_t)glow_dsc[0].header.w);
-		}
+		lv_obj_set_x(glow_l, now_pj ? ri(pj_vw()) : 0);
+		if (G.phone && now_pj) pj_parts(true); /* the cards' parts */
 		if (!now_pj) lv_obj_move_foreground(tip), lv_obj_move_foreground(snack); /* toasts stay above the moved ring */
 		/* the decoder draws straight to the framebuffer: LVGL would leave its last picture on screen, so repaint all
 		 * (whole, where the port can and the session's decoder has gone: its memory is what the whole frame takes) */
@@ -4036,7 +4050,7 @@ void dash_ui_show(int v)
 	if (reveal) lv_display_enable_invalidation(lv_obj_get_display(settings), true), settings_reveal();
 	show(tip, false);
 	lv_obj_t *sp = v == DASH_VIEW_SETTINGS ? lv_layer_top() : root; /* the snackbar (a failed save) over the settings too */
-	if (G.phone && now_pj) sp = project; /* the phone layout's split: what came of a button's press, in the right half */
+	if (now_pj) sp = project; /* the split: on the dash's side, off the picture (set_snack) */
 	if (lv_obj_get_parent(snack) != sp) lv_obj_set_parent(snack, sp);
 	if (sp != root || !now_pj) lv_obj_move_foreground(snack);
 	if (v == DASH_VIEW_SETTINGS) {
@@ -4050,9 +4064,7 @@ void dash_ui_show(int v)
 		lv_obj_set_state(set_sw[7], LV_STATE_CHECKED, ST.ota_auto);
 		lv_obj_set_state(set_sw[8], LV_STATE_CHECKED, ST.aa_low_res);
 		/* the units as shown now, until switched (panda.dart's toggles) */
-		lv_obj_set_state(set_sw[9], LV_STATE_CHECKED, ST.unit_miles >= 0 ? ST.unit_miles : !S.kph);
-		lv_obj_set_state(set_sw[10], LV_STATE_CHECKED, ST.unit_f >= 0 ? ST.unit_f : S.fahrenheit);
-		lv_obj_set_state(set_sw[11], LV_STATE_CHECKED, ST.unit_psi >= 0 ? ST.unit_psi : S.psi);
+		units_sw(&S);
 		forget_reset(&fg_cmdr, true), forget_reset(&fg_aa, true), forget_reset(&fg_nor, true);
 		for (int i = 0; i < 6; i++) { /* the chosen car filled, as a selected chip */
 			fill(set_car_btn[i], i == ST.car ? 0xFF4A4458u : 0x00000000u);
@@ -4182,28 +4194,39 @@ static void snack_build(void)
 	lv_label_set_long_mode(snack_text, LV_LABEL_LONG_MODE_WRAP);
 	show(snack, false);
 }
+static float side_l, side_r; /* the Dash's layout: the car's side, from the left chips to the ring (the toasts' place) */
 static void set_snack(const dash_state_t *s)
 {
 	bool approving = s->bt == BT_APPROVING; /* the one step that needs a hand: said until it is done */
-	bool say = approving || (s->toast[0] && view != DASH_VIEW_CAR_PANEL);
-	if (!G.phone || !say) show(snack, say); /* the phone layout's once placed: in the split, where it was may be the picture */
-	if (!say) return;
-	show(snack_wheel, approving);
-	const char *t = approving ? "Approve this Dash for the Commander: in the car, double-press the right scroll wheel" : s->toast;
-	set_text(snack_text, "%s", t);
-	lv_point_t sz;
-	float max = G.W * 0.42f;
-	if (G.phone && view == DASH_VIEW_PROJECT) { /* the split: the whole snack in its right half, off the picture */
-		lv_obj_update_layout(snack);
-		int32_t extra = lv_obj_get_width(snack) - lv_obj_get_width(snack_text); /* the wheel and the padding */
-		max = fminf(max, G.W - pj_vw() - PB(24) - extra);
+	bool say = (approving || s->toast[0]) && view != DASH_VIEW_CAR_PANEL; /* (the car panel says both in its own line) */
+	if (!say) {
+		show(snack, false);
+		return;
 	}
-	lv_text_get_size(&sz, t, lv_obj_get_style_text_font(snack_text, 0), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-	lv_obj_set_width(snack_text, ri(fminf(sz.x + 1, max)));
+	show(snack_wheel, approving && !strip()); /* (the strip has no room for the picture) */
+	const char *t = !approving ? s->toast : strip() ? "Double-press the right scroll wheel"
+			: "Approve this " UNIT " for the Commander: in the car, double-press the right scroll wheel";
+	set_text(snack_text, "%s", t);
+	/* Its place, at the foot: the middle; on the Dash the car's side, clear of the ring's foot (the gear, the cruise
+	 * line); in a split the dash's side, off the picture (the strip: left of Exit) */
+	float lo = 0, hi = G.W, max = G.W * 0.42f;
+	if (view == DASH_VIEW_PROJECT) lo = pj_vw() + PB(G.phone ? 12 : 6), hi = G.phone ? G.W - PB(12) : lv_obj_get_x(pj_exit) - PB(6);
+	else if (view == DASH_VIEW_DASH && !G.phone && side_r > side_l) lo = side_l, hi = side_r;
+	if (lo > 0) {
+		lv_obj_update_layout(snack);
+		max = fminf(max, hi - lo - (lv_obj_get_width(snack) - lv_obj_get_width(snack_text))); /* less the wheel and the padding */
+	}
+	lv_point_t sz;
+	const lv_font_t *f = lv_obj_get_style_text_font(snack_text, 0);
+	lv_text_get_size(&sz, t, f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+	/* the strip's is one line across its foot, a long text cut short: the ring's own foot (the cruise line) is just above */
+	lv_label_set_long_mode(snack_text, strip() ? LV_LABEL_LONG_MODE_DOTS : LV_LABEL_LONG_MODE_WRAP);
+	lv_obj_set_height(snack_text, strip() ? lv_font_get_line_height(f) : LV_SIZE_CONTENT);
+	lv_obj_set_width(snack_text, ri(strip() ? max : fminf(sz.x + 1, max)));
 	lv_obj_update_layout(snack);
-	/* at the foot's middle; in the phone layout's split its right half's (off the picture) */
-	align(snack, LV_ALIGN_BOTTOM_MID, G.phone && view == DASH_VIEW_PROJECT ? ri(pj_vw() / 2) : 0, ri(-PB(6)));
-	if (G.phone) lv_obj_update_layout(snack), show(snack, true);
+	align(snack, LV_ALIGN_BOTTOM_MID, ri((lo + hi - G.W) / 2), ri(-PB(6)));
+	lv_obj_update_layout(snack);
+	show(snack, true); /* once in its place: where it was may be the picture (a split) */
 }
 
 /* ---- the car's path either side, dotted (widgets.dart _CarLights, steerLines): under the car ---- */
@@ -4306,8 +4329,9 @@ static void steer_dirty(const dash_state_t *s, bool changed)
 static bool bt_ready(dash_bt_t b);
 /* The phone layout: the gear's tap switches between the full and basic layouts (main.dart: "Tap the gear under the speed
  * to switch"); in basic a swipe up or down on a slot brings its next or previous card (_Cards), passing over those the
- * other slots show, and in the split on its one card the next or previous of five (the buttons are in its bar); on the
- * ring (basic's, the split's) its other face (_Pages); all kept in the settings. */
+ * other slots show (and so does one to the left or the right that begins on the slot), and in the split on its one
+ * card the next or previous of five (the buttons are in its bar); on the ring (basic's, the split's) its other face
+ * (_Pages); all kept in the settings. */
 static void gear_tap(lv_event_t *e)
 {
 	(void)e;
@@ -4330,9 +4354,13 @@ static void swipe(lv_event_t *e)
 	lv_point_t p;
 	lv_indev_get_point(in, &p);
 	lv_indev_wait_release(in);
-	if ((d != LV_DIR_TOP && d != LV_DIR_BOTTOM) || (pj && p.x < pj_vw())) return; /* up or down; not on the bar over the picture */
-	int step = d == LV_DIR_TOP ? 1 : -1;
-	if (pj ? p.x < split_x : p.x >= G.cx - G.D / 2 && p.x < G.cx + G.D / 2) { /* the ring: its other face */
+	bool across = d == LV_DIR_LEFT || d == LV_DIR_RIGHT; /* basic's cards only: the slot it began on, not where it has got to */
+	if (across) p.x -= in->pointer.gesture_sum.x;
+	bool ring = pj ? p.x < split_x : p.x >= G.cx - G.D / 2 && p.x < G.cx + G.D / 2;
+	if (across ? pj || ring : d != LV_DIR_TOP && d != LV_DIR_BOTTOM) return;
+	if (pj && p.x < pj_vw()) return; /* not on the bar over the picture */
+	int step = d == LV_DIR_TOP || d == LV_DIR_LEFT ? 1 : -1;
+	if (ring) { /* its other face */
 		ST.ring_page = ((ST.ring_page + step) % DASH_RING_PAGES + DASH_RING_PAGES) % DASH_RING_PAGES;
 	} else if (pj) { /* the split's card: the next or the previous of its five in turn */
 		int c = split_card();
@@ -4345,7 +4373,7 @@ static void swipe(lv_event_t *e)
 		if (i == 4 || (i == 1 && p.x > G.cx - G.D / 2) || (i == 2 && p.x < G.cx + G.D / 2)) return;
 		int c = ST.cards[i];
 		for (int k = 0; k < DASH_CARDS; k++) {
-			c = (c + (d == LV_DIR_TOP ? 1 : DASH_CARDS - 1)) % DASH_CARDS;
+			c = (c + step + DASH_CARDS) % DASH_CARDS;
 			bool used = false;
 			for (int j = 0; j < 4; j++) used |= j != i && ST.cards[j] == c;
 			if (!used) break;
@@ -4429,15 +4457,15 @@ static void set_approval(dash_bt_t b)
 	const char *t;
 	uint32_t c = W70;
 	bool ready = bt_ready(b), press = b == BT_APPROVING;
-	if (ready) t = "Approved: this Dash is linked to the Commander.", c = REGEN;
+	if (ready) t = "Approved: this " UNIT " is linked to the Commander.", c = REGEN;
 	else if (press) t = "Now, in the car: double-press the right scroll wheel.", c = WARN;
 	else if (approve_asked && b == BT_PAUSED) t = "Waiting for the car's WiFi stream first (Advanced: Bluetooth waits for WiFi).", c = ACCENT;
 	else if (approve_asked && b == BT_AWAY) t = "Looking for the Commander: is the car awake? A phone's S3XY app may hold it: close it.", c = ACCENT;
 	else if (approve_asked) t = "Connecting to the Commander… keep the car awake.\nNext: the scroll wheel, when this says so.", c = ACCENT;
 	else if (b == BT_REFUSED) t = "Not approved (refused, or no press in time). Tap Approve to try again.", c = ALERT;
-	else if (b == BT_OFF) t = "Bluetooth is off on this Dash.", c = ALERT;
+	else if (b == BT_OFF) t = "Bluetooth is off on this " UNIT ".", c = ALERT;
 	else if (b == BT_AWAY) t = "The Commander is not in reach (car asleep, or a phone's S3XY app holds it).";
-	else t = "1. Tap Approve this Dash.\n2. When this says so, double-press the right scroll wheel.";
+	else t = "1. Tap Approve this " UNIT ".\n2. When this says so, double-press the right scroll wheel.";
 	set_text(set_step, "%s", t);
 	text_color(set_step, c);
 	SET_NUM(set_wheel, lv_obj_get_style_image_opa, lv_obj_set_style_image_opa, ready ? LV_OPA_40 : LV_OPA_COVER); /* lit until linked */
@@ -4451,13 +4479,15 @@ static void set_touch(const dash_state_t *s)
 	if (view == DASH_VIEW_CAR_PANEL) { /* its message line: '<label>…' while out, then what came of it */
 		int a = s->press_pending;
 		bool waiting = strstr(s->toast, "waiting for") != NULL; /* a second tap dropped behind it: say that */
-		if (!waiting && (a == ACT_UNLOCK || a == ACT_LOCK || a == ACT_CLIMATE || a == ACT_FLASH || a == ACT_HONK))
+		if (s->bt == BT_APPROVING) set_text(panel_msg, "To approve this " UNIT ": in the car, double-press the right scroll wheel");
+		else if (!waiting && (a == ACT_UNLOCK || a == ACT_LOCK || a == ACT_CLIMATE || a == ACT_FLASH || a == ACT_HONK))
 			set_text(panel_msg, "%s…", act_label[a]);
 		else set_text(panel_msg, "%s", s->toast);
 	}
 	if (view == DASH_VIEW_SETTINGS && ST.follow_car && s->backlight_pct >= 0 && CHANGED(backlight_pct))
 		lv_slider_set_value(set_slider, s->backlight_pct, LV_ANIM_OFF); /* the live value, greyed */
 	if (view == DASH_VIEW_SETTINGS) {
+		units_sw(s);
 		ota_refresh(false), nor_refresh(false);
 		uint32_t c;
 		const char *w = bt_word(s->bt, &c, NULL);
@@ -4753,7 +4783,7 @@ void dash_ui_set(const dash_state_t *s)
 			set_project(s);
 		}
 		set_links(s);
-		if (G.phone) set_snack(s); /* a button's press: what came of it */
+		set_snack(s); /* a button's press: what came of it; the approval's step */
 		if (G.phone && card_slot[DASH_CARD_CAR] >= 0) { /* the car's card: its path lines, as on the dash */
 			lv_obj_update_layout(project);
 			steer_dirty(s, CHANGED(steer_deg) || CHANGED(car) || CHANGED(gear));
@@ -4826,6 +4856,7 @@ void dash_ui_set(const dash_state_t *s)
 			}
 		}
 		(void)sum;
+		side_l = chips_r, side_r = G.cx - w[2] / 2;
 		ring_place();
 
 		set_chips(s);
