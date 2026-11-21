@@ -1,5 +1,5 @@
-# R0 backup helpers: plan 2.2 cardA() and b.4 bp()/b4(), verbatim from PLAN-merged.md. Source it: . /root/backup.sh
-# Gate S2 route: r0mount; D=/dev/mmcblkN (the MMC-type node); b4 /mnt/backup; then the b.5 hashes.
+# R0 backup helpers: cardA(), bp() and b4(). Source it: . /root/backup.sh
+# The route: r0mount; D=/dev/mmcblkN (the MMC-type node); b4 /mnt/backup; then the hashes.
 r0mount() {                                # mount card D's data partition (p2, label DASHDATA) read-write at /mnt/backup
   for d in /sys/block/mmcblk[0-9]; do [ "$(cat $d/device/type)" = SD ] && S=/dev/${d##*/}p2; done
   [ -b "$S" ] || { echo 'no SD card partition 2'; return 1; }
@@ -24,9 +24,9 @@ bp() {
     [ "$a" = "$c" ] && [ "$a" = "$(sha256sum < $2/$p.bin)" ] || { echo "$p: the three reads differ"; return 1; }
   done
 }
-b4() {                                         # usage: b4 [MOUNTPOINT]   default /mnt/extsd (stock); in R0 see Gate S2
+b4() {                                         # usage: b4 [MOUNTPOINT]   default /mnt/extsd (stock); in R0 /mnt/backup
   MP=${1:-/mnt/extsd}
-  D=${D:-/dev/mmcblk0}                          # [check] matches survey: size, CID, has ${D}boot0
+  D=${D:-/dev/mmcblk0}                          # [check] the eMMC's: size, CID, has ${D}boot0
   N=${D##*/}; [ "$(cat /sys/block/$N/device/type 2>/dev/null)" = MMC ] || { echo "$D is not an eMMC"; return 1; }
   SECT=$(cat /sys/block/$N/size)
   cardA $MP || return 1
@@ -37,7 +37,7 @@ b4() {                                         # usage: b4 [MOUNTPOINT]   defaul
   mount -t debugfs none /sys/kernel/debug 2>/dev/null
   cat /sys/kernel/debug/mmc*/mmc*:0001/ext_csd > $O/ext_csd.hex
   [ "$(tr -d ' \n' < $O/ext_csd.hex | wc -c)" -eq 1024 ] || { echo 'EXT_CSD missing or short: stop (see the note below)'; return 1; }
-  ls /dev/mmcblk*gp* 2>/dev/null && { echo 'general-purpose partitions exist: dump them too (Gate B item 4)'; return 1; }
+  ls /dev/mmcblk*gp* 2>/dev/null && { echo 'general-purpose partitions exist: dump them too'; return 1; }
   i=0; MB=$(( (SECT + 2047) / 2048 ))
   while [ $((i*1024)) -lt $MB ]; do
     dd if=$D of=$O/emmc.part$(printf %02d $i) bs=1M skip=$((i*1024)) count=1024 || return 1

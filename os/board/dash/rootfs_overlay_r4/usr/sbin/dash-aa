@@ -19,6 +19,11 @@ CERT=/etc/wattline/aa.crt
 MARK=/run/dash-aa
 IFACE=wlan1; ip link show wlan1 >/dev/null 2>&1 || IFACE=wlan0   # the AP's interface (wlan1 when the driver makes one)
 
+hcli() {   # hostapd_cli on the AP's control socket, at most 3 s (a hostapd that hangs holds no stop up)
+	hostapd_cli -p /run/aa-hostapd -i "$IFACE" "$@" & _hp=$!
+	( sleep 3; kill $_hp ) >/dev/null 2>&1 & _hk=$!
+	wait $_hp; _hr=$?; kill $_hk 2>/dev/null; return $_hr
+}
 # bluetoothctl, given up after 5 s: without bluetoothd it waits for ever (stop would never bring Wi-Fi back). Its own
 # --timeout is no use: set, it holds every command for that long.
 btc() {
@@ -47,16 +52,16 @@ stop() {
 	killall aa spike-vdec 2>/dev/null
 	hook aa-stop
 	[ -f /run/aa-pair-timer ] && kill "$(cat /run/aa-pair-timer)" 2>/dev/null; rm -f /run/aa-pair-timer   # an old window's end
-	killall aa spike-vdec 2>/dev/null   # aa first (its stop flag set before the decoder's pipe closes: it says goodbye
-	                                    # rather than end on a dead decoder), the decoder a moment later
+	killall aa spike-vdec 2>/dev/null   # both at once: aa checks its stop flag before its dead decoder, so it still
+	                                    # says goodbye to the phone
 	i=0; while pidof aa spike-vdec >/dev/null 2>&1 && [ $i -lt 25 ]; do sleep 0.2; i=$((i+1)); done   # <= 5 s
 	# the phones still on the AP told, while it still sends: a deauthentication each (hostapd's control socket, which
 	# aa ap configures), so none stays on a network gone quiet; then the AP and its DHCP
 	IFACE=$(sed -n 's/^interface=//p' /run/aa-hostapd.conf 2>/dev/null)
 	if [ -n "$IFACE" ] && [ -S "/run/aa-hostapd/$IFACE" ]; then
 		_sent=
-		for _m in $(hostapd_cli -p /run/aa-hostapd -i "$IFACE" all_sta 2>/dev/null | grep -E '^([0-9a-f]{2}:){5}[0-9a-f]{2}$'); do
-			hostapd_cli -p /run/aa-hostapd -i "$IFACE" deauthenticate "$_m" >/dev/null 2>&1 && _sent=1
+		for _m in $(hcli all_sta 2>/dev/null | grep -E '^([0-9a-f]{2}:){5}[0-9a-f]{2}$'); do
+			hcli deauthenticate "$_m" >/dev/null 2>&1 && _sent=1
 		done
 		[ -n "$_sent" ] && sleep 0.3   # the frames on air before the AP goes
 	fi
@@ -102,8 +107,9 @@ start|restore)
 	: > /run/dash-aa-radio
 	[ -n "$got" ] && rmdir /run/wifi-auto.lock
 	wpa_cli -i wlan0 disconnect >/dev/null 2>&1 || true
-	# the device's country (/data/wifi/country, two letters), else an EU country's rules: the 5 GHz AP channels (36-48,
-	# non-DFS) that AA needs
+	# the kernel's rules for the device's country (/data/wifi/country, two letters), else an EU country's. The Realtek
+	# driver keeps its own channel plan (8733bs_cc.conf: rtw_channel_plan), which is what gives the AP its 5 GHz
+	# channels (36-48, non-DFS); this keeps the kernel's view in step
 	CC=$(cat /data/wifi/country 2>/dev/null | tr -dc A-Za-z | tr a-z A-Z)
 	[ ${#CC} = 2 ] || CC=DE
 	iw reg set "$CC" >/dev/null 2>&1 || true

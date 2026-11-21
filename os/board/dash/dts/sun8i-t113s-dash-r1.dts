@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 // R1: R0 plus the display (MIPI-DSI panel, backlight), touch and the USB gadget, for the S3XY Dash (T113-S4).
-// Display numbers come from the running stock unit (survey display-facts.md); typed by hand. Radios stay off.
+// Display numbers measured on the running unit, typed by hand. Radios stay off.
 // The console UART4 node carries no pinctrl on purpose: the SPL muxes the pins (KCFLAGS -DDASH_U4=n,
-// board/dash/patches/uboot), and U-Boot proper and Linux keep them as set. Typed from the survey, not copied.
+// board/dash/patches/uboot), and U-Boot proper and Linux keep them as set. Typed by hand.
 
 /dts-v1/;
 
@@ -83,8 +83,8 @@
 		compatible = "dash,s3xy-panel";
 		reg = <0>;
 		power-supply = <&reg_lcd>;
-		/* Panel controller setup (ST7703-family command set), typed from how the stock unit initialises it
-		 * (owner decision 2026-11-13, plan: rule 3 relaxed for the panel). Stock does not pulse PG8. */
+		/* Panel controller setup (ST7703-family command set): the commands the panel needs to light. The
+		 * reset line PG8 is not pulsed. */
 		dash,init = [
 			04 b9 f1 12 87 04 b2 e0 05 78 0b b3 10 10 28 28
 			03 ff 00 00 00 00 02 b4 80 03 b5 0d 0d 03 b6 5d

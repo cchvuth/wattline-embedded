@@ -33,7 +33,7 @@ No certificate ships with the Dash, and none is generated: the on-screen **Andro
 ### Dash app (`app/`)
 
 1. The signal tables are generated from the Flutter app ([cchvuth/wattline](https://github.com/cchvuth/wattline)): clone it as `wattline/` in the repo root (next to `app/`, as CI does), then `make -C app -f app.mk build/signals_gen.h`.
-2. LVGL is vendored but gitignored: `git clone --depth 1 -b v9.6.0 https://github.com/lvgl/lvgl app/third_party/lvgl-9.6.0`.
+2. LVGL is fetched, not committed: `git clone --depth 1 -b v9.6.0 https://github.com/lvgl/lvgl app/third_party/lvgl-9.6.0`.
 3. Host: `mkdir -p app/build && make -C app test` (unit tests) and `make -C app -f app.mk host` (the UI on the desktop).
 4. ARM, with the firmware's Buildroot toolchain: `make -C app -f app.mk ARM_CC=<buildroot>/host/bin/arm-buildroot-linux-gnueabihf-gcc CMDR=1 arm` → `app/build/arm-app-cmdr/dash` (and `dash.stripped`). Use the toolchain of the tree that built it: a copied/relocated Buildroot host tree fails to link libc, even with `--sysroot`.
 
@@ -88,8 +88,8 @@ This writes `wattline-ota-<version>.tar.gz` (the version comes from the image's 
 
 MIT ([LICENSE](LICENSE)) for this project's own code. The kernel and U-Boot patches, the panel and touch drivers and
 the kernel modules are GPL-2.0, like the code they belong to. Third-party code keeps its own licence (see each one's
-header or LICENSE file): the vendored LVGL, Wi-Fi drivers and fonts, and the F133's DRAM init in its U-Boot patches
-(Allwinner's, from xfel).
+header or LICENSE file): LVGL (fetched at build time), the Wi-Fi drivers and their firmware, the fonts, and the
+F133's DRAM init in its U-Boot patches (Allwinner's, from xfel).
 
 Provided as is, without warranty: not for safety-critical use, and installing it may void the device's warranty. Not
 affiliated with Tesla or EnhAuto.

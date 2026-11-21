@@ -1,4 +1,4 @@
-# R1 = R0 + display (DSI panel), touch, USB gadget ethernet. Radios stay off (plan 4.4).
+# R1 = R0 + display (DSI panel), touch, USB gadget ethernet. Radios stay off.
 CONFIG_DRM=y
 CONFIG_DRM_SUN4I=y
 CONFIG_DRM_SUN6I_DSI=y

@@ -14,7 +14,7 @@ CONFIG_SERIAL_8250_CONSOLE=y
 CONFIG_SERIAL_8250_DW=y
 CONFIG_SERIAL_EARLYCON=y
 CONFIG_RTC_DRV_SUN6I=y
-# R0 carries no radio (plan 4.4)
+# R0 carries no radio
 # CONFIG_WLAN is not set
 # CONFIG_WIRELESS is not set
 # CONFIG_CFG80211 is not set

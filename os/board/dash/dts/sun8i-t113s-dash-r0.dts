@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 // R0: the rescue image's device tree for the S3XY Dash (T113-S4). Console, SD card, eMMC; nothing else.
 // The console UART4 node carries no pinctrl on purpose: the SPL muxes the pins (KCFLAGS -DDASH_U4=n,
-// board/dash/patches/uboot), and U-Boot proper and Linux keep them as set. Typed from the survey, not copied.
+// board/dash/patches/uboot), and U-Boot proper and Linux keep them as set. Typed by hand.
 
 /dts-v1/;
 
