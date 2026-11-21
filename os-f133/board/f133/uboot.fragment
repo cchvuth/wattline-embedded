@@ -17,6 +17,10 @@ CONFIG_DRAM_SUNXI_TPR13=0x34000000
 # no "usb start" before the boot (nothing is booted from USB; one less thing that can stall); sunxi selects
 # USE_PREBOOT, so the command is emptied instead
 CONFIG_PREBOOT=""
+# misc_init_r sets mmc_bootdev when the boot ROM started U-Boot from the card: the boot command's test for a card
+# boot. Without it a card install booted the NOR's kernel whenever the NOR held this system (with the stock firmware
+# there, the NOR boot failed and the card's came next, which hid it)
+CONFIG_MISC_INIT_R=y
 # boot straight away: no key check (the console input is not wired out; noise on it would stop the boot)
 CONFIG_BOOTDELAY=-2
 # the built-in environment only, never a saved one from the card (its first partition is the Dash's)
