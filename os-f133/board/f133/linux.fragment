@@ -217,7 +217,6 @@ CONFIG_SQUASHFS_XZ=y
 # CONFIG_KALLSYMS is not set
 # CONFIG_EFI is not set
 # CONFIG_SUSPEND is not set
-CONFIG_NR_CPUS=2
 # CONFIG_INET_DIAG is not set
 # CONFIG_IPV6_SIT is not set
 # CONFIG_INET_ESP is not set
@@ -238,3 +237,90 @@ CONFIG_NR_CPUS=2
 # CONFIG_LEGACY_PTYS is not set
 CONFIG_BLK_DEV_LOOP_MIN_COUNT=1
 # CONFIG_SLUB_DEBUG is not set
+# More trims. The arch defconfig's run-time debug checks (each lock, list, page and scatterlist operation checked);
+# NONPORTABLE, so EFI can go (PORTABLE selects it: the "EFI is not set" above never took); no 32-bit programs; one
+# core: the F133 has a single C906 (spinlocks compile away, the small RCU; the out-of-tree modules are rebuilt).
+# THERMAL stays: the CPU's throttling in a hot car.
+# CONFIG_DEBUG_ATOMIC_SLEEP is not set
+# CONFIG_DEBUG_LIST is not set
+# CONFIG_DEBUG_MUTEXES is not set
+# CONFIG_DEBUG_SPINLOCK is not set
+# CONFIG_DEBUG_RWSEMS is not set
+# CONFIG_DEBUG_RT_MUTEXES is not set
+# CONFIG_DEBUG_VM is not set
+# CONFIG_DEBUG_VM_PGTABLE is not set
+# CONFIG_DEBUG_SG is not set
+# CONFIG_DEBUG_TIMEKEEPING is not set
+# CONFIG_DEBUG_PLIST is not set
+# CONFIG_DEBUG_PER_CPU_MAPS is not set
+# CONFIG_DEBUG_PAGEALLOC is not set
+# CONFIG_DEBUG_MEMORY_INIT is not set
+# CONFIG_RCU_EQS_DEBUG is not set
+# CONFIG_SCHED_STACK_END_CHECK is not set
+# CONFIG_MEMTEST is not set
+# CONFIG_WQ_WATCHDOG is not set
+# CONFIG_SOFTLOCKUP_DETECTOR is not set
+# CONFIG_DETECT_HUNG_TASK is not set
+CONFIG_NONPORTABLE=y
+# CONFIG_COMPAT is not set
+# CONFIG_SMP is not set
+# Other SoCs and their drivers, virtual machines, the IOMMU (nothing in this device tree uses it), the crypto engine
+# CONFIG_ARCH_RENESAS is not set
+# CONFIG_ARCH_THEAD is not set
+# CONFIG_ERRATA_SIFIVE is not set
+# CONFIG_SERIAL_SIFIVE is not set
+# CONFIG_SERIAL_SH_SCI is not set
+# CONFIG_SPI_SIFIVE is not set
+# CONFIG_GPIO_SIFIVE is not set
+# CONFIG_MMC_SDHCI is not set
+# CONFIG_MMC_SPI is not set
+# CONFIG_SUN50I_IOMMU is not set
+# CONFIG_IOMMU_SUPPORT is not set
+# CONFIG_VIRTUALIZATION is not set
+# CONFIG_VIRTIO_MENU is not set
+# CONFIG_VIRTIO_CONSOLE is not set
+# CONFIG_RPMSG_CHAR is not set
+# CONFIG_RPMSG_CTRL is not set
+# CONFIG_RPMSG_VIRTIO is not set
+# CONFIG_HW_RANDOM_VIRTIO is not set
+# CONFIG_CRYPTO_DEV_VIRTIO is not set
+# CONFIG_CRYPTO_DEV_ALLWINNER is not set
+# CONFIG_VHOST_MENU is not set
+# CONFIG_GOLDFISH is not set
+# CONFIG_RTC_DRV_GOLDFISH is not set
+# CONFIG_DRM_I2C_CH7006 is not set
+# CONFIG_DRM_I2C_SIL164 is not set
+# No keyboard, mouse or PS/2 port (the touch panel is a touchscreen), no VGA text console, no Ethernet PHYs
+# CONFIG_INPUT_KEYBOARD is not set
+# CONFIG_INPUT_MOUSE is not set
+# CONFIG_SERIO is not set
+# CONFIG_VGA_CONSOLE is not set
+# CONFIG_PHYLIB is not set
+# CONFIG_NET_SELFTESTS is not set
+# CONFIG_NET_FAILOVER is not set
+# CONFIG_ETHTOOL_NETLINK is not set
+# Filesystems and block layer: squashfs in xz, the card vfat, /data jffs2; the built-in initramfs is gzip
+# CONFIG_ISO9660_FS is not set
+# CONFIG_AUTOFS_FS is not set
+# CONFIG_MSDOS_FS is not set
+# CONFIG_SQUASHFS_ZLIB is not set
+# CONFIG_BLK_DEBUG_FS is not set
+# CONFIG_MQ_IOSCHED_KYBER is not set
+# CONFIG_IOSCHED_BFQ is not set
+# CONFIG_RD_BZIP2 is not set
+# CONFIG_RD_LZMA is not set
+# CONFIG_RD_XZ is not set
+# CONFIG_RD_LZO is not set
+# CONFIG_RD_LZ4 is not set
+# CONFIG_RD_ZSTD is not set
+# No address from the kernel command line, policy routing, packet marks or DNS upcalls; no System V IPC, POSIX
+# message queues, checkpoint/restore or core dumps (nothing here calls them)
+# CONFIG_IP_PNP is not set
+# CONFIG_IP_ADVANCED_ROUTER is not set
+# CONFIG_NETWORK_SECMARK is not set
+# CONFIG_DNS_RESOLVER is not set
+# CONFIG_SYSVIPC is not set
+# CONFIG_POSIX_MQUEUE is not set
+# CONFIG_CHECKPOINT_RESTORE is not set
+# CONFIG_CROSS_MEMORY_ATTACH is not set
+# CONFIG_COREDUMP is not set
