@@ -197,14 +197,29 @@ static void text_color(lv_obj_t *l, uint32_t c)
 	SET_COLOR(l, lv_obj_get_style_text_color, lv_obj_set_style_text_color, rgb(c));
 	SET_NUM(l, lv_obj_get_style_text_opa, lv_obj_set_style_text_opa, opa(c));
 }
-static void set_text(lv_obj_t *l, const char *fmt, ...)
+/* A label's text, set only when it differs (a set label is laid out and redrawn); true when it was set. */
+static bool set_text(lv_obj_t *l, const char *fmt, ...)
 {
 	char buf[256]; /* the pairing command (~82 characters and the URL), the Commander's status line */
 	va_list ap;
 	va_start(ap, fmt);
 	vsnprintf(buf, sizeof buf, fmt, ap);
 	va_end(ap);
-	if (strcmp(lv_label_get_text(l), buf)) lv_label_set_text(l, buf);
+	if (lv_label_get_long_mode(l) == LV_LABEL_LONG_MODE_DOTS) {
+		/* a label cut short holds its "..." in its own text, which then never equals what is set: a long destination
+		 * was set again, and redrawn, at every frame. Against what was last set instead: its checksum, in the label's
+		 * user data (FNV-1a, never 0) */
+		uintptr_t h = 2166136261u;
+		for (const char *c = buf; *c; c++) h = (uint32_t)((h ^ (uint8_t)*c) * 16777619u);
+		h |= (uintptr_t)1 << 31;
+		if ((uintptr_t)lv_obj_get_user_data(l) == h) return false;
+		lv_obj_set_user_data(l, (void *)h);
+	} else {
+		if (!strcmp(lv_label_get_text(l), buf)) return false;
+		lv_obj_set_user_data(l, NULL); /* (a label that is cut short only at times: its checksum is of another text now) */
+	}
+	lv_label_set_text(l, buf);
+	return true;
 }
 static lv_obj_t *icon(lv_obj_t *parent, const lv_image_dsc_t *src, uint32_t c)
 {
@@ -1327,6 +1342,7 @@ void dash_ui_init(lv_obj_t *scr)
 	lv_obj_set_style_text_letter_space(unit_l, ri(PR(3)), 0);
 	gear_l = label(ring, FS(BOLD, 28, UI_S_RING), WHITE);
 	cue = run_new(ring);
+	lv_obj_set_style_transform_pivot_x(cue, LV_PCT(50), 0), lv_obj_set_style_transform_pivot_y(cue, LV_PCT(50), 0);
 	{
 		float side = G.D * 0.16f, k = side / px(52); /* _SpeedLimit, 52 dp, fitted to 0.16 of the ring */
 		limit_sign = box(ring);
@@ -2053,8 +2069,9 @@ static void set_ring(const dash_state_t *s)
 		float ri_ = G.r - G.aw, dy = cy - G.D / 2, room = sp ? G.D * 0.5f : 2 * (sqrtf(fmaxf(0, ri_ * ri_ - dy * dy)) - PR(4));
 		float cw = lv_obj_get_style_width(cue, 0);
 		int32_t sc = cw > room + px(4) && room > 0 ? (int32_t)(256 * room / cw) : 256; /* rare: a layer each redraw */
-		SET_NUM(cue, lv_obj_get_style_transform_pivot_x, lv_obj_set_style_transform_pivot_x, ri(cw / 2));
-		SET_NUM(cue, lv_obj_get_style_transform_pivot_y, lv_obj_set_style_transform_pivot_y, ri(ch / 2.0f));
+		/* (about its middle, set once at its making; where it stood at the scale it had: LVGL redraws only where the
+		 * new one puts it, and a seam of the old line stayed) */
+		if (sc != lv_obj_get_style_transform_scale_x(cue, 0)) lv_obj_invalidate(cue);
 		SET_NUM(cue, lv_obj_get_style_transform_scale_x, lv_obj_set_style_transform_scale_x, sc);
 		SET_NUM(cue, lv_obj_get_style_transform_scale_y, lv_obj_set_style_transform_scale_y, sc);
 	}
@@ -4230,10 +4247,18 @@ static void set_snack(const dash_state_t *s)
 	/* a tap on a toast stops there (the app's SnackBar); the prompt, up for a minute, lets it through: in basic the
 	 * links and the buttons of the foot are under it */
 	lv_obj_set_clickable(snack, !approving);
-	show(snack_wheel, approving && !strip()); /* (the strip has no room for the picture) */
+	bool wheel = approving && !strip(); /* (the strip has no room for the picture) */
 	const char *t = !approving ? s->toast : strip() ? "Double-press the right scroll wheel"
 			: "Approve this " UNIT " for the Commander: in the car, double-press the right scroll wheel";
-	set_text(snack_text, "%s", t);
+	/* the strip's is one line across its foot, a long text cut short: the ring's own foot (the cruise line) is just above */
+	lv_label_long_mode_t lm = strip() ? LV_LABEL_LONG_MODE_DOTS : LV_LABEL_LONG_MODE_WRAP;
+	bool reshape = wheel == lv_obj_is_hidden(snack_wheel) || lv_label_get_long_mode(snack_text) != lm;
+	if (lv_label_get_long_mode(snack_text) != lm) lv_label_set_long_mode(snack_text, lm); /* (set, it redraws the label) */
+	reshape |= set_text(snack_text, "%s", t);
+	/* out of sight while it takes its new shape and place: laid out where it stood, with the wheel or a longer text,
+	 * it reached over the picture in a split, and that was painted */
+	if (reshape) show(snack, false);
+	show(snack_wheel, wheel);
 	/* Its place, at the foot: the middle; on the Dash the car's side, clear of the ring's foot (the gear, the cruise
 	 * line); in a split the dash's side, off the picture (the strip: left of Exit) */
 	float lo = 0, hi = G.W, max = G.W * 0.42f;
@@ -4246,9 +4271,6 @@ static void set_snack(const dash_state_t *s)
 	lv_point_t sz;
 	const lv_font_t *f = lv_obj_get_style_text_font(snack_text, 0);
 	lv_text_get_size(&sz, t, f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-	/* the strip's is one line across its foot, a long text cut short: the ring's own foot (the cruise line) is just above */
-	lv_label_long_mode_t lm = strip() ? LV_LABEL_LONG_MODE_DOTS : LV_LABEL_LONG_MODE_WRAP;
-	if (lv_label_get_long_mode(snack_text) != lm) lv_label_set_long_mode(snack_text, lm); /* (set, it redraws the label) */
 	lv_obj_set_height(snack_text, strip() ? lv_font_get_line_height(f) : LV_SIZE_CONTENT);
 	lv_obj_set_width(snack_text, ri(strip() ? max : fminf(sz.x + 1, max)));
 	lv_obj_update_layout(snack);

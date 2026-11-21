@@ -274,6 +274,12 @@ int main(int argc, char **argv)
 		s.blind_l = false, s.ind_r = false;
 		s.bt = BT_APPROVING; /* the approval's step in the split: on the dash's side, off the picture */
 		bad |= shot(d, out, "project-approval", &s, DASH_VIEW_PROJECT);
+		if (!DASH_PHONE_LAYOUT) { /* the strip's one line again after the long form elsewhere (its label ends in dots only there) */
+			dash_ui_settings_tab(1), dash_ui_show(DASH_VIEW_SETTINGS), dash_ui_set(&s);
+			dash_ui_show(DASH_VIEW_PROJECT), dash_ui_set(&s);
+			if (!find_ui_label("Double-press the right scroll wheel"))
+				bad |= 1, printf("  FAIL the strip's approval step again after the settings' long one\n");
+		}
 		scenes[1].fill(&s);
 		snprintf(s.toast, sizeof s.toast, "Climate: refused (the car's WiFi stream is off: ScanMyTesla off in the S3XY app)");
 		bad |= shot(d, out, "project-toast", &s, DASH_VIEW_PROJECT); /* a long one: within the dash's side, off the picture */
