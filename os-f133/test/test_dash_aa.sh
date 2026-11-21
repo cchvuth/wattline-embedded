@@ -8,12 +8,14 @@
 # AP goes, the AP down, the marks gone, then the station back or a settings save made during AA applied); a hook that
 # hangs cut short. It writes /run, /data and /etc, so it runs in a throwaway container, with busybox and a writable
 # /sys/class/net. From the root:
-#   docker run --rm --tmpfs /sys/class/net -e DEBIAN_FRONTEND=noninteractive -v "$PWD":/r:ro debian:stable sh -c \
+#   docker run --rm --privileged -e DEBIAN_FRONTEND=noninteractive -v "$PWD":/r:ro debian:stable sh -c \
 #     'apt-get -qq update && apt-get -qq install -y busybox >/dev/null && sh /r/os-f133/test/test_dash_aa.sh'
 set -u
 D=$(cd "$(dirname "$0")/.." && pwd)/board/f133/overlay/usr/sbin/dash-aa
 [ -e /.dockerenv ] || [ -e /run/.containerenv ] || { echo "dash-aa test: run it in a container (see its header)"; exit 1; }
-mkdir -p /sys/class/net/wlan0 2>/dev/null || { echo "dash-aa test: /sys/class/net not writable (--tmpfs it)"; exit 1; }
+# a tmpfs over /sys/class/net (docker's --tmpfs, or mounted here where the container may: --privileged, as CI runs it)
+mkdir -p /sys/class/net/wlan0 2>/dev/null || { mount -t tmpfs tmpfs /sys/class/net 2>/dev/null && mkdir -p /sys/class/net/wlan0; } ||
+	{ echo "dash-aa test: /sys/class/net not writable (--tmpfs it, or run the container --privileged)"; exit 1; }
 BB=$(command -v busybox) || { echo "dash-aa test: needs busybox"; exit 1; }
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
