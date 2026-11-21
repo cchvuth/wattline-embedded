@@ -135,6 +135,21 @@ def run(p, m, sock, log):
     assert recv_until(aa2, b'open\n') == b'open\n'
     ip.settimeout(2)
     assert ip.recv(10) == b'', 'sv client not closed when AA took the channel'
+    # the same channel announced again: at once, the MCU repeating itself (the client stays); later, the phone having
+    # reopened it (the client holding the old opening is closed, a new one gets "open")
+    mcu.send(frame(0xD4, b'SW\r\n')); mcu.pump(0.3)
+    aa2.setblocking(False)
+    try:
+        assert aa2.recv(10) != b'', 'aa client closed by a repeated SW'
+    except BlockingIOError:
+        pass
+    aa2.setblocking(True)
+    time.sleep(2.1)
+    mcu.send(frame(0xD4, b'SW\r\n'))
+    aa2.settimeout(2)
+    assert aa2.recv(10) == b'', 'aa client not closed when the phone reopened the channel'
+    aa2 = socket.socket(socket.AF_UNIX); aa2.connect(sock); aa2.sendall(b'aa\n')
+    assert recv_until(aa2, b'open\n') == b'open\n'
 
     # a client that stops reading is dropped, never waited for (a blocking send to it stalled the one loop that reads
     # the MCU, serves the other clients and sends the hold): the MCU's lines and the phone's bytes still reach the

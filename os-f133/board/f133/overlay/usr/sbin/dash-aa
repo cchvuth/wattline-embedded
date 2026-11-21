@@ -91,7 +91,8 @@ ap_down() {   # the AP's wpa_supplicant and DHCP gone (<= 5 s), its address, and
 # Its own process group: stop ends all of it.
 pair_on() {
 	setsid sh -c '{ echo "AT#CA"; sleep 120; } | mcud ctl 121 |
-		while read -r l; do case $l in AP*) printf "AT#KA\n" | mcud ctl 1 ;; esac; done' >/dev/null 2>&1 &
+		while read -r l; do case $l in AP*) printf "AT#KA\n" | mcud ctl 1 ;; esac; done
+		rm -f /run/aa-pair.pid' >/dev/null 2>&1 &   # (its pid file with it: stop must not signal a later group of that number)
 	echo $! > /run/aa-pair.pid
 }
 pair_off() {   # a window still open: ended (Bluetooth stays on)
@@ -104,10 +105,11 @@ stop() {
 	# the AP, which stays until the hook is done (<= 12 s) and the receiver has ended its session (its marker gone: the
 	# phone told), or had 3 s for it. Then the phones are told to leave (ap_down): one after the other, this took a
 	# phone ~8 s to drop the Wi-Fi.
+	rm -f /run/aa-keep   # first: the receiver and the Bluetooth start are not started again (their loops, start)
 	killall aa spike-vdec 2>/dev/null
 	# the rest behind the dash: it repaints the whole screen now, on the one core this script and its helpers share
 	# (at equal priority the repaint crawled down the screen for a second)
-	renice -n 10 -p $$ >/dev/null 2>&1
+	renice 10 -p $$ >/dev/null 2>&1
 	IFACE=$(cat /run/aa-ap.iface 2>/dev/null)   # the hook gets it too
 	hook aa-stop & _hs=$!
 	pair_off
@@ -120,6 +122,7 @@ stop() {
 	killall -9 spike-vdec aa 2>/dev/null
 	rm -f /run/dash-project /run/dash-aa-session /run/dash-aa-focus /run/dash-pj-fps   # aa serve's and the decoder's, if killed mid-session
 	rm -f "$MARK" /run/dash-aa-radio   # before Wi-Fi comes back (S45wifi-auto waits while they are there); the button off
+	renice 0 -p $$ >/dev/null 2>&1   # (the station's wpa_supplicant and DHCP, started below, at the usual priority)
 	# the station: a list saved meanwhile (and the network picked, if one was), or back if the AP took wlan0
 	if [ -e /run/wifi-auto.pending ]; then
 		J=$(head -n 1 /run/wifi-auto.pending); rm -f /run/wifi-auto.pending; /etc/init.d/S45wifi-auto start "$J" >/dev/null 2>&1
@@ -183,9 +186,20 @@ start|restore)
 	# The AP carries live video: the radio out of power save for the session (latency, not a correctness fix)
 	iw dev "$IFACE" set power_save off 2>/dev/null; iw dev wlan0 set power_save off 2>/dev/null
 	hook aa-start
-	aa serve > $LOG/aa-serve.log 2>&1 &   # listening before aa mcu sends any phone to it
+	# The receiver (on the AP's address only) and the Bluetooth start, each started again if it dies while the session
+	# is on (/run/aa-keep: stop removes it first), 20 times at most. A receiver that died mid-session left its markers:
+	# the split showed its last picture for good; they go with it.
+	: > /run/aa-keep
+	( n=0; while [ -e /run/aa-keep ] && [ $n -lt 20 ]; do
+		AA_LISTEN=$IP aa serve >> $LOG/aa-serve.log 2>&1   # listening before aa mcu sends any phone to it
+		rm -f /run/dash-project /run/dash-aa-session /run/dash-aa-focus /run/dash-pj-fps
+		[ -e /run/aa-keep ] && sleep 1; n=$((n + 1))
+	done ) &
 	# the passphrase on its stdin, not in its arguments (any process can read those); printf is the shell's own
-	printf '%s\n' "$PSK" | aa mcu "$IP" "$SSID" - "$BSSID" > $LOG/aa-mcu.log 2>&1 &
+	( n=0; while [ -e /run/aa-keep ] && [ $n -lt 20 ]; do
+		printf '%s\n' "$PSK" | aa mcu "$IP" "$SSID" - "$BSSID" >> $LOG/aa-mcu.log 2>&1
+		[ -e /run/aa-keep ] && sleep 2; n=$((n + 1))
+	done ) &
 	[ "$1" = start ] && pair_on   # someone at the screen tapped it (not a restore at boot)
 	touch /data/aa-on 2>/dev/null && sync   # up: on again at the next start (the dash restores it), until stopped
 	# (touch, not `: >`: a failed redirect on a special builtin would end the script before the marker)

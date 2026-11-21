@@ -80,7 +80,7 @@ cat > /stub/aa <<EOF
 [ "\$1" = certcheck ] && exit 0
 echo "aa \$*" >> $T/calls
 trap 'echo "aa \$1 stopped" >> $T/calls; exit 0' TERM
-if [ "\$1" = serve ]; then spike-vdec >/dev/null 2>&1 & fi
+if [ "\$1" = serve ]; then echo "aa listens on \${AA_LISTEN:-every address}" >> $T/calls; echo \$\$ > $T/cap/serve.pid; spike-vdec >/dev/null 2>&1 & fi
 if [ "\$1" = mcu ]; then read -r l; printf %s "\$l" > $T/cap/mcu-stdin; fi
 $LOOP
 EOF
@@ -158,6 +158,13 @@ before 'hook aa-start IFACE=ap0 SSID=WattlineAA IP=192.168.53.1' 'aa serve' && b
 has 'mcud ctl 121: AT#CA' && has 'mcud ctl 1: AT#KA' && ok "the pairing window: AT#CA, the request accepted (AT#KA)" ||
 	no "pairing window"
 secret
+has 'aa listens on 192.168.53.1' && ok "the receiver listens on the AP's address only" || no "AA_LISTEN"
+# the receiver dying mid-session (killed, as a crash): its markers go (the split let go) and it is started again
+: > /run/dash-project; : > /run/dash-aa-session
+kill -9 "$(cat $T/cap/serve.pid)"
+i=0; while [ "$(grep -c '^aa serve$' $T/calls)" -lt 2 ] && [ $i -lt 40 ]; do /bb/usleep 100000; i=$((i + 1)); done
+[ "$(grep -c '^aa serve$' $T/calls)" = 2 ] && ! [ -e /run/dash-project ] && ! [ -e /run/dash-aa-session ] &&
+	ok "a receiver that died: its markers gone, started again" || no "receiver restart"
 W=$(cat /run/aa-pair.pid)
 run start; [ "$(grep -c '^wpa_supplicant -B' $T/calls)" = 1 ] && ok "a second start while up: nothing" || no "second start"
 echo "-- its stop"

@@ -173,7 +173,9 @@ static const char *wpa_look(void) {
     if ((s = strstr(b, "wpa_state="))) s += 10, s[strcspn(s, "\n")] = 0, snprintf(wpa_state, sizeof wpa_state, "%s", s), got = true;
   }
   if (asked && !got) wpa_state[0] = wpa_ssid[0] = wpa_ip[0] = 0;   // no answer in 1.5 s: not known
-  if (scan_wanted && send(wpa, "SCAN", 4, 0) == 4) scan_wanted = false;
+  // (no scan while Android Auto holds the radio: it would take the one radio off the access point's channel, and the
+  // phone's picture with it; asked again once the session is over)
+  if (scan_wanted && access("/run/dash-aa-radio", F_OK) != 0 && send(wpa, "SCAN", 4, 0) == 4) scan_wanted = false;
   asked = send(wpa, "STATUS", 6, 0) == 6;
   if (asked) send(wpa, "SCAN_RESULTS", 12, 0);
   if (!asked) close(wpa), unlink(me_path), wpa = -1, wpa_state[0] = 0;

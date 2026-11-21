@@ -68,6 +68,8 @@ stop() {
 		[ -n "$_sent" ] && sleep 2
 	fi
 	killall hostapd udhcpd 2>/dev/null
+	[ -n "$IFACE" ] && ip addr del "$IP/24" dev "$IFACE" 2>/dev/null   # the AP's address, and its config (the passphrase)
+	rm -f /run/aa-hostapd.conf
 	# gone before anything else (a quick stop -> start would meet the old hostapd on the interface)
 	i=0; while pidof aa hostapd udhcpd spike-vdec >/dev/null 2>&1 && [ $i -lt 25 ]; do sleep 0.2; i=$((i+1)); done   # <= 5 s
 	killall -9 spike-vdec aa hostapd udhcpd 2>/dev/null
@@ -124,7 +126,7 @@ start|restore)
 	iw dev "$IFACE" set power_save off 2>/dev/null; iw dev wlan0 set power_save off 2>/dev/null
 	btc system-alias Wattline >/dev/null 2>&1 || true   # the name the phone sees (not the default BlueZ x.y)
 	hook aa-start   # before the pairing window: a pairing while it runs (up to 12 s) would find no agent yet
-	aa serve >/data/log/aa-serve.log 2>&1 &   # listening before aa bt sends any phone to it
+	AA_LISTEN=$IP aa serve >/data/log/aa-serve.log 2>&1 &   # listening before aa bt sends any phone to it
 	printf '%s\n' "$PSK" | aa bt "$IP" "$SSID" - "$BSSID" >/data/log/aa-bt.log 2>&1 &   # its pairing agent up before the window opens
 	# New phones can pair only in the first 2 minutes after the button (someone at the Dash), not for the whole session;
 	# a phone paired before connects at any time. The AA channel itself needs a paired link (aa.c).

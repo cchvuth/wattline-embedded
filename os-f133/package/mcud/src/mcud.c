@@ -147,8 +147,14 @@ static void mcu_line(const char *l)
 		logf_("bt %s", l);
 	if (!strcmp(l, "SW") || !strcmp(l, "SV")) {
 		int c = l[1] == 'W' ? AA : SV;
-		if (chan != c) { close_channel(); chan = c; }
-		logf_("data channel %s open", chname[chan]);
+		// the channel announced again with no IA between (the phone closed and reopened it, its link up): a new
+		// opening, so the client holding the old one is closed and dials again; the same line twice within 2 s is the
+		// MCU repeating itself (it does, for other lines)
+		static int64_t opened_at;
+		int again = chan == c && ms() - opened_at >= 2000;
+		if (chan != c || again) { close_channel(); chan = c; }
+		opened_at = ms();
+		logf_("data channel %s open%s", chname[chan], again ? " again: its client dials anew" : "");
 		open_waiting();
 	} else if (!strcmp(l, "IA")) {
 		if (chan != NONE) logf_("data channel %s closed (HFP down)", chname[chan]);

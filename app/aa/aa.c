@@ -18,13 +18,11 @@
 //   AA_MCU                aa mcu: the Bluetooth start through the screen's power MCU, which is its classic Bluetooth:
 //                         mcud hands aa the phone's RFCOMM channel over its socket (BlueZ has no part in it)
 //   AA_USB                aa usb: wired, Android Open Accessory over usbfs (link -lpthread)
-//   AA_SYSTEM_AUDIO_ONLY  service discovery offers the system audio sink and the mic only, for a screen that must
-//                         never play the phone's audio: music and the navigation voice stay on the phone's Bluetooth
 //   PJ_PANEL_H, PJ_RGN_X/Y/W/H  the canvas and the picture's place on it (ui/project_region.h; defaults: the Dash's)
 // The Dash (the T113, the default): -DAA_BT on the device (with gio's cflags and libs), nothing on a build host.
 // The F133 screen (SRNUBI T313D: its 720x1920 portrait panel shown as a 1920x720 canvas, the picture in the left
 // half's lower 3/4; its AP is the OS's, so aa ap goes unused there):
-//   -DAA_MCU=1 -DAA_USB=1 -DAA_SYSTEM_AUDIO_ONLY=1 -DPJ_PANEL_H=720 -DPJ_RGN_X=0 -DPJ_RGN_Y=180 -DPJ_RGN_W=960
+//   -DAA_MCU=1 -DAA_USB=1 -DPJ_PANEL_H=720 -DPJ_RGN_X=0 -DPJ_RGN_Y=180 -DPJ_RGN_W=960
 //   -DPJ_RGN_H=540, linked with -lssl -lcrypto -lpthread
 // Found at run time rather than built in: a touchscreen that reports a portrait panel (taller than wide, the F133's)
 // is turned as the dash's display is (mt_canvas).
@@ -357,11 +355,10 @@ static size_t audio_chd(uint8_t *buf, size_t cap, int ch, int type, int rate, in
 	return o.bad ? 0 : o.n;
 }
 
-// ServiceDiscoveryResponse: video (H.264 at vm's frame and frame rate), sensors, touch, the three audio sinks and the mic —
-// the set OpenAuto advertises; AA refuses to start without sensors, audio playback or a mic ("No audio/mic").
-// AA_SYSTEM_AUDIO_ONLY leaves out the media and speech sinks, for a screen the phone's audio must never play through
-// (the F133): the system sink is the playback AA needs, and the phone keeps music and the navigation voice on its own
-// Bluetooth to the car.
+// ServiceDiscoveryResponse: video (H.264 at vm's frame and frame rate), sensors, touch, the system audio sink and the
+// mic; AA refuses to start without sensors, audio playback or a mic ("No audio/mic"). No screen plays the phone's audio
+// or takes its calls: the media and speech sinks OpenAuto advertises are left out, so music, the navigation voice and
+// calls stay on the phone's own Bluetooth to the car; the system sink is the playback AA needs.
 static size_t build_service_discovery_response(uint8_t *buf, size_t cap, const aa_video_t *vm)
 {
 	uint8_t vc[16]; pb_out v = { vc, 0, sizeof vc, 0 };
@@ -388,12 +385,10 @@ static size_t build_service_discovery_response(uint8_t *buf, size_t cap, const a
 	uint8_t inp[24]; pb_out ip = { inp, 0, sizeof inp, 0 }; pb_b(&ip, AA_INCH_TOUCH_SCREEN, tc, t.n);
 	uint8_t ichd[40]; pb_out ic = { ichd, 0, sizeof ichd, 0 };
 	pb_u(&ic, AA_CHD_CHANNEL_ID, AA_CH_INPUT); pb_b(&ic, AA_CHD_INPUT_CHANNEL, inp, ip.n);
-	uint8_t media[48], speech[48], sys[48];
-	size_t mn = audio_chd(media, sizeof media, AA_CH_MEDIA_AUDIO, AA_AUDIO_MEDIA, 48000, 2);
-	size_t spn = audio_chd(speech, sizeof speech, AA_CH_SPEECH_AUDIO, AA_AUDIO_SPEECH, 16000, 1);
+	uint8_t sys[48];
 	size_t syn = audio_chd(sys, sizeof sys, AA_CH_SYSTEM_AUDIO, AA_AUDIO_SYSTEM, 16000, 1);
-	if (!mn || !spn || !syn) return 0;
-	// microphone (AV input, 16 kHz mono): advertised so AA starts; no capture yet, so voice won't hear us
+	if (!syn) return 0;
+	// microphone (AV input, 16 kHz mono): advertised so AA starts; nothing is captured, so the phone's assistant hears nothing through the screen
 	uint8_t mc[16]; pb_out mcf = { mc, 0, sizeof mc, 0 };
 	pb_u(&mcf, AA_ACFG_SAMPLE_RATE, 16000); pb_u(&mcf, AA_ACFG_BIT_DEPTH, 16); pb_u(&mcf, AA_ACFG_CHANNELS, 1);
 	uint8_t avi[32]; pb_out ai = { avi, 0, sizeof avi, 0 };
@@ -404,10 +399,6 @@ static size_t build_service_discovery_response(uint8_t *buf, size_t cap, const a
 	pb_b(&o, AA_SDRESP_CHANNELS, chd, c.n);
 	pb_b(&o, AA_SDRESP_CHANNELS, schd, sc.n);
 	pb_b(&o, AA_SDRESP_CHANNELS, ichd, ic.n);
-#ifndef AA_SYSTEM_AUDIO_ONLY
-	pb_b(&o, AA_SDRESP_CHANNELS, media, mn);
-	pb_b(&o, AA_SDRESP_CHANNELS, speech, spn);
-#endif
 	pb_b(&o, AA_SDRESP_CHANNELS, sys, syn);
 	pb_b(&o, AA_SDRESP_CHANNELS, michd, mi.n);
 	pb_b(&o, AA_SDRESP_HEAD_UNIT_NAME, (const uint8_t *)"Wattline", 8);
@@ -471,11 +462,7 @@ static int msg_selftest(void)
 		}
 	}
 	if (!found) die("msg: SDR video config roundtrip");
-#ifdef AA_SYSTEM_AUDIO_ONLY
 	if (nch != 5) die("msg: SDR advertises %d channels, want 5 (video, sensor, input, system audio, mic)", nch);
-#else
-	if (nch != 7) die("msg: SDR advertises %d channels, want 7 (video, sensor, input, 3 audio, mic)", nch);
-#endif
 	{   // the touch screen advertised = the picture (the phone's UI area): touches are sent in its pixels
 		pb_in in2 = { sdr, sn, 0 }; pb_val f2; uint64_t tw = 0, th = 0;
 		while (pb_next(&in2, &f2) == 1) {
@@ -1289,6 +1276,10 @@ static int aa_serve(const char *cert, const char *key)
 	int ls = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0); if (ls < 0) die("socket: %s", strerror(errno));   /* not the decoder's */
 	int one = 1; setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
 	struct sockaddr_in a = { 0 }; a.sin_family = AF_INET; a.sin_addr.s_addr = INADDR_ANY; a.sin_port = htons(AA_PORT);
+	// AA_LISTEN (dash-aa: the access point's address): only what is on the AP reaches the receiver, which takes any
+	// phone's word for who it is; on every address, so did the station's network (the car's, a home's)
+	const char *on = getenv("AA_LISTEN");
+	if (on && *on && inet_pton(AF_INET, on, &a.sin_addr) != 1) die("AA_LISTEN: not an address");
 	if (bind(ls, (struct sockaddr *)&a, sizeof a) || listen(ls, 1)) die("bind/listen %d: %s", AA_PORT, strerror(errno));
 	int touch = touch_open();   // after the bind: a second instance dies above, before touching anything
 	SSL_CTX *ctx = tls_ctx(cert, key, 0);   // the head unit is the TLS client: it sends the ClientHello
