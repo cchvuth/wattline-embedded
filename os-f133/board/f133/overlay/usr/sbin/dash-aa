@@ -27,7 +27,6 @@ IP=${IP:-192.168.53.1}   # the AP's /24: not the car's 192.168.4.x, nor a phone 
 CERT=/etc/wattline/aa.crt
 MARK=/run/dash-aa
 
-mcu() { printf '%s\n' "$@" | mcud ctl 1 >/dev/null 2>&1; }   # AT# commands to the MCU, through mcud
 # Hooks for additions kept outside this repository (absent on a plain image), output in /data/log/hook-<name>.log:
 #  - /data/hooks/aa-start: once the access point is up, before aa serve and aa mcu. Gets IFACE, SSID, PSK and IP. (A
 #    helper may take a channel of its own from mcud, on /run/mcud.sock.)
@@ -99,6 +98,7 @@ stop() {
 	# the picture and the receiver off at once, whatever the hook takes (and again below: a helper may restart them);
 	# aa mcu too, so the phone's channel is let go and it stops redialling the AP's session meanwhile
 	killall aa spike-vdec 2>/dev/null
+	IFACE=$(cat /run/aa-ap.iface 2>/dev/null)   # the hook gets it too
 	hook aa-stop
 	pair_off
 	killall aa spike-vdec 2>/dev/null   # aa first (its stop flag set before the decoder's pipe closes: it says goodbye
@@ -106,7 +106,7 @@ stop() {
 	i=0; while pidof aa spike-vdec >/dev/null 2>&1 && [ $i -lt 25 ]; do usleep 200000; i=$((i + 1)); done   # <= 5 s
 	killall -9 spike-vdec aa 2>/dev/null
 	rm -f /run/dash-project /run/dash-aa-session /run/dash-aa-focus /run/dash-pj-fps   # aa serve's and the decoder's, if killed mid-session
-	IFACE=$(cat /run/aa-ap.iface 2>/dev/null); rm -f /run/aa-ap.iface
+	rm -f /run/aa-ap.iface
 	ap_down
 	rm -f "$MARK" /run/dash-aa-radio   # before Wi-Fi comes back (S45wifi-auto waits while they are there); the button off
 	# the station: a list saved meanwhile (and the network picked, if one was), or back if the AP took wlan0
