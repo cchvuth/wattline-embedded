@@ -91,6 +91,15 @@ sh $N/nor.sh flash $T/img > $T/out 2>&1 && cmp -s $T/img/nor-data.bin $T/data.be
 	ok "flash saves the NOR's /data as nor-data.bin, then erases it" || { no "data backup"; cat $T/out; }
 sh $N/nor.sh flash $T/img > $T/out 2>&1 && cmp -s $T/img/nor-data.bin $T/data.before &&
 	ok "flash again (its /data erased): the saved copy kept" || { no "backup kept"; cat $T/out; }
+# a flash cut in its erase of /data, done again: the half-erased partition is not saved over the copy taken before
+head -c 300000 /dev/urandom > /dev/mtd4; echo - > $T/img/nor-flashing
+sh $N/nor.sh flash $T/img > $T/out 2>&1 && cmp -s $T/img/nor-data.bin $T/data.before && [ ! -e $T/img/nor-flashing ] &&
+	ok "a flash done again after a cut: the copy of /data taken before it kept" || { no "backup after a cut"; cat $T/out; }
+# asked to keep its mark (dash-nor, which seeds after it): a seed cut half-way, the flash done again: the same
+NOR_KEEP_MARK=1 sh $N/nor.sh flash $T/img > $T/out 2>&1 && [ -e $T/img/nor-flashing ] || no "mark kept for the seed"
+head -c 200000 /dev/urandom > /dev/mtd4
+sh $N/nor.sh flash $T/img > $T/out 2>&1 && cmp -s $T/img/nor-data.bin $T/data.before && [ ! -e $T/img/nor-flashing ] &&
+	ok "a flash done again after a seed that was cut: the copy of /data still the one taken before" || { no "backup after a cut seed"; cat $T/out; }
 cp $T/data.before /dev/mtd4; cp /dev/mtd3 $T/rootfs.before
 STOCK=$T/nodir/stock.bin sh $N/nor.sh flash $T/img > $T/out 2>&1 && no "flash went on without saving /data" ||
 	{ grep -q "could not be saved" $T/out && cmp -s /dev/mtd4 $T/data.before && cmp -s /dev/mtd3 $T/rootfs.before &&

@@ -21,7 +21,8 @@ echo "\$* ROOTFS=\${ROOTFS:-} STOCK=\${STOCK:-}" >> $T/calls
 case "\$1" in
 stock) [ -e $T/stock ] ;;
 read) cp $T/chip "\$2" ;;
-flash|seed) [ ! -e $T/fail-\$1 ] ;;
+flash) [ -z "\${NOR_KEEP_MARK:-}" ] || : > $T/sd/nor-flashing; [ ! -e $T/fail-flash ] ;;   # (its mark, kept when asked)
+seed) [ ! -e $T/fail-seed ] ;;
 esac
 EOF
 chmod +x $T/nor.sh
@@ -66,7 +67,10 @@ else
 fi
 : > $T/calls
 run copy; [ "$(st)" = done ] && ! grep -q "^read" $T/calls && grep -q "^flash" $T/calls && grep -q "^seed" $T/calls &&
-	ok "copy over our system: flash and seed, nothing saved" || { no "copy"; cat $T/calls; }
+	[ ! -e $T/sd/nor-flashing ] && ok "copy over our system: flash and seed, nothing saved, the mark gone" || { no "copy"; cat $T/calls; }
+touch $T/fail-seed
+run copy; [ "$(st)" = error ] && [ ! -e $T/sd/nor-flashing ] && ok "a seed that fails: said, the mark gone all the same (nothing was cut)" || no "seed failure"
+rm $T/fail-seed
 touch $T/fail-flash; : > $T/calls
 run copy; [ "$(st)" = error ] && grep -q "could not be written" $T/run/dash-nor.status && ! grep -q "^seed" $T/calls &&
 	ok "a flash that fails: error, the card still starts the screen" || no "flash failure ($(cat $T/run/dash-nor.status))"

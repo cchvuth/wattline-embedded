@@ -81,7 +81,8 @@ flash)
 	# the NOR's /data saved before it is erased (settings, Wi-Fi networks, Bluetooth bonds made while running from
 	# it), read twice; not the stock firmware's (stock.bin holds it) and not an erased one (a retry's)
 	P=$(part data) B=$(dirname "$S")/nor-data.bin
-	if ! stock_on_chip && ! blank "$P"; then
+	# (nor one half erased or half seeded by a flash that was cut: the copy taken before it stays)
+	if ! stock_on_chip && ! blank "$P" && ! { [ -e "$FL" ] && [ -f "$B" ]; }; then
 		dd if="$P" of="$B.new" bs=64k 2>/dev/null && [ "$(sha < "$B.new")" = "$(sha < "$P")" ] && mv -f "$B.new" "$B" ||
 			die "the NOR's data partition could not be saved to $B"
 		sync
@@ -103,7 +104,9 @@ flash)
 	else
 		put "$U" "$CHIP"
 	fi
-	rm -f "$FL"
+	# (kept for a caller that goes on to seed, and takes it away after: a seed that was cut left /data half made, and
+	# the flash done again saved that over the copy)
+	[ -n "${NOR_KEEP_MARK:-}" ] || rm -f "$FL"
 	sync
 	echo "the NOR is ready: it boots when no card with a boot loader is in"
 	;;
