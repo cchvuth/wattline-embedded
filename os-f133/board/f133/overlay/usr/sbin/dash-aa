@@ -27,7 +27,11 @@ IP=${IP:-192.168.53.1}   # the AP's /24: not the car's 192.168.4.x, nor a phone 
 CERT=/etc/wattline/aa.crt
 MARK=/run/dash-aa
 
-# Hooks for additions kept outside this repository (absent on a plain image), output in /data/log/hook-<name>.log:
+# The session's logs, in $LOG: the boot's log folder (the card's, or RAM without one: S02sd), not /data: on the NOR that
+# is a small JFFS2, where a log line can wait seconds behind an erase (the receiver sat in it at its exit, and the
+# stop with it) and wears the flash.
+LOG=/var/log/sd; [ -d $LOG ] || LOG=/tmp
+# Hooks for additions kept outside this repository (absent on a plain image), output in $LOG/hook-<name>.log:
 #  - /data/hooks/aa-start: once the access point is up, before aa serve and aa mcu. Gets IFACE, SSID, PSK and IP. (A
 #    helper may take a channel of its own from mcud, on /run/mcud.sock.)
 #  - /data/hooks/aa-stop: at every stop (also after a failed start, or with no session up), so it must be safe to
@@ -35,8 +39,8 @@ MARK=/run/dash-aa
 # Each has 10 s, then SIGTERM, and SIGKILL 2 s later (the hook's own process: a daemon it started lives on).
 hook() {
 	[ -x "/data/hooks/$1" ] || return 0
-	if [ "$1" = aa-start ]; then IFACE=$IFACE SSID=$SSID PSK=$PSK IP=$IP "/data/hooks/$1" >"/data/log/hook-$1.log" 2>&1 & _hp=$!
-	else IFACE=$IFACE IP=$IP "/data/hooks/$1" >"/data/log/hook-$1.log" 2>&1 & _hp=$!; fi
+	if [ "$1" = aa-start ]; then IFACE=$IFACE SSID=$SSID PSK=$PSK IP=$IP "/data/hooks/$1" >"$LOG/hook-$1.log" 2>&1 & _hp=$!
+	else IFACE=$IFACE IP=$IP "/data/hooks/$1" >"$LOG/hook-$1.log" 2>&1 & _hp=$!; fi
 	( sleep 10; kill $_hp; sleep 2; kill -9 $_hp ) >/dev/null 2>&1 & _hk=$!
 	wait $_hp; kill $_hk 2>/dev/null; return 0
 }
@@ -46,8 +50,8 @@ hook() {
 ap_up() {
 	( umask 077; printf 'ctrl_interface=/run/aa-ap\nap_isolate=1\nnetwork={\n\tmode=2\n\tssid=%s\n\tfrequency=5180\n\tkey_mgmt=WPA-PSK\n\tproto=RSN\n\tpairwise=CCMP\n\tgroup=CCMP\n\tpsk="%s"\n}\n' \
 		"$(printf %s "$SSID" | xxd -p | tr -d '\n')" "$PSK" > /run/aa-ap.conf )
-	: > /data/log/aa-ap.log
-	wpa_supplicant -B -i "$IFACE" -D nl80211 -c /run/aa-ap.conf -P /run/aa-ap.pid -f /data/log/aa-ap.log || return 1
+	: > $LOG/aa-ap.log
+	wpa_supplicant -B -i "$IFACE" -D nl80211 -c /run/aa-ap.conf -P /run/aa-ap.pid -f $LOG/aa-ap.log || return 1
 	i=0; until wpa_cli -p /run/aa-ap -i "$IFACE" status 2>/dev/null | grep -q '^wpa_state=COMPLETED'; do
 		[ $i -lt 20 ] || return 1; usleep 500000; i=$((i + 1)); done
 	ip addr flush dev "$IFACE"
@@ -56,7 +60,7 @@ ap_up() {
 	printf 'interface %s\nstart %s.10\nend %s.200\nmax_leases 190\nlease_file /run/aa-udhcpd.leases\npidfile /run/aa-udhcpd.pid\noption subnet 255.255.255.0\noption lease 3600\n' \
 		"$IFACE" "$B" "$B" > /run/aa-udhcpd.conf
 	: > /run/aa-udhcpd.leases
-	udhcpd -f -a 100 /run/aa-udhcpd.conf > /data/log/aa-udhcpd.log 2>&1 &   # -a: a 100 ms ARP probe, not 2 s (the phone gives up waiting)
+	udhcpd -f -a 100 /run/aa-udhcpd.conf > $LOG/aa-udhcpd.log 2>&1 &   # -a: a 100 ms ARP probe, not 2 s (the phone gives up waiting)
 }
 ap_down() {   # the AP's wpa_supplicant and DHCP gone (<= 5 s), its address, and ap0 (also a half-made AP)
 	# the phones on it told first, while the AP still sends: a deauthentication each. Stopped as it was, the AP went
@@ -95,19 +99,26 @@ pair_off() {   # a window still open: ended (Bluetooth stays on)
 	[ -n "$p" ] && kill -- -"$p" 2>/dev/null
 }
 stop() {
-	# the picture and the receiver off at once, whatever the hook takes (and again below: a helper may restart them);
-	# aa mcu too, so the phone's channel is let go and it stops redialling the AP's session meanwhile
+	# The receiver told to stop at once: it says goodbye to the phone and the picture goes (aa mcu too, so the phone's
+	# channel is let go and it stops redialling the AP's session). The hook runs beside it, not before it: both need
+	# the AP, which stays until the hook is done (<= 12 s) and the receiver has ended its session (its marker gone: the
+	# phone told), or had 3 s for it. Then the phones are told to leave (ap_down): one after the other, this took a
+	# phone ~8 s to drop the Wi-Fi.
 	killall aa spike-vdec 2>/dev/null
+	# the rest behind the dash: it repaints the whole screen now, on the one core this script and its helpers share
+	# (at equal priority the repaint crawled down the screen for a second)
+	renice -n 10 -p $$ >/dev/null 2>&1
 	IFACE=$(cat /run/aa-ap.iface 2>/dev/null)   # the hook gets it too
-	hook aa-stop
+	hook aa-stop & _hs=$!
 	pair_off
-	killall aa spike-vdec 2>/dev/null   # aa first (its stop flag set before the decoder's pipe closes: it says goodbye
-	                                    # rather than end on a dead decoder), the decoder a moment later
-	i=0; while pidof aa spike-vdec >/dev/null 2>&1 && [ $i -lt 25 ]; do usleep 200000; i=$((i + 1)); done   # <= 5 s
-	killall -9 spike-vdec aa 2>/dev/null
-	rm -f /run/dash-project /run/dash-aa-session /run/dash-aa-focus /run/dash-pj-fps   # aa serve's and the decoder's, if killed mid-session
+	i=0; while [ -e /run/dash-aa-session ] && [ $i -lt 15 ]; do usleep 200000; i=$((i + 1)); done   # <= 3 s
+	wait $_hs
+	killall aa spike-vdec 2>/dev/null   # again: a helper may have restarted them
 	rm -f /run/aa-ap.iface
 	ap_down
+	i=0; while pidof aa spike-vdec >/dev/null 2>&1 && [ $i -lt 10 ]; do usleep 200000; i=$((i + 1)); done   # <= 2 s more
+	killall -9 spike-vdec aa 2>/dev/null
+	rm -f /run/dash-project /run/dash-aa-session /run/dash-aa-focus /run/dash-pj-fps   # aa serve's and the decoder's, if killed mid-session
 	rm -f "$MARK" /run/dash-aa-radio   # before Wi-Fi comes back (S45wifi-auto waits while they are there); the button off
 	# the station: a list saved meanwhile (and the network picked, if one was), or back if the AP took wlan0
 	if [ -e /run/wifi-auto.pending ]; then
@@ -150,9 +161,9 @@ start|restore)
 	# the kernel's rules for the device's country (wireless-regdb; the boot's load came before the root was there)
 	CC=$(cat /data/wifi/country 2>/dev/null | tr -dc A-Za-z | tr a-z A-Z)
 	[ ${#CC} = 2 ] && { iw reg reload 2>/dev/null; iw reg set "$CC"; }
-	mkdir -p /data/log   # per-session logs (overwritten each start): aa-ap, aa-udhcpd, aa-serve, aa-mcu
+	# per-session logs (the one before kept as .1): aa-ap, aa-udhcpd, aa-serve, aa-mcu
 	# the session before kept as *.log.1: a session that ended badly is usually looked at after the phone reconnected
-	for f in aa-ap aa-udhcpd aa-serve aa-mcu; do [ -f /data/log/$f.log ] && mv -f /data/log/$f.log /data/log/$f.log.1; done
+	for f in aa-ap aa-udhcpd aa-serve aa-mcu; do [ -f $LOG/$f.log ] && mv -f $LOG/$f.log $LOG/$f.log.1; done
 	IFACE=
 	if [ ! -e /data/wifi/aa-solo ] && iw dev wlan0 interface add ap0 type __ap 2>/dev/null; then
 		IFACE=ap0
@@ -164,7 +175,7 @@ start|restore)
 		[ -f /run/wpa_cli.loop ] && kill "$(cat /run/wpa_cli.loop)" 2>/dev/null; rm -f /run/wpa_cli.loop   # (wifi-connect's)
 		killall -q wpa_cli udhcpc wpa_supplicant   # the station off until stop
 		i=0; while pidof wpa_supplicant >/dev/null && [ $i -lt 10 ]; do sleep 1; i=$((i+1)); done
-		ap_up || { echo "dash-aa: the AP did not come up (/data/log/aa-ap.log)" >&2; stop; exit 1; }
+		ap_up || { echo "dash-aa: the AP did not come up ($LOG/aa-ap.log)" >&2; stop; exit 1; }
 	fi
 	echo $IFACE > /run/aa-ap.iface
 	BSSID=$(cat /sys/class/net/$IFACE/address)
@@ -172,9 +183,9 @@ start|restore)
 	# The AP carries live video: the radio out of power save for the session (latency, not a correctness fix)
 	iw dev "$IFACE" set power_save off 2>/dev/null; iw dev wlan0 set power_save off 2>/dev/null
 	hook aa-start
-	aa serve > /data/log/aa-serve.log 2>&1 &   # listening before aa mcu sends any phone to it
+	aa serve > $LOG/aa-serve.log 2>&1 &   # listening before aa mcu sends any phone to it
 	# the passphrase on its stdin, not in its arguments (any process can read those); printf is the shell's own
-	printf '%s\n' "$PSK" | aa mcu "$IP" "$SSID" - "$BSSID" > /data/log/aa-mcu.log 2>&1 &
+	printf '%s\n' "$PSK" | aa mcu "$IP" "$SSID" - "$BSSID" > $LOG/aa-mcu.log 2>&1 &
 	[ "$1" = start ] && pair_on   # someone at the screen tapped it (not a restore at boot)
 	touch /data/aa-on 2>/dev/null && sync   # up: on again at the next start (the dash restores it), until stopped
 	# (touch, not `: >`: a failed redirect on a special builtin would end the script before the marker)

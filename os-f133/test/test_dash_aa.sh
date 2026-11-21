@@ -134,9 +134,9 @@ secret() {   # the passphrase: 20 hex digits; on aa mcu's stdin and in the hook'
 	[ "$(cat $T/cap/mcu-stdin 2>/dev/null)" = "$P" ] && ok "aa mcu got the passphrase on its stdin" || no "aa mcu's stdin"
 	[ "$(cat $T/cap/hook-psk 2>/dev/null)" = "$P" ] && ok "the aa-start hook got it in its environment" || no "hook's PSK"
 	for f in /proc/[0-9]*/cmdline; do tr '\0' ' ' < $f; echo; done > $T/cmdlines 2>/dev/null
-	! grep -qF "$P" $T/cmdlines $T/calls $T/out && [ "$(grep -rlF "$P" /run /data 2>/dev/null)" = /run/aa-ap.conf ] &&
-		ok "the passphrase in no command line or log, in /run and /data only the AP's config" ||
-		no "the passphrase leaks: $({ grep -lF "$P" $T/cmdlines $T/calls $T/out; grep -rlF "$P" /run /data; } 2>/dev/null | tr '\n' ' ')"
+	! grep -qF "$P" $T/cmdlines $T/calls $T/out && [ "$(grep -rlF "$P" /run /data /tmp/*.log 2>/dev/null)" = /run/aa-ap.conf ] &&
+		ok "the passphrase in no command line or log, in /run, /data and the logs only the AP's config" ||
+		no "the passphrase leaks: $({ grep -lF "$P" $T/cmdlines $T/calls $T/out; grep -rlF "$P" /run /data /tmp/*.log; } 2>/dev/null | tr '\n' ' ')"
 }
 nocb() { ! grep -q 'AT#CB' $T/calls && ok "never AT#CB" || no "AT#CB sent"; }
 
@@ -178,7 +178,7 @@ nocb
 echo "-- restore, ap0 refused: the AP on wlan0, the station stopped, no window; a settings save applied at stop"
 fresh; : > $T/noap0; : > $T/nosta
 run restore && up && ok "restore: up" || no "restore ($?)"
-before 'wpa_supplicant sta stopped' 'wpa_supplicant -B -i wlan0 -D nl80211 -c /run/aa-ap.conf -P /run/aa-ap.pid -f /data/log/aa-ap.log' &&
+before 'wpa_supplicant sta stopped' 'wpa_supplicant -B -i wlan0 -D nl80211 -c /run/aa-ap.conf -P /run/aa-ap.pid -f /tmp/aa-ap.log' &&
 	has 'ip addr add 192.168.53.1/24 dev wlan0' && [ "$(cat /run/aa-ap.iface)" = wlan0 ] &&
 	has 'aa mcu 192.168.53.1 WattlineAA - 02:00:00:00:00:01' && ok "the station stopped, the AP on wlan0" || no "wlan0"
 ! grep -q '^mcud' $T/calls && ! [ -e /run/aa-pair.pid ] && ok "no pairing window" || no "a window on restore"
@@ -196,7 +196,7 @@ nocb
 echo "-- start, ap0 made but its AP does not come up: wlan0 instead"
 fresh; : > $T/ap0dead
 run start && up && grep -q 'no AP beside the station' $T/out && before 'iw dev ap0 del' 'wpa_supplicant sta stopped' &&
-	before 'wpa_supplicant ap:ap0 stopped' 'wpa_supplicant -B -i wlan0 -D nl80211 -c /run/aa-ap.conf -P /run/aa-ap.pid -f /data/log/aa-ap.log' &&
+	before 'wpa_supplicant ap:ap0 stopped' 'wpa_supplicant -B -i wlan0 -D nl80211 -c /run/aa-ap.conf -P /run/aa-ap.pid -f /tmp/aa-ap.log' &&
 	[ "$(cat /run/aa-ap.iface)" = wlan0 ] && ok "ap0 removed, the AP on wlan0" || no "the fallback"
 run stop && down && has 'S45wifi-auto start' && ok "stop: the station back" || no "stop"
 nocb
