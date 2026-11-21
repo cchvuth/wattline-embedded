@@ -32,7 +32,8 @@ let_go() {
 case "$1" in
 start)
 	stty -F /dev/ttyS1 115200 raw -echo 2>/dev/null || exit 0
-	n=$(cat $C 2>/dev/null || echo 0)
+	n=$(cat $C 2>/dev/null)
+	case "$n" in '' | *[!0-9]*) n=0 ;; esac   # (none yet, or one cut as it was written)
 	cycle() {   # the MCU's power cycle, at most 3 in a row (a boot whose Wi-Fi comes up clears the count)
 		[ "$n" -lt 3 ] 2>/dev/null || return 1
 		echo $((n + 1)) > $C
@@ -48,6 +49,7 @@ start)
 	(
 		echo -1000 > /proc/self/oom_score_adj   # this loop's, and so each mcud's (inherited)
 		while :; do
+			( : >> $L ) 2>/dev/null || L=/dev/null   # (a log that cannot be opened: mcud all the same, it holds the power)
 			mcud 2>> $L & echo $! > $P
 			wait $!; r=$?
 			[ $r = 0 ] || [ $r = 137 ] && break
@@ -75,5 +77,8 @@ power-cycle)
 	sync
 	echo "<5>S03mcu: power cycle asked: the MCU cuts the power in ~40 s" > /dev/kmsg
 	let_go
+	# the MCU did not: a reboot all the same, rather than a screen left up with nothing holding its power or its
+	# Bluetooth (the next start then sees no Wi-Fi chip and asks again)
+	( sleep 120; echo "<3>S03mcu: the power was not cut: rebooting" > /dev/kmsg; reboot ) > /dev/null 2>&1 &
 	;;
 esac

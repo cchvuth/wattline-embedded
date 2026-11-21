@@ -25,7 +25,8 @@ if [ ! -d /work/buildroot ]; then
 	mkdir -p /work/buildroot && tar xzf /tmp/br.tar.gz --strip-components=1 -C /work/buildroot && rm /tmp/br.tar.gz
 fi
 cd /work/buildroot
-[ -f /work/out/.config ] || make O=/work/out BR2_EXTERNAL=/ext f133_defconfig
+# at every build: a build folder kept from before went on with its old configuration, whatever the tree's had become
+make O=/work/out BR2_EXTERNAL=/ext f133_defconfig >/dev/null
 # The initramfs built into the kernel holds only /init (board/f133/init/init.c, static), at the path
 # board/f133/initramfs.list names: compiled before the kernel takes it in, so the toolchain comes first
 CC=/work/out/host/bin/riscv64-buildroot-linux-gnu-gcc

@@ -24,7 +24,7 @@ for p in 1:1048576 2:4456448 3:10747904 4:524288; do head -c ${p#*:} /dev/urando
 head -c 985489 /dev/urandom > $T/img/u-boot-sunxi-with-spl.bin
 head -c 4030000 /dev/urandom > $T/img/kernel.itb
 head -c 5955584 /dev/urandom > $T/img/rootfs.sqfs
-printf '#!/bin/sh\n[ "$1" = -v ] && shift\ndd if="$1" of="$2" conv=notrunc 2>/dev/null\n' > $T/bin/flashcp
+printf '#!/bin/sh\n[ -e %s/fail-cp ] && exit 1\n[ "$1" = -v ] && shift\ndd if="$1" of="$2" conv=notrunc 2>/dev/null\n' $T > $T/bin/flashcp
 cat > $T/bin/flash_eraseall <<'EOF'
 #!/bin/sh
 # as busybox's: every byte 0xFF; with -j, a JFFS2 cleanmarker (12 bytes) at each 64 KiB erase block's start
@@ -60,7 +60,21 @@ truncate -s 10747905 $T/img/rootfs.sqfs
 sh $N/nor.sh flash $T/img > $T/out 2>&1 && no "an oversized rootfs went on" ||
 	{ grep -q "bigger than the rootfs" $T/out && cmp -s /dev/mtd3 $T/rootfs.before && ok "oversized rootfs refused, nothing written"; } || no size
 head -c 5955584 /dev/urandom > $T/img/rootfs.sqfs
+# a mark left behind (another chip's flash, cut) with no copy of this chip beside it: the guard stands
+echo 0123 > $T/img/nor-flashing; mv $T/img/stock.bin $T/stock.away
+sh $N/nor.sh flash $T/img > $T/out 2>&1 && no "a stale mark let a flash over the stock firmware go on" ||
+	{ grep -q "stock firmware is on the NOR" $T/out && cmp -s /dev/mtd3 $T/rootfs.before && ok "a stale mark without the chip's copy: refused, nothing written"; } || no "stale mark"
+mv $T/stock.away $T/img/stock.bin; rm $T/img/nor-flashing
+# a flash cut after its erases (a write that fails): the chip is no longer the stock copy, its GPT still there; the
+# flash done again goes on from the copy taken before, which stays as it was
+cp $T/img/stock.bin $T/stock.keep; touch $T/fail-cp
+sh $N/nor.sh flash $T/img > $T/out 2>&1 && no "a flash whose write fails went on" ||
+	{ [ -e $T/img/nor-flashing ] && sh $N/nor.sh stock &&
+		ok "a flash cut short: marked as under way, the stock firmware's mark still on the chip"; } || no "cut flash"
+rm $T/fail-cp
+printf 'ours' | dd of=/dev/mtd0 bs=1 seek=2097152 conv=notrunc 2>/dev/null   # (the fake's whole chip is its own file)
 sh $N/nor.sh flash $T/img > $T/out 2>&1 && same $T/img/rootfs.sqfs /dev/mtd3 && same $T/img/kernel.itb /dev/mtd2 &&
+	cmp -s $T/img/stock.bin $T/stock.keep && [ ! -e $T/img/nor-flashing ] &&
 	same $T/img/u-boot-sunxi-with-spl.bin /dev/mtd0 && erased && [ ! -e $T/img/nor-data.bin ] &&
 	ok "flash with the stock copy: rootfs, kernel, U-Boot written, data erased (the stock firmware's: not saved)" || { no flash; cat $T/out; }
 sh $N/nor.sh stock && no "stock after the flash" || ok "stock: not once flashed"
@@ -100,6 +114,14 @@ mkdir -p /mnt/sd/data && echo x > /mnt/sd/data/settings
 printf '#!/bin/sh\nexit 1\n' > $T/bin/cp && chmod +x $T/bin/cp && : > $T/calls
 sh $N/nor.sh seed > $T/out 2>&1 && no "a seed whose copy fails went on" ||
 	{ grep -q "^umount /tmp/nordata" $T/calls && ok "a seed that stops half-way unmounts the NOR's /data"; } || { no "seed trap"; cat $T/calls; }
+# one file that does not fit: left out and named, the rest copied
+echo y > /mnt/sd/data/big
+printf '#!/bin/sh\ncase "$*" in *data/big*) exit 1 ;; esac\nexec /bin/cp "$@"\n' > $T/bin/cp; : > $T/calls
+sh $N/nor.sh seed > $T/out 2>&1 && no "a seed that left a file out said nothing" ||
+	{ grep -q "not copied.*big" $T/out && [ -f /tmp/nordata/settings ] && [ ! -e /tmp/nordata/big ] &&
+		[ "$(grep -c '^umount' $T/calls)" = 1 ] && ok "a file that does not fit: left out and named, the rest copied"; } ||
+	{ no "seed skip"; cat $T/out; }
+rm /mnt/sd/data/big
 rm $T/bin/cp; : > $T/calls
 sh $N/nor.sh seed > $T/out 2>&1 && [ "$(grep -c '^umount' $T/calls)" = 1 ] && [ -f /tmp/nordata/settings ] &&
 	ok "a seed that completes: the card's /data copied, unmounted once" || { no seed; cat $T/out $T/calls; }

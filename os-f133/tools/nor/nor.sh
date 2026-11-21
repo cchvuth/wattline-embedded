@@ -62,8 +62,19 @@ flash)
 	fits "$R" rootfs
 	fits "$K" kernel
 	fits "$U" boot
-	# the stock GPT ("EFI PART" at 0xc200) still there: the stock firmware, kept only as an exact copy beside the images
-	if stock_on_chip; then
+	# the stock GPT ("EFI PART" at 0xc200) still there: the stock firmware, kept only as an exact copy beside the images.
+	# Not while a flash is under way (FL, from before the first erase to the end): one cut there leaves the GPT in
+	# place (the boot area is written last) over a chip half ours, which no longer equals the copy taken before it and
+	# must never be read over it; the flash is then done again.
+	# The mark holds that copy's checksum, and counts only with the copy there and the chip's boot area still the
+	# copy's (the GPT is in its first block, erased before anything is written there): a mark left behind on a card
+	# that then meets another chip, or one without its copy, turns nothing off.
+	FL=$(dirname "$S")/nor-flashing
+	under_way() {
+		[ -f "$S" ] && [ "$(cat "$FL" 2>/dev/null)" = "$(sha < "$S")" ] &&
+			[ "$(head -c 1048576 "$CHIP" | sha)" = "$(head -c 1048576 "$S" | sha)" ]
+	}
+	if stock_on_chip && ! under_way; then
 		[ -f "$S" ] && [ "$(sha < "$S")" = "$(sha < "$CHIP")" ] ||
 			die "the stock firmware is on the NOR and $S is not an exact copy of it (nor.sh read)"
 	fi
@@ -76,6 +87,8 @@ flash)
 		sync
 		echo "the NOR's data partition saved to $B (nor.sh restore puts it back)"
 	fi
+	{ if [ -f "$S" ]; then sha < "$S"; else echo -; fi; } > "$FL.new" && mv -f "$FL.new" "$FL" && sync ||
+		die "$FL could not be written"
 	flash_eraseall -j "$P"
 	# the kernel FIT is the commit mark: erased first, written after the rootfs, so a cut write fails U-Boot's hash
 	# check (the card's way then) instead of booting a half-written root
@@ -90,6 +103,7 @@ flash)
 	else
 		put "$U" "$CHIP"
 	fi
+	rm -f "$FL"
 	sync
 	echo "the NOR is ready: it boots when no card with a boot loader is in"
 	;;
@@ -103,10 +117,15 @@ seed)
 	# unmounted however it ends: one left mounted would be erased under the mount by the next flash
 	trap 'umount $M' EXIT
 	trap 'exit 1' INT TERM HUP
+	miss=
 	for f in /mnt/sd/data/* /mnt/sd/data/.[!.]*; do
 		[ -e "$f" ] || continue
 		case ${f##*/} in log|rec) continue ;; esac
-		cp -a "$f" $M/
+		# one that does not fit (a picture, in 512 KiB) is left out and named at the end, the rest still copied: the
+		# networks and the keys come after it
+		# (its half-made copy removed, to leave the room to the rest; not what the NOR already had under that name)
+		had=; [ -e "$M/${f##*/}" ] && had=1
+		cp -a "$f" $M/ || { [ -n "$had" ] || rm -rf "$M/${f##*/}"; miss="$miss ${f##*/}"; }
 	done
 	[ -f /mnt/sd/wpa_supplicant.conf ] && cp /mnt/sd/wpa_supplicant.conf $M/
 	mkdir -p $M/ssh && chmod 700 $M/ssh
@@ -119,6 +138,7 @@ seed)
 	du -s $M; df $M
 	umount $M
 	trap - EXIT
+	[ -z "$miss" ] || die "not copied to the NOR's /data (no room?):$miss"
 	;;
 stock)
 	stock_on_chip
@@ -126,7 +146,7 @@ stock)
 restore)
 	F=${2:?FILE}
 	case $(($(wc -c < "$F"))) in
-	16777216) put "$F" "$CHIP" ;;
+	16777216) put "$F" "$CHIP"; rm -f "$(dirname "$F")/nor-flashing" ;;   # (the chip is that image again: no flash under way)
 	$(psize data)) put "$F" "$(part data)" ;;
 	*) die "$F is neither a 16 MiB image nor a data partition (nor-data.bin)" ;;
 	esac

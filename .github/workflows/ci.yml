@@ -60,7 +60,7 @@ jobs:
           cc -O2 -Wall -o /tmp/norw os-f133/tools/nor/norw.c && sh os-f133/tools/nor/test_norw.sh /tmp/norw
           docker run --rm -v "$PWD":/r:ro debian:stable sh /r/os-f133/test/test_dash_nor.sh
           docker run --rm -v "$PWD":/r:ro debian:stable sh /r/os-f133/test/test_ota_try.sh
-          docker run --rm --privileged -e DEBIAN_FRONTEND=noninteractive -v "$PWD":/r:ro debian:stable sh -c 'apt-get -qq update && apt-get -qq install -y busybox >/dev/null && sh /r/os-f133/test/test_dash_aa.sh'
+          docker run --rm --privileged -e DEBIAN_FRONTEND=noninteractive -v "$PWD":/r:ro debian:stable sh -c 'apt-get -qq update && apt-get -qq install -y busybox >/dev/null && sh /r/os-f133/test/test_dash_aa.sh && sh /r/os-f133/test/test_log_fallback.sh'
 
   decoder-neon:
     runs-on: ubuntu-24.04-arm

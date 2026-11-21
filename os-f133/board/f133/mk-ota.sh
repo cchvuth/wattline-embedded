@@ -18,6 +18,14 @@ V=$(unsquashfs -cat "$I/rootfs.sqfs" etc/image-id | cut -d- -f1)
 case "$V" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "mk-ota: rootfs.sqfs's image-id has no version ('$V')" >&2; exit 1 ;; esac
 [ -z "$(unsquashfs -cat "$I/rootfs.sqfs" etc/image-local 2>/dev/null)" ] ||
 	{ echo "mk-ota: built with private additions (post-build.sh: /etc/image-local): a release comes from a clean clone" >&2; exit 1; }
+# a screen that installs it must be able to take the release after it, and to judge a tried boot: an image from a
+# stale build folder without the updater's parts would strand it on this version
+unsquashfs -l "$I/rootfs.sqfs" > "$T/files"
+for f in usr/sbin/dash-update usr/bin/sig-verify usr/bin/curl etc/wattline-ota.pub.raw etc/init.d/S01try etc/init.d/S98try; do
+	grep -qx "squashfs-root/$f" "$T/files" || { echo "mk-ota: rootfs.sqfs has no /$f" >&2; exit 1; }
+done
+unsquashfs -cat "$I/rootfs.sqfs" etc/wattline-ota.pub.raw | cmp -s - "$(dirname "$0")/wattline-ota.pub.raw" ||
+	{ echo "mk-ota: the image's /etc/wattline-ota.pub.raw is not board/f133/wattline-ota.pub.raw" >&2; exit 1; }
 # what U-Boot's load addresses leave room for (dash-update refuses more)
 [ "$(wc -c < "$I/Image")" -le 33554432 ] && [ "$(wc -c < "$I/f133.dtb")" -le 1048576 ] &&
 	[ "$(wc -c < "$I/rootfs.sqfs")" -le 268435456 ] || { echo "mk-ota: a boot file is too big" >&2; exit 1; }

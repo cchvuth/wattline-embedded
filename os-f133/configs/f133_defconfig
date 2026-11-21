@@ -64,8 +64,8 @@ BR2_PACKAGE_BLUEZ5_UTILS=y
 # bluetoothd over D-Bus; the F133's dash-aa is wired only), and the root has to fit the NOR
 # BR2_PACKAGE_BLUEZ5_UTILS_CLIENT is not set
 # BR2_PACKAGE_BLUEZ5_UTILS_MONITOR is not set
-# The T113 Dash's OS behaviour on the F133. The build keeps its .config once made: after editing, ./build.sh
-# f133_defconfig, then the dirclean list in README.md (busybox, wpa_supplicant) before ./build.sh.
+# The T113 Dash's OS behaviour on the F133. The build applies this file each time: after editing, the dirclean
+# list in README.md (busybox, wpa_supplicant) before ./build.sh.
 
 # /etc/image-id (the version the dash's settings show, and dash-update compares) and the OTA public key
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_F133_PATH)/board/f133/post-build.sh"

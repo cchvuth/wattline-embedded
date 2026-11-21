@@ -50,6 +50,16 @@ if [ -w /dev ] && cp $T/chip $CHIPDEV 2>/dev/null; then
 	: > $T/calls
 	run copy; ! grep -q "^read" $T/calls && [ "$(st)" = done ] && ok "an exact copy on the card already: not read again" ||
 		{ no "copy (stock kept)"; cat $T/calls; }
+	# a copy that was cut: the chip half written under the stock firmware's mark; the copy on the card is not replaced
+	head -c 4096 /dev/urandom > $CHIPDEV; cp $T/sd/stock.bin $T/stock.keep; : > $T/calls
+	sha256sum < $T/sd/stock.bin | cut -d' ' -f1 > $T/sd/nor-flashing   # (nor.sh's mark: that copy's checksum)
+	run copy; ! grep -q "^read" $T/calls && cmp -s $T/sd/stock.bin $T/stock.keep && [ "$(st)" = done ] &&
+		ok "a copy done again after a cut: the stock copy on the card left as it was" || { no "copy (after a cut)"; cat $T/calls; }
+	# a mark that is not this copy's (left by another flash): the chip's firmware is saved as ever
+	echo 0123 > $T/sd/nor-flashing; : > $T/calls
+	run copy; grep -q "^read" $T/calls && cmp -s $T/sd/stock.bin $T/chip && ok "a stale mark: the stock firmware saved all the same" ||
+		{ no "copy (stale mark)"; cat $T/calls; }
+	rm -f $T/sd/nor-flashing
 	rm -f $T/stock $CHIPDEV
 else
 	echo "skip  the stock copy cases (no writable /dev: run as root in a container)"

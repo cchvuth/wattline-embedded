@@ -47,6 +47,9 @@ start)
 	(
 		rm -f /tmp/dash.stop /run/dash-shown
 		while [ ! -e $D/dash.off ] && [ ! -e /tmp/dash.stop ]; do
+			# a log that cannot be opened (the card gone read-only after a FAT error, or out): without it, not without
+			# the dash: the shell does not run a command whose redirection fails, and the screen stayed dark
+			( : >> $O ) 2>/dev/null || O=/dev/null   # (in a subshell: on ":" itself a failed redirection ends ash)
 			echo "$(date) start" >> $O
 			$D/dash -c $D/dash.conf >> $O 2>&1 &
 			p=$!

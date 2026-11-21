@@ -46,7 +46,9 @@ copy)
 	mkdir "$RUN/dash-nor.lock" 2>/dev/null || { echo "dash-nor: a copy is running" >&2; exit 1; }
 	trap 'rmdir "$RUN/dash-nor.lock"' EXIT
 	log "copy: $(cat /etc/image-id 2>/dev/null) to the built-in flash"
-	if "$NOR" stock; then
+	# (not after a copy that was cut: the chip is then half ours under the stock firmware's mark, and the copy on the
+	# card, taken before it, is the only one: nor.sh's nor-flashing)
+	if "$NOR" stock && ! { [ -f "$SD/stock.bin" ] && [ "$(cat "$SD/nor-flashing" 2>/dev/null)" = "$(sha < "$SD/stock.bin")" ]; }; then
 		CHIP=$(awk '$2 == "01000000" { sub(":", "", $1); print "/dev/" $1; exit }' "$MTD")
 		if [ ! -f "$SD/stock.bin" ] || [ "$(sha < "$SD/stock.bin")" != "$(sha < "$CHIP")" ]; then
 			status copying "saving the stock firmware to the card"
