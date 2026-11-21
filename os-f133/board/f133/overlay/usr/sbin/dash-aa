@@ -67,7 +67,9 @@ ap_down() {   # the AP's wpa_supplicant and DHCP gone (<= 5 s), its address, and
 		for _m in $(wpa_cli -p /run/aa-ap -i "$IFACE" all_sta 2>/dev/null | grep -E '^([0-9a-f]{2}:){5}[0-9a-f]{2}$'); do
 			wpa_cli -p /run/aa-ap -i "$IFACE" deauthenticate "$_m" >/dev/null 2>&1 && _sent=1
 		done
-		[ -n "$_sent" ] && usleep 300000   # the frames on air before the AP goes
+		# the frames delivered before the AP goes: a phone that dozes (some listen only every 20 beacons, ~2 s) gets
+		# its deauthentication only when it wakes; gone sooner, it stayed ~20 s, waiting for the quiet AP to come back
+		[ -n "$_sent" ] && usleep 2000000
 	fi
 	p=$(cat /run/aa-ap.pid 2>/dev/null)
 	[ -n "$p" ] && kill "$p" 2>/dev/null
