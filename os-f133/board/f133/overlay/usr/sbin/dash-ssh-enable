@@ -1,0 +1,35 @@
+#!/bin/sh
+# dash-ssh-enable [boot]: (the T113 Dash's, for the F133) SSH on, key logins only (-s). Sets the flag (/data/ssh/enabled;
+# clears /data/ssh/disabled) and (re)starts Dropbear when there is a key: the keys the dash's pairing put in
+# /data/ssh/authorized_keys (while the flag is on) and the card's authorized_keys (development, unless dash-ssh-disable
+# turned SSH off), together in /run/ssh-keys (mode 600, CRs dropped: the card is FAT, which keeps no modes). Both, not
+# one or the other as on the T113: a pairing on the bench must not lock the card's key out.
+# The host key stays on the card (/mnt/sd/dropbear, made once if missing): the same fingerprint at every boot; without a
+# card (running from the NOR), in /data/ssh.
+# The dash runs this after its pairing added a key (app/pair.c) and when its SSH switch goes on: the restart takes the
+# keys as they are now; open sessions stay. "boot" (S50dropbear): reads the flag, changes nothing.
+# Exit: 0 running, 2 on but no key yet (run again after pairing), 3 off (boot only), 1 error.
+# DASH_SSH_*: other paths and extra Dropbear arguments (tests).
+S=${DASH_SSH_DIR:-/data/ssh} C=${DASH_SSH_CARD:-/mnt/sd/authorized_keys} R=${DASH_SSH_RUN:-/run/ssh-keys}
+H=${DASH_SSH_HOSTKEY:-/mnt/sd/dropbear/dropbear_ed25519_host_key} PID=${DASH_SSH_PID:-/var/run/dropbear.pid}
+# no card (running from the NOR): the host key in /data/ssh
+[ -n "${DASH_SSH_HOSTKEY:-}" ] || grep -q " /mnt/sd " /proc/mounts || H=$S/dropbear_ed25519_host_key
+umask 077
+mkdir -p $S $R && chmod 700 $R || exit 1
+[ "$1" = boot ] || { touch $S/enabled && rm -f $S/disabled; } || exit 1
+{
+	[ -e $S/enabled ] && [ -s $S/authorized_keys ] && awk 1 $S/authorized_keys   # awk 1: a last line without its newline
+	[ -s $C ] && [ ! -e $S/disabled ] && awk 1 $C
+} 2>/dev/null | tr -d '\r' > $R/authorized_keys.new && mv $R/authorized_keys.new $R/authorized_keys || exit 1
+K=; [ -s $R/authorized_keys ] && K=1
+[ -n "$K" ] || [ "$1" != boot ] || { echo "ssh: off"; exit 3; }
+if [ ! -s $H ]; then   # made aside, then moved: a power cut leaves no half key
+	mkdir -p "${H%/*}"; rm -f $H.new
+	dropbearkey -t ed25519 -f $H.new >/dev/null 2>&1 && mv $H.new $H || { echo "ssh: no host key" >&2; exit 1; }
+	dropbearkey -y -f $H 2>/dev/null | grep "^ssh-" > $H.pub
+fi
+[ -n "$K" ] || { echo "ssh: on, no key yet"; exit 2; }
+# a restart takes the keys file as it is now; open sessions stay
+if start-stop-daemon -K -q -p $PID; then i=0; while [ -d /proc/$(cat $PID 2>/dev/null || echo none) ] && [ $i -lt 5 ]; do sleep 1; i=$((i+1)); done; fi
+start-stop-daemon -S -q -p $PID -x /usr/sbin/dropbear -- -s -r $H -D $R -P $PID $DASH_SSH_ARGS || { echo "ssh: dropbear did not start" >&2; exit 1; }
+echo "ssh: on"

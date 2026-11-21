@@ -1,0 +1,54 @@
+#!/bin/sh
+# A tried boot (U-Boot booted Image.try once: "try=kernel" in the command line; with it the initramfs mounted
+# rootfs.sqfs.try: /.rootfs-tried) is kept once what every healthy start reaches is there:
+#   the dash on screen: ready (/run/dash-ready: its display opened in good time) and its first frame drawn
+#   (/run/dash-shown);
+#   the Wi-Fi chip working: the station sees networks (any: no saved one need be in range), or Android Auto's access
+#   point is up (/run/dash-aa: AA left on holds the radio, and the station stays off);
+#   SSH listening, when it is on with a key (/run/ssh-keys/authorized_keys): with no console, the way back in.
+# Kept: the .try files take the old ones' places, the root and the built-in flash's files first, then the device tree
+# and Image.try, the try's mark, last (a keep cut short leaves Image.try beside the new root: dash-update confirm puts
+# it in place).
+# Not all within 90 s: given up: try.failed on the card for dash-update (the version goes on its failed list),
+# Image.try removed (never booted again, whatever U-Boot could mark), then a real power cycle by the MCU (S03mcu
+# power-cycle; a warm reboot would lose the Wi-Fi chip, and the fallback boot might not see that it is gone). A try
+# that ends before either (a power cut, a crash) is tried again at the next power-up, 3 starts at most (dash-update
+# confirm). A boot that is not a try changes nothing.
+# S98TRY_ROOT: the paths under another root (test/test_ota_try.sh).
+R=${S98TRY_ROOT:-}
+C=$R/mnt/sd
+case "$1" in
+start)
+	grep -q "try=kernel" $R/proc/cmdline && [ -f $C/Image.try ] || exit 0
+	(
+		ok() {
+			[ -e $R/.rootfs-tried ] && [ -e $R/run/dash-ready ] && [ -e $R/run/dash-shown ] || return 1
+			{ wpa_cli -p /run/wpa_supplicant -i wlan0 scan_results 2>/dev/null | grep -qE '^([0-9a-f]{2}:){5}[0-9a-f]{2}'; } ||
+				[ -e $R/run/dash-aa ] || return 1
+			[ -s $R/run/ssh-keys/authorized_keys ] || return 0
+			netstat -tln 2>/dev/null | grep -q ":22 "
+		}
+		i=0
+		while [ $i -lt 45 ] && ! ok; do sleep 2; i=$((i + 1)); done
+		if ok; then
+			for f in rootfs.sqfs nor/kernel.itb nor/u-boot-sunxi-with-spl.bin; do [ -f $C/$f.try ] && mv $C/$f.try $C/$f; done
+			sync
+			for f in f133.dtb Image; do [ -f $C/$f.try ] && mv $C/$f.try $C/$f; done
+			sync
+			# and a kernel.itb at the card's root: a card U-Boot from before (an update never rewrites the card's)
+			# boots it in place of Image, the old kernel under the root just kept
+			rm -f $C/try.boot $C/rootfs.try $C/kernel.itb
+			sync
+			echo "<5>S98try: the tried boot is kept" > $R/dev/kmsg
+		else
+			echo "<3>S98try: no dash, Wi-Fi or SSH on the tried boot (or its root not tried): back to the last good one" > $R/dev/kmsg
+			: > $C/try.failed
+			sync
+			rm -f $C/Image.try
+			sync
+			if [ -x $R/etc/init.d/S03mcu ]; then $R/etc/init.d/S03mcu power-cycle; sleep 120; fi
+			reboot   # the MCU did not cut the power: a reboot all the same (S03mcu then sees no Wi-Fi chip)
+		fi
+	) &
+	;;
+esac

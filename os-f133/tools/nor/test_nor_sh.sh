@@ -1,0 +1,110 @@
+#!/bin/sh
+# nor.sh against fake MTD devices (regular files) and stub flashcp / flash_eraseall (mount, umount for seed). Root in a
+# throwaway container:
+#   docker run --rm -v "$PWD/os-f133/tools/nor":/n:ro debian:stable sh /n/test_nor_sh.sh
+set -e
+N=$(cd "$(dirname "$0")" && pwd)
+T=/tmp/nortest
+rm -rf $T && mkdir -p $T/bin $T/img
+# the NOR's partitions (sun20i-d1s-srnubi-t313d.dts)
+cat > $T/mtd <<'EOF'
+dev:    size   erasesize  name
+mtd0: 01000000 00010000 "spi0.0"
+mtd1: 00100000 00010000 "boot"
+mtd2: 00440000 00010000 "kernel"
+mtd3: 00a40000 00010000 "rootfs"
+mtd4: 00080000 00010000 "data"
+EOF
+echo "console=tty0 panic=5" > $T/cmdline
+ff() { tr '\000' '\377' < /dev/zero | head -c "$1"; }
+# the stock chip: random, its GPT signature at 0xc200
+head -c 16777216 /dev/urandom > /dev/mtd0
+printf 'EFI PART' | dd of=/dev/mtd0 bs=1 seek=49664 conv=notrunc 2>/dev/null
+for p in 1:1048576 2:4456448 3:10747904 4:524288; do head -c ${p#*:} /dev/urandom > /dev/mtd${p%%:*}; done
+head -c 985489 /dev/urandom > $T/img/u-boot-sunxi-with-spl.bin
+head -c 4030000 /dev/urandom > $T/img/kernel.itb
+head -c 5955584 /dev/urandom > $T/img/rootfs.sqfs
+printf '#!/bin/sh\n[ "$1" = -v ] && shift\ndd if="$1" of="$2" conv=notrunc 2>/dev/null\n' > $T/bin/flashcp
+cat > $T/bin/flash_eraseall <<'EOF'
+#!/bin/sh
+# as busybox's: every byte 0xFF; with -j, a JFFS2 cleanmarker (12 bytes) at each 64 KiB erase block's start
+j=; [ "$1" = -j ] && j=1 && shift
+s=$(wc -c < "$1")
+tr '\000' '\377' < /dev/zero | head -c $s | dd of="$1" conv=notrunc 2>/dev/null
+i=0; while [ -n "$j" ] && [ $i -lt $s ]; do
+	printf '\205\031\003\040\014\000\000\000\261\260\036\344' | dd of="$1" bs=1 seek=$i conv=notrunc 2>/dev/null
+	i=$((i + 65536))
+done
+EOF
+chmod +x $T/bin/*
+export PATH=$T/bin:$PATH MTD=$T/mtd CMDLINE=$T/cmdline
+bad=0
+ok() { echo "ok    $*"; }
+no() { echo "FAIL  $*"; bad=$((bad + 1)); }
+same() { [ "$(head -c "$(wc -c < "$1")" "$2" | sha256sum)" = "$(sha256sum < "$1")" ]; }
+cm() { printf '\205\031\003\040\014\000\000\000\261\260\036\344'; }   # the JFFS2 cleanmarker of flash_eraseall -j
+erased() {   # as flash_eraseall -j leaves /data: each 64 KiB block a cleanmarker, then 0xFF
+	i=0; while [ $i -lt 8 ]; do
+		[ "$(dd if=/dev/mtd4 bs=65536 skip=$i count=1 2>/dev/null | sha256sum)" = "$( { cm; ff 65524; } | sha256sum)" ] || return 1
+		i=$((i + 1))
+	done
+}
+
+sh $N/nor.sh read $T/r.bin > /dev/null && cmp -s $T/r.bin /dev/mtd0 && ok "read: the file is the chip" || no read
+sh $N/nor.sh stock && ok "stock: the stock firmware is on the chip" || no "stock (stock chip)"
+cp /dev/mtd3 $T/rootfs.before
+sh $N/nor.sh flash $T/img > $T/out 2>&1 && no "flash without stock.bin went on" ||
+	{ grep -q "stock firmware is on the NOR" $T/out && cmp -s /dev/mtd3 $T/rootfs.before && ok "flash refused, nothing written: no copy of the stock chip"; } || no "guard"
+head -c 100 /dev/urandom >> $T/img/rootfs.sqfs; cp /dev/mtd0 $T/img/stock.bin
+truncate -s 10747905 $T/img/rootfs.sqfs
+sh $N/nor.sh flash $T/img > $T/out 2>&1 && no "an oversized rootfs went on" ||
+	{ grep -q "bigger than the rootfs" $T/out && cmp -s /dev/mtd3 $T/rootfs.before && ok "oversized rootfs refused, nothing written"; } || no size
+head -c 5955584 /dev/urandom > $T/img/rootfs.sqfs
+sh $N/nor.sh flash $T/img > $T/out 2>&1 && same $T/img/rootfs.sqfs /dev/mtd3 && same $T/img/kernel.itb /dev/mtd2 &&
+	same $T/img/u-boot-sunxi-with-spl.bin /dev/mtd0 && erased && [ ! -e $T/img/nor-data.bin ] &&
+	ok "flash with the stock copy: rootfs, kernel, U-Boot written, data erased (the stock firmware's: not saved)" || { no flash; cat $T/out; }
+sh $N/nor.sh stock && no "stock after the flash" || ok "stock: not once flashed"
+rm $T/img/stock.bin
+sh $N/nor.sh flash $T/img > $T/out 2>&1 && grep -q "U-Boot unchanged" $T/out && same $T/img/kernel.itb /dev/mtd2 &&
+	[ ! -e $T/img/nor-data.bin ] &&
+	ok "flash again (no stock firmware left): no copy needed, U-Boot left alone, kernel rewritten" || no reflash
+mkdir -p $T/root && head -c 5955584 /dev/urandom > $T/root/rootfs.sqfs
+ROOTFS=$T/root/rootfs.sqfs sh $N/nor.sh flash $T/img > $T/out 2>&1 && same $T/root/rootfs.sqfs /dev/mtd3 &&
+	ok "flash with ROOTFS= elsewhere (the card install's root beside nor/)" || { no "ROOTFS="; cat $T/out; }
+# the NOR's /data in use (a screen that ran from its NOR): saved beside stock.bin before the erase
+head -c 524288 /dev/urandom > /dev/mtd4; cp /dev/mtd4 $T/data.before
+sh $N/nor.sh flash $T/img > $T/out 2>&1 && cmp -s $T/img/nor-data.bin $T/data.before && erased &&
+	ok "flash saves the NOR's /data as nor-data.bin, then erases it" || { no "data backup"; cat $T/out; }
+sh $N/nor.sh flash $T/img > $T/out 2>&1 && cmp -s $T/img/nor-data.bin $T/data.before &&
+	ok "flash again (its /data erased): the saved copy kept" || { no "backup kept"; cat $T/out; }
+cp $T/data.before /dev/mtd4; cp /dev/mtd3 $T/rootfs.before
+STOCK=$T/nodir/stock.bin sh $N/nor.sh flash $T/img > $T/out 2>&1 && no "flash went on without saving /data" ||
+	{ grep -q "could not be saved" $T/out && cmp -s /dev/mtd4 $T/data.before && cmp -s /dev/mtd3 $T/rootfs.before &&
+		ok "/data that cannot be saved: flash refused, nothing erased or written"; } || no "backup failure"
+printf '#!/bin/sh\n[ "$1" = -v ] && shift\nhead -c 4096 /dev/zero | dd of="$2" conv=notrunc 2>/dev/null\n' > $T/bin/flashcp
+sh $N/nor.sh restore $T/r.bin > $T/out 2>&1 && no "a bad write passed" ||
+	{ grep -q "reads back wrong" $T/out && ok "a write that reads back wrong stops it"; } || no readback
+printf '#!/bin/sh\n[ "$1" = -v ] && shift\ndd if="$1" of="$2" conv=notrunc 2>/dev/null\n' > $T/bin/flashcp
+sh $N/nor.sh restore $T/r.bin > /dev/null && cmp -s $T/r.bin /dev/mtd0 && ok "restore: the chip is the stock image again" || no restore
+ff 524288 > /dev/mtd4
+sh $N/nor.sh restore $T/img/nor-data.bin > /dev/null && cmp -s /dev/mtd4 $T/data.before &&
+	ok "restore nor-data.bin: the data partition back" || no "restore data"
+head -c 1000 /dev/urandom > $T/odd.bin
+sh $N/nor.sh restore $T/odd.bin > $T/out 2>&1 && no "an odd-sized restore went on" ||
+	{ grep -q "neither" $T/out && cmp -s /dev/mtd4 $T/data.before && ok "restore of an odd size refused"; } || no "restore size"
+# seed with stub mount and umount (the NOR's /data a plain directory); a cp that fails stops it half-way
+printf '#!/bin/sh\necho "mount $*" >> %s/calls\n' $T > $T/bin/mount
+printf '#!/bin/sh\necho "umount $*" >> %s/calls\n' $T > $T/bin/umount
+chmod +x $T/bin/mount $T/bin/umount
+mkdir -p /mnt/sd/data && echo x > /mnt/sd/data/settings
+printf '#!/bin/sh\nexit 1\n' > $T/bin/cp && chmod +x $T/bin/cp && : > $T/calls
+sh $N/nor.sh seed > $T/out 2>&1 && no "a seed whose copy fails went on" ||
+	{ grep -q "^umount /tmp/nordata" $T/calls && ok "a seed that stops half-way unmounts the NOR's /data"; } || { no "seed trap"; cat $T/calls; }
+rm $T/bin/cp; : > $T/calls
+sh $N/nor.sh seed > $T/out 2>&1 && [ "$(grep -c '^umount' $T/calls)" = 1 ] && [ -f /tmp/nordata/settings ] &&
+	ok "a seed that completes: the card's /data copied, unmounted once" || { no seed; cat $T/out $T/calls; }
+echo "console=tty0 root=mtd:rootfs" > $T/cmdline
+sh $N/nor.sh read $T/x.bin > $T/out 2>&1 && no "ran while booted from the NOR" ||
+	{ grep -q "running from the NOR" $T/out && ok "refuses while running from the NOR"; } || no nor-boot
+echo "$bad failed"
+[ $bad = 0 ]

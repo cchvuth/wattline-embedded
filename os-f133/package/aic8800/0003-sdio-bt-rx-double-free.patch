@@ -1,0 +1,32 @@
+--- a/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/btsdio.c
++++ b/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/btsdio.c
+@@ -94,8 +94,14 @@
+ 
+ 	//bt_data_dump("btwrite", skb->data, skb->len);
+ 	err = rwnx_sdio_bt_send_req(g_rwnx_plat->sdiodev->rwnx_hw, skb->len, skb);
++	if (err == -EMSGSIZE) {	/* over the tunnel's 1024-byte message: it never fits, drop it */
++		data->hdev->stat.err_tx++;
++		kfree_skb(skb);
++		return 0;
++	}
+ 	if(err<0){
+-		printk("%s rwnx_sdio_bt_send_req error %d",__func__,err);
++		pr_err("%s rwnx_sdio_bt_send_req error %d\n",__func__,err);
++		skb_pull(skb, 1);	/* btsdio_work requeues it: the retry pushes the type byte again */
+ 		return err;
+ 	}
+ 
+@@ -164,11 +170,10 @@
+ 	//}
+ 	AICBT_INFO("skb type %d",type);
+ 	//bt_data_dump("bt_skb", skb, skb->len);
+-	ret = hci_recv_frame(hdev, skb);
++	ret = hci_recv_frame(hdev, skb);	/* consumes the skb, also on failure (hci0 down, unknown type) */
+ 	if(ret < 0){
+-		AICWFDBG(LOGERROR, "hci_recv_frame fail %d\n",ret);
++		pr_err_ratelimited("aic_btsdio: hci_recv_frame fail %d\n",ret);
+ 		hdev->stat.err_rx++;
+-		kfree_skb(skb);
+ 	}
+ 	return 0;
+ }

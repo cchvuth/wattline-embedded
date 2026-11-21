@@ -1,0 +1,267 @@
+--- a/drivers/ram/sunxi/dram_sun20i_d1.c
++++ b/drivers/ram/sunxi/dram_sun20i_d1.c
+@@ -12,12 +12,19 @@
+  * [1] https://github.com/szemzoa/awboot.git
+  */
+ 
++/*
++ * DRAM_CLK and DRAM_ZQ are only in the ARM Kconfig; on RISC-V these are the values. SRNUBI T313D (F133): the stock
++ * boot0's in-package DDR2, 528 MHz, ZQ 0x7b7bf9.
++ */
++
++/* F133 diagnostics: the debug() lines go to the SPL's log, which the board code puts on the SD card */
++#define DEBUG
+ #ifndef CONFIG_DRAM_CLK
+-#define CONFIG_DRAM_CLK 792
++#define CONFIG_DRAM_CLK 528
+ #endif
+ 
+ #ifndef CONFIG_DRAM_ZQ
+-#define CONFIG_DRAM_ZQ 0x007b7bfb
++#define CONFIG_DRAM_ZQ 0x007b7bf9
+ #endif
+ 
+ #define readl rv_readl
+@@ -37,7 +44,20 @@
+ #include <linux/delay.h>
+ 
+ #include "dram_sun20i_d1.h"
++#include <time.h>
++#include <stdarg.h>
++#include <asm/csr.h>
+ 
++/* F133 diagnostics: the driver's waits get a limit (100 ms), so a step that never ends shows in the log */
++#define F133_UNTIL(cond, what)	({ ulong _t = get_timer(0); bool _ok;			\
++				   while (!(_ok = (cond)) && get_timer(_t) < 100)	\
++					;						\
++				   if (!_ok)						\
++					printf("F133: timeout: %s\n", what);		\
++				   _ok; })
++
++bool f133_log_save(void);	/* board/sunxi/board-riscv.c */
++
+ #ifndef SUNXI_SID_BASE
+ #define SUNXI_SID_BASE	0x3006200
+ #endif
+@@ -517,8 +537,7 @@
+ 	writel(val | BIT(29), SUNXI_CCM_BASE + 0x10);
+ 
+ 	// wait for PLL to lock
+-	while ((readl(SUNXI_CCM_BASE + 0x10) & BIT(28)) == 0)
+-		;
++	F133_UNTIL(readl(SUNXI_CCM_BASE + 0x10) & BIT(28), "PLL_DDR lock");
+ 
+ 	udelay(20);
+ 
+@@ -652,8 +671,12 @@
+ 		 5,  9,  0,  0,  0, 21, 17, 20, 19, 11, 22 },
+ 	[5] = { 13,  2,  7,  9, 12, 19,  5,  1,  6,  3,  4,
+ 		 8, 10,  0,  0,  0, 21, 22, 18, 17, 11, 20 },
++	/*
++	 * DDR2 (F133/D1s): entry 17 is 18 in the SRNUBI T313D's stock boot0 (libdram V0.34; the other tables there match
++	 * these byte for byte), 1 in V0.24 (xfel's, which works on the F133 as well). Not what failed the training here.
++	 */
+ 	[6] = {  3, 10,  7, 13,  9, 11,  1,  2,  4,  6,  8,
+-		 5, 12,  0,  0,  0, 20,  1,  0, 21, 22, 17 },
++		 5, 12,  0,  0,  0, 20, 18,  0, 21, 22, 17 },
+ 	[7] = {  3,  2,  4,  7,  9,  1, 17, 12, 18, 14, 13,
+ 		 8, 15,  6, 10,  5, 19, 22, 16, 21, 20, 11 },
+ };
+@@ -805,8 +828,8 @@
+ 		//writel(0x52, 0x3103000); // prep PHY reset + PLL init + z-cal
+ 		writel(0x53, 0x3103000); // Go
+ 
+-		while ((readl(0x3103010) & 0x1) == 0) {
+-		} // wait for IDONE
++		if (!F133_UNTIL(readl(0x3103010) & 0x1, "IDONE after PIR 0x53"))
++			return 0;
+ 		udelay(10);
+ 
+ 		// 0x520 = prep DQS gating + DRAM init + d-cal
+@@ -830,8 +853,8 @@
+ 	setbits_le32(0x3103000, 0x1);		 // GO
+ 
+ 	udelay(10);
+-	while ((readl(0x3103010) & 0x1) == 0) {
+-	} // wait for IDONE
++	if (!F133_UNTIL(readl(0x3103010) & 0x1, "IDONE"))
++		return 0;
+ 
+ 	if (readl(0x70005d4) & BIT(16)) {
+ 		clrsetbits_le32(0x310310c, 0x06000000, 0x04000000);
+@@ -839,16 +862,16 @@
+ 
+ 		setbits_le32(0x3103004, 0x1);
+ 
+-		while ((readl(0x3103018) & 0x7) != 0x3) {
+-		}
++		if (!F133_UNTIL((readl(0x3103018) & 0x7) == 0x3, "STATR 3"))
++			return 0;
+ 
+ 		clrbits_le32(0x7010250, 0x1);
+ 		udelay(10);
+ 
+ 		clrbits_le32(0x3103004, 0x1);
+ 
+-		while ((readl(0x3103018) & 0x7) != 0x1) {
+-		}
++		if (!F133_UNTIL((readl(0x3103018) & 0x7) == 0x1, "STATR 1"))
++			return 0;
+ 
+ 		udelay(15);
+ 
+@@ -858,8 +881,8 @@
+ 			udelay(1);
+ 			writel(0x401, 0x3103000);
+ 
+-			while ((readl(0x3103010) & 0x1) == 0) {
+-			}
++			if (!F133_UNTIL(readl(0x3103010) & 0x1, "IDONE after PIR 0x401"))
++				return 0;
+ 		}
+ 	}
+ 
+@@ -870,8 +893,8 @@
+ 	}
+ 
+ 	// STATR = Zynq STAT? Wait for status 'normal'?
+-	while ((readl(0x3103018) & 0x1) == 0) {
+-	}
++	if (!F133_UNTIL(readl(0x3103018) & 0x1, "STATR normal"))
++		return 0;
+ 
+ 	setbits_le32(0x310308c, BIT(31));
+ 	udelay(10);
+@@ -1027,6 +1050,8 @@
+ //
+ static int mctl_core_init(const dram_para_t *para, const dram_config_t *config)
+ {
++	int ret;
++
+ 	mctl_sys_init(para, config);
+ 
+ 	mctl_vrefzq_init(para, config);
+@@ -1037,7 +1062,14 @@
+ 
+ 	mctl_set_timing_params(para, config);
+ 
+-	return mctl_channel_init(0, para, config);
++	ret = mctl_channel_init(0, para, config);
++
++	/* F133 diagnostics: the training status after each of the (up to three) runs */
++	printf("F133 core init tpr13 %08x para1 %08x para2 %08x -> %d: PGSR0 %08x STATR %08x DXGSR0 %08x %08x MODE %08x %08x\n",
++	       config->dram_tpr13, config->dram_para1, config->dram_para2, ret, readl(0x3103010), readl(0x3103018),
++	       readl(0x3103348), readl(0x31033c8), readl(0x3102000), readl(0x3102004));
++
++	return ret;
+ }
+ 
+ /*
+@@ -1259,10 +1291,14 @@
+ 
+ static int init_DRAM(int type, const dram_para_t *para)
+ {
++	/*
++	 * F133 diagnostics, type 1: no scan, the stock boot0's layout (13 rows, 4 banks, 2 KiB pages, one rank, 16
++	 * bits); type 2: that with the internal ZQ only
++	 */
+ 	dram_config_t config = {
+-		.dram_para1	= 0x000010d2,
++		.dram_para1	= type ? 0x000000d2 : 0x000010d2,
+ 		.dram_para2	= 0,
+-		.dram_tpr13	= CONFIG_DRAM_SUNXI_TPR13,
++		.dram_tpr13	= CONFIG_DRAM_SUNXI_TPR13 | (type ? BIT(0) : 0) | (type == 2 ? BIT(16) : 0),
+ 	};
+ 	u32 rc, mem_size_mb;
+ 
+@@ -1379,7 +1415,7 @@
+ 	.dram_zq	= CONFIG_DRAM_ZQ,
+ 	.dram_odt_en	= CONFIG_DRAM_SUNXI_ODT_EN,
+ 	.dram_mr0	= 0x1c70,
+-	.dram_mr1	= 0x42,
++	.dram_mr1	= 0x02,	/* the stock boot0's DDR2 EMR1 (Nezha DDR3: 0x42) */
+ 	.dram_mr2	= 0x18,
+ 	.dram_mr3	= 0,
+ 	.dram_tpr0	= 0x004a2195,
+@@ -1397,9 +1433,80 @@
+ 	.dram_tpr12	= CONFIG_DRAM_SUNXI_TPR12,
+ };
+ 
++/*
++ * SRNUBI T313D (F133): this C port of libdram fails the DQS gate training here (DXGSR0 0x13000000 on both lanes, rank
++ * 0 included). Tried first: what `xfel ddr f133` does, which works on the F133: xfel's clock set-up, then Allwinner's
++ * own libdram V0.24 (mctl_hal_f133.S, SPL only) with the stock sys_config [dram_para].
++ */
++#ifdef CONFIG_SPL_BUILD
++int aw_init_DRAM(int type, void *para);
++
++void sdelay(unsigned long us)
++{
++	udelay(us);
++}
++
++int sys_uart_printf(const char *fmt, ...)
++{
++	va_list va;
++
++	va_start(va, fmt);
++	vprintf(fmt, va);
++	va_end(va);
++	return 0;
++}
++
++/* xfel's f133-ddr sys_clock_init() steps the SPL leaves out: AHB, APB0, DMA, the MBUS reset and master gates */
++static void f133_xfel_clocks(void)
++{
++	writel((2 << 0) | (0 << 8), SUNXI_CCM_BASE + 0x510);		/* PSI/AHB: M 3 (from the crystal) */
++	setbits_le32(SUNXI_CCM_BASE + 0x510, 0x3 << 24);		/* then PLL_PERI(1x): 200 MHz */
++	udelay(1);
++	writel((2 << 0) | (1 << 8), SUNXI_CCM_BASE + 0x520);		/* APB0: M 3, N 2 */
++	setbits_le32(SUNXI_CCM_BASE + 0x520, 0x3 << 24);		/* from PLL_PERI(1x): 100 MHz */
++	udelay(1);
++	setbits_le32(SUNXI_CCM_BASE + 0x70c, BIT(16));		/* DMA out of reset */
++	udelay(20);
++	setbits_le32(SUNXI_CCM_BASE + 0x70c, BIT(0));			/* and clocked */
++	setbits_le32(SUNXI_CCM_BASE + 0x540, BIT(30));		/* MBUS out of reset */
++	udelay(1);
++	writel(0x00000d87, SUNXI_CCM_BASE + 0x804);			/* MBUS master clock gates */
++}
++#endif
++
+ unsigned long sunxi_dram_init(void)
+ {
+-	return init_DRAM(0, &para) * 1024UL * 1024;
++#ifdef CONFIG_SPL_BUILD
++	/* the stock sys_config [dram_para] (= xfel's f133 ddr_param); libdram writes what it finds back into it */
++	u32 p[32] = {
++		528, 2, 0x007b7bf9, 0, 0x000000d2, 0, 0x00000e73, 0x02, 0, 0,
++		0x00471992, 0x0131a10c, 0x00057041, 0xb4787896, 0, 0x48484848, 0x00000048, 0x1621121e,
++		0, 0, 0, 0x00030010, 0x00000035, 0x34000000,
++	};
++	unsigned long mb;
++
++	printf("F133: PSI %08x APB0 %08x DMA_BGR %08x MBUS %08x MBUS_GATES %08x before xfel's clocks\n",
++	       readl(SUNXI_CCM_BASE + 0x510), readl(SUNXI_CCM_BASE + 0x520), readl(SUNXI_CCM_BASE + 0x70c),
++	       readl(SUNXI_CCM_BASE + 0x540), readl(SUNXI_CCM_BASE + 0x804));
++	f133_xfel_clocks();
++	csr_set(CSR_MSTATUS, SR_FS);		/* libdram uses the FPU */
++	csr_set(0x7c0, BIT(22));		/* MXSTATUS.THEADISAEE: and the T-Head instructions */
++	printf("F133: libdram at %lu ms\n", get_timer(0));
++	mb = aw_init_DRAM(0, p);
++	printf("F133: libdram: %lu MiB at %lu ms, para1 %08x para2 %08x tpr13 %08x\n", mb, get_timer(0), p[4], p[5],
++	       p[23]);
++	if (!mb) {
++		f133_log_save();
++		/* the C port as well, after the same clocks (its scan fails fast; its fixed layout hung on DRAM) */
++		printf("F133: C driver at %lu ms\n", get_timer(0));
++		mb = init_DRAM(0, &para);
++	}
++#else
++	unsigned long mb = init_DRAM(0, &para);
++#endif
++	printf("F133: DRAM %lu MiB\n", mb);
++
++	return mb * 1024UL * 1024;
+ };
+ 
+ #ifdef CONFIG_RAM		/* using the driver model */

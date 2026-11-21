@@ -1,0 +1,7 @@
+config BR2_PACKAGE_G2DROT
+	bool "g2drot"
+	depends on BR2_LINUX_KERNEL
+	help
+	  /dev/g2drot: the F133's G2D rotation unit for the dash's flush
+	  (the landscape canvas turned into the portrait framebuffer by the
+	  2D engine: 68 -> 25 ms a scrolled frame).

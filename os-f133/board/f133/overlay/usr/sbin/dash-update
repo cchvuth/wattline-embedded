@@ -1,0 +1,263 @@
+#!/bin/sh
+# dash-update {status|check|fetch|apply|install|confirm|auto}: over-the-air updates from the project's GitHub releases
+# (the T113 Dash's dash-update, for the F133).
+#
+# The F133 boots Image, f133.dtb and rootfs.sqfs from the card's F133 partition (/mnt/sd), and tries new ones once:
+# U-Boot boots Image.try (+ f133.dtb.try) once, beside rootfs.sqfs.try, marking try.boot ("try=kernel" on the command
+# line, the one boot the initramfs mounts rootfs.sqfs.try); S98try renames them over the old ones once the screen
+# works, else marks the card try.failed and power-cycles, and try.boot sends the next boot back to the old ones (the
+# card's try-once). An update is a release's files put there as the .try files: installing does not reboot, the new
+# version is tried at the next power-up, so the screen never restarts mid-drive. A version given up that way goes on
+# a list automatic updates skip (ota/failed); a try cut short before S98try decides is tried again, 3 starts at most.
+#
+#   check    is there a newer release? (only with internet, never on the car's network)
+#   fetch    download the newest release's OTA bundle, check its signature + sha256, unpack it (ota/<version>/)
+#   apply    put the unpacked files in place as the .try files, for the next start (`now`: a power cycle at once)
+#   confirm  what came of the last apply (S99ota runs this): kept, given up (rolled back), still on trial, or armed
+#   install  fetch and apply the newest release (the Install button; also retries a version that failed before)
+#   auto     the same, but never a version that already failed to start here (S99ota, automatic updates on)
+#   status   print the state the UI shows (also in /run/dash-update.status)
+#
+# Trust: the release's SHA256SUMS must carry a valid Ed25519 signature by the project key baked into the image
+# (/etc/wattline-ota.pub.raw), and the bundle must match its line there. TLS (curl + CA bundle) is a second layer.
+# The F133's bundles are wattline-f133-ota-<version>.tar.gz: a T113 Dash never takes one (nor this screen a T113's),
+# whichever repository carries them. DASH_UPDATE_*: other paths (test/device-test.sh).
+set -u
+REPO=${DASH_UPDATE_REPO:-cchvuth/wattline-embedded}
+API=${DASH_UPDATE_API:-https://api.github.com/repos/$REPO/releases?per_page=20}
+PUB=${DASH_UPDATE_PUB:-/etc/wattline-ota.pub.raw}
+CMDLINE=${DASH_UPDATE_CMDLINE:-/proc/cmdline}
+MOUNTS=${DASH_UPDATE_MOUNTS:-/proc/mounts}
+TRIED=${DASH_UPDATE_TRIED:-/.rootfs-tried}   # the initramfs's mark in a root it is trying
+ID=${DASH_UPDATE_IMAGEID:-/etc/image-id}      # this image's version and build date (post-build.sh)
+KEEPER=${DASH_UPDATE_KEEPER:-/etc/init.d/S98try}
+SD=${DASH_UPDATE_SD:-/mnt/sd}      # the card's F133 partition, mounted by the initramfs
+RUN=${DASH_UPDATE_RUN:-/run}
+OTA=$SD/ota                        # downloads (ota/<version>/), the version on trial (ota/trying), ota/failed
+STATUS=$RUN/dash-update.status
+LOCK=$RUN/dash-update.lock
+NAME=wattline-f133-ota             # the bundle: NAME-<version>.tar.gz
+# put in place in this order: Image.try, last, is what makes U-Boot try. nor/: the same version's files for the built-in
+# flash (dash-nor copies the card install there), kept beside the card's own (S98try keeps them with the root)
+FILES="rootfs.sqfs nor/kernel.itb nor/u-boot-sunxi-with-spl.bin f133.dtb Image"
+CAR_NET=S3XY_OBD                   # the car's adapter: no internet there
+
+log() { echo "dash-update: $*"; logger -t dash-update "$*" 2>/dev/null || true; }
+status() {   # status STATE [MORE...]: one line the UI can read
+	printf 'state=%s\ncurrent=%s\nlatest=%s\nnote=%s\n' "$1" "$(current_version)" "${LATEST:-}" "${2:-}" > "$STATUS.tmp" &&
+		mv "$STATUS.tmp" "$STATUS"
+}
+fail() { log "$*"; status error "$*"; exit 1; }
+lock() {   # one at a time (S99ota's auto beside a tap on Install); a lock left by a killed run is taken over
+	if ! mkdir $LOCK 2>/dev/null; then
+		p=$(cat $LOCK/pid 2>/dev/null)
+		if [ -n "$p" ]; then kill -0 "$p" 2>/dev/null && { log "busy: another dash-update runs"; exit 1; }
+		elif [ $(($(date +%s) - $(date -r $LOCK +%s 2>/dev/null || echo 0))) -lt 10 ]; then   # made, its pid not written yet
+			log "busy: another dash-update runs"; exit 1
+		fi
+		rm -rf $LOCK; mkdir $LOCK || exit 1
+	fi
+	echo $$ > $LOCK/pid; trap 'rm -rf $LOCK' EXIT; trap 'exit 1' INT TERM HUP
+}
+
+# the version is image-id's prefix when it is one (0.1.0-20261120-...); a bare build stamp counts as 0 (any release is newer)
+current_version() { v=$(cut -d- -f1 $ID 2>/dev/null); case "$v" in [0-9]*.[0-9]*) echo "$v" ;; *) echo 0 ;; esac; }
+newer() { echo "$1 $2" | awk '{ n = split($1, a, "."); split($2, b, "."); for (i = 1; i <= 3; i++) { if (a[i] + 0 > b[i] + 0) exit 0; if (a[i] + 0 < b[i] + 0) exit 1 } exit 1 }'; }
+card_rw() { grep -q "^[^ ]* $SD vfat rw" $MOUNTS; }
+sz() { set -- $(ls -ln "$1" 2>/dev/null) 0 0 0 0 0; echo $5; }   # (busybox here has no stat)
+try_left() { for f in $FILES; do [ -e "$SD/$f.try" ] && echo "$f.try"; done; }   # .try files on the card
+whole() { [ -e $SD/Image.try ] && [ -e $SD/rootfs.sqfs.try ]; }   # what U-Boot tries: a kernel with its root
+this_is_a_try() { grep -q 'try=kernel' $CMDLINE || [ -e $TRIED ]; }
+
+# The car's adapter network has no internet; never try there, nor spend its link on it.
+on_car_network() { [ "$(wpa_cli -i wlan0 status 2>/dev/null | sed -n 's/^ssid=//p')" = "$CAR_NET" ]; }
+
+# What an update needs: an image that keeps tries (S98try), the card writable, and nothing on trial: an earlier
+# apply not yet tried or decided (confirm says which), nor .try files put there by hand.
+can_update() {
+	[ -x $KEEPER ] || fail "this image keeps no tried boot (no S98try): put the current image on the card once"
+	card_rw || fail "the card is not writable"
+	cmd_confirm >/dev/null || exit 1   # a try still running: says so
+	case $(sed -n 's/^state=//p' $STATUS) in armed|trial-failed) exit 1 ;; esac
+	[ -z "$(try_left)" ] || fail "a tried boot is pending (.try files on the card): the next start first"
+}
+
+# TLS needs the right time, and the F133 keeps none across a power-off (its RTC has no battery): until NTP (udhcpc's
+# hook) or the car sets it, the clock is in 1970 and every certificate looks "not yet valid". Failing those, take the
+# time from an HTTP Date header (GitHub's own, fetched without certificate checks: only that header is used, never
+# content, and the release signature does not depend on the clock). Only a year from the image's build to 10 after
+# counts as set.
+BUILD_YEAR=$(grep -o '20[0-9][0-9][01][0-9][0-3][0-9]' $ID 2>/dev/null | head -n 1 | cut -c1-4); BUILD_YEAR=${BUILD_YEAR:-2026}
+clock_ok() { y=$(date -u +%Y); [ "$y" -ge "$BUILD_YEAR" ] && [ "$y" -le $((BUILD_YEAR + 10)) ]; } 2>/dev/null
+set_clock() {
+	clock_ok && return 0
+	for u in https://api.github.com http://www.google.com; do
+		d=$(curl -skI --max-time 8 "$u" 2>/dev/null | tr -d '\r' | sed -n 's/^[Dd]ate: [A-Za-z]*, //p' | head -n 1)   # 14 Nov 2026 15:00:39 GMT
+		[ -n "$d" ] && date -u -s "${d% GMT}" -D "%d %b %Y %H:%M:%S" >/dev/null 2>&1 && clock_ok && break
+	done
+	clock_ok || return 1
+	log "clock set to $(date -u) from the network"
+}
+
+latest_release() {   # -> LATEST (version), BASE (download URL of that release's assets)
+	[ -n "${BASE:-}" ] && return 0   # asked already in this run (auto, then install)
+	LATEST=; BASE=
+	on_car_network && { status skipped "on the car's network"; return 1; }
+	set_clock || { status offline "no internet (could not get the time)"; return 1; }
+	J=$(curl -sSL --max-time 15 -w '\n%{http_code}' -H 'Accept: application/vnd.github+json' "$API" 2>/dev/null) || { status offline "no internet"; return 1; }
+	code=$(printf '%s' "$J" | tail -n 1); J=$(printf '%s' "$J" | sed '$d')   # the status, on curl's last line
+	case $code in
+	200) ;;
+	403|429) status offline "GitHub's limit for this network: later"; return 1 ;;   # 60 an hour per address (a shared hotspot)
+	*) status offline "no answer from GitHub ($code)"; return 1 ;;
+	esac
+	# every OTA bundle the releases carry; the highest version wins (prereleases count: all of ours are)
+	U=$(echo "$J" | grep -o "\"browser_download_url\": *\"[^\"]*/$NAME-[0-9][0-9.]*\\.tar\\.gz\"" | sed 's/.*"\(https[^"]*\)"$/\1/' |
+		awk -F"$NAME-" '{ v = $2; sub(/\.tar\.gz$/, "", v); split(v, p, "."); printf "%06d%06d%06d %s %s\n", p[1], p[2], p[3], v, $0 }' |
+		sort -r | head -n 1)
+	[ -n "$U" ] || { status error "no OTA bundle in the releases"; return 1; }
+	LATEST=$(echo "$U" | cut -d' ' -f2); BASE=$(echo "$U" | cut -d' ' -f3); BASE=${BASE%/*}
+}
+
+cmd_check() {
+	cmd_confirm >/dev/null; case $(sed -n 's/^state=//p' $STATUS) in armed|trial|trial-failed) cat $STATUS; return 0 ;; esac
+	latest_release || { cat $STATUS 2>/dev/null; return 0; }
+	if newer "$LATEST" "$(current_version)"; then status available; else status current; fi
+	cat $STATUS
+}
+
+cmd_fetch() {
+	can_update
+	latest_release || return 1
+	newer "$LATEST" "$(current_version)" || { status current; log "already on $(current_version)"; return 0; }
+	W=$OTA/$LATEST; B=$NAME-$LATEST.tar.gz
+	for d in $OTA/*/; do [ -d "$d" ] && [ "${d%/}" != "$W" ] && rm -rf "$d"; done   # a superseded release's download
+	grep -qx "$LATEST" $OTA/failed 2>/dev/null && rm -rf "$W/b"   # a retry of a version that failed here: checked anew
+	[ "$(cat "$W/b/version" 2>/dev/null)" = "$LATEST" ] && { status ready; log "$LATEST already unpacked"; return 0; }
+	mkdir -p "$W" || fail "cannot write $W"
+	status downloading "$LATEST"
+	rm -f "$W/SHA256SUMS" "$W/SHA256SUMS.sig"   # always anew: a release re-signed since must not be stitched to the old
+	for f in SHA256SUMS SHA256SUMS.sig "$B"; do
+		curl -fsSL --max-time 900 --speed-limit 1024 --speed-time 60 -C - -o "$W/$f" "$BASE/$f"; r=$?   # a dead link: given up in a minute
+		case $r in
+		0) ;;
+		22|33|36) rm -f "$W/$f"; curl -fsSL --max-time 900 --speed-limit 1024 --speed-time 60 -o "$W/$f" "$BASE/$f" || fail "download $f" ;;   # range refused: anew
+		*) fail "download $f broke off: the next try goes on from there" ;;
+		esac
+	done
+	status verifying "$LATEST"
+	sig-verify "$PUB" "$W/SHA256SUMS.sig" "$W/SHA256SUMS" || { rm -rf "$W"; fail "release $LATEST: bad signature, discarded"; }
+	want=$(awk -v f="$B" '{ n = $2; sub(/^\*/, "", n); if (n == f) print $1 }' "$W/SHA256SUMS")
+	[ -n "$want" ] && [ "$want" = "$(sha256sum "$W/$B" | cut -d' ' -f1)" ] || { rm -rf "$W"; fail "release $LATEST: bundle does not match SHA256SUMS, discarded"; }
+	status unpacking "$LATEST"
+	rm -rf "$W/b.new"; mkdir -p "$W/b.new"
+	gzip -dc "$W/$B" | tar -xf - -C "$W/b.new" || { rm -rf "$W/b.new"; fail "unpack $B"; }   # busybox tar: no -z
+	for f in $FILES; do [ -s "$W/b.new/$f" ] || { rm -rf "$W/b.new"; fail "bundle has no $f"; }; done
+	v=$(cat "$W/b.new/version" 2>/dev/null)
+	[ "$v" = "$LATEST" ] || { rm -rf "$W/b.new"; fail "bundle $LATEST says it is version '$v'"; }
+	# what fits U-Boot's load addresses (uboot.fragment: the kernel at 0x40200000, the DTB at 0x43000000, ramoops 8 MiB
+	# above); rootfs.sqfs is never loaded whole (loop-mounted from the card), only kept sane
+	[ "$(sz "$W/b.new/Image")" -le 33554432 ] && [ "$(sz "$W/b.new/f133.dtb")" -le 1048576 ] &&
+		[ "$(sz "$W/b.new/rootfs.sqfs")" -le 268435456 ] || { rm -rf "$W/b.new"; fail "bundle $LATEST: a file too big to boot"; }
+	# and what the built-in flash's partitions hold (nor.sh checks it again before writing)
+	[ "$(sz "$W/b.new/rootfs.sqfs")" -le 10747904 ] && [ "$(sz "$W/b.new/nor/kernel.itb")" -le 4456448 ] &&
+		[ "$(sz "$W/b.new/nor/u-boot-sunxi-with-spl.bin")" -le 1048576 ] ||
+		{ rm -rf "$W/b.new"; fail "bundle $LATEST: a file too big for the built-in flash"; }
+	rm -f "$W/$B" && mv "$W/b.new" "$W/b" && sync || fail "unpack $B"
+	log "$LATEST unpacked"; status ready
+}
+
+cmd_apply() {
+	can_update
+	W=$(ls -d $OTA/*/b 2>/dev/null | head -n 1); LATEST=$(cat "$W/version" 2>/dev/null)
+	[ -n "$LATEST" ] || fail "nothing unpacked (fetch first)"
+	# an older try's marks would have the new files skipped or given up (a kernel.itb at the card's root stays until
+	# S98try keeps the try: a card U-Boot from before boots it in place of Image, so a try given up goes back to it)
+	rm -f $SD/try.boot $SD/rootfs.try $SD/try.failed $OTA/tries
+	echo "$LATEST" > $OTA/trying && sync || fail "cannot write $OTA/trying"   # first: a cut apply is still noticed
+	mkdir -p $SD/nor || fail "cannot make $SD/nor"
+	for f in $FILES; do mv "$W/$f" "$SD/$f.try" || fail "cannot put $f in place"; done
+	sync; rm -rf "${W%/b}"
+	log "$LATEST put in place: tried at the next power-up, kept once the screen works (S98try)"
+	status armed "starts at the next power-up"
+	# now: a power cycle (S03mcu): a warm reboot would leave the try without its Wi-Fi chip, and so given up
+	[ "${1:-}" = now ] && { sync; if [ -x /etc/init.d/S03mcu ]; then /etc/init.d/S03mcu power-cycle; else reboot; fi; }
+	return 0
+}
+
+# What came of the last apply (ota/trying names its version):
+#   on trial: this boot is the try, S98try still to decide (1: S99ota looks again);
+#   armed: its files there (Image.try, put in place last, with rootfs.sqfs.try), not tried yet;
+#   kept: this root is that version (S98try took the files; what a keep cut short left as .try is put in place);
+#   tried, not decided (no try.failed: the power went, or the try crashed, before S98try's verdict): armed again for
+#   the next power-up, 3 starts in all (ota/tries counts the undecided ones);
+#   given up (try.failed from S98try, or the third undecided start): the files and marks cleared, the version on the
+#   failed list. Anything else (a cut apply: no Image.try) is cleared without holding it against the version.
+cmd_confirm() {
+	V=$(cat $OTA/trying 2>/dev/null)
+	if [ -z "$V" ]; then case $(sed -n 's/^state=//p' $STATUS 2>/dev/null) in ''|armed|trial) status ok ;; esac; return 0; fi
+	LATEST=$V; left=$(try_left)
+	if [ -n "$left" ] && this_is_a_try; then status trial "being tried out"; return 1; fi
+	if whole && [ ! -e $SD/try.boot ]; then status armed "starts at the next power-up"; return 0; fi
+	card_rw || { status error "the card is not writable"; return 1; }
+	if [ "$(current_version)" = "$V" ]; then   # its root runs
+		for f in $left; do mv -f "$SD/$f" "$SD/${f%.try}" || { status error "cannot put $f in place"; return 1; }; done
+		rm -f $SD/try.boot $SD/rootfs.try $SD/try.failed $OTA/tries $OTA/trying; sync
+		log "version $V kept"; status ok "updated to $V"
+		if [ -f $OTA/failed ]; then grep -vx "$V" $OTA/failed > $OTA/failed.new; mv -f $OTA/failed.new $OTA/failed; fi
+		return 0
+	fi
+	n=$(cat $OTA/tries 2>/dev/null); case $n in [0-9]) ;; *) n=0 ;; esac; n=$((n + 1))
+	if whole && [ ! -e $SD/try.failed ] && [ $n -lt 3 ]; then
+		echo $n > $OTA/tries && rm -f $SD/try.boot $SD/rootfs.try && sync || { status error "the card is not writable"; return 1; }
+		log "version $V: start $n ended before it was decided: tried again at the next power-up"
+		status trial-failed "start $n of 3 ended before it was decided"
+		return 0
+	fi
+	gave=; { whole || [ -e $SD/try.failed ]; } && gave=1
+	if [ -n "$gave" ]; then mkdir -p $OTA; grep -qx "$V" $OTA/failed 2>/dev/null || echo "$V" >> $OTA/failed; fi
+	rm -f $SD/Image.try; for f in $left; do rm -f "$SD/$f"; done   # Image.try first: the rest is never booted
+	W=$(ls -d $OTA/*/b 2>/dev/null | head -n 1); [ -n "$W" ] && rm -rf "${W%/b}"   # a cut apply's download, part moved
+	rm -f $SD/try.boot $SD/rootfs.try $SD/try.failed $OTA/tries $OTA/trying; sync
+	if [ -n "$gave" ]; then
+		log "version $V did not start: back on $(current_version), not installed automatically again"
+		status rolled-back "version $V did not start"
+	else
+		log "the update to $V was cut short: cleared"; status error "the update to $V was cut short: install it again"
+	fi
+	return 0
+}
+
+# only the newest release itself, and only while it is newer than what runs
+cmd_install() { cmd_fetch && [ "$(cat $OTA/$LATEST/b/version 2>/dev/null)" = "$LATEST" ] && newer "$LATEST" "$(current_version)" && cmd_apply; }
+cmd_auto() {
+	can_update   # records a rollback first; armed or on trial: says so and stops
+	latest_release || return 1
+	newer "$LATEST" "$(current_version)" || { status current; return 0; }   # running it (a retry by hand that took)
+	grep -qx "$LATEST" $OTA/failed 2>/dev/null && { status failed-before "version $LATEST did not start here: install it by hand to retry"; return 1; }
+	cmd_install
+}
+
+# Updates come with the card install only: the system on the card, whose U-Boot tries a new version once. A screen
+# running from its NOR (root=mtd:...) has one system there and a U-Boot that boots only it, card or not: it says so
+# (the UI shows "Updates need the SD card install") and does nothing else
+if grep -q 'root=mtd:' $CMDLINE; then
+	case "${1:-}" in check|fetch|apply|confirm|install|auto|status) status card-only "the screen runs from its built-in flash" ;; esac
+	case "${1:-}" in status) cat $STATUS ;; check|fetch|apply|install) exit 1 ;; esac
+	exit 0
+fi
+# a card install whose card is gone (or not mounted): nowhere for an update to go, and its download would fill the RAM
+case "${1:-}" in fetch|apply|install|auto)
+	[ -n "${DASH_UPDATE_SD:-}" ] || grep -q " $SD " /proc/mounts || { status error "updates need the card"; exit 1; } ;;
+esac
+case "${1:-}" in check|fetch|apply|confirm|install|auto) lock ;; esac
+case "${1:-}" in
+	check) cmd_check ;;
+	fetch) cmd_fetch ;;
+	apply) cmd_apply "${2:-}" ;;
+	confirm) cmd_confirm ;;
+	install) cmd_install ;;
+	auto) cmd_auto ;;
+	status) cat $STATUS 2>/dev/null || { status idle; cat $STATUS; } ;;
+	*) echo "usage: dash-update {status|check|fetch|apply [now]|install|confirm|auto}" >&2; exit 2 ;;
+esac

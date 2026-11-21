@@ -1,0 +1,23 @@
+--- a/common/spl/spl.c
++++ b/common/spl/spl.c
+@@ -216,6 +216,10 @@
+ }
+ #endif
+ 
++#ifdef CONFIG_TARGET_SUN20I_D1
++bool f133_log_save(void);
++#endif
++
+ __weak void spl_board_prepare_for_boot(void)
+ {
+ 	/* Nothing to do! */
+@@ -724,6 +728,9 @@
+ 			       ret);
+ 		else
+ 			puts(SPL_TPL_PROMPT "failed to boot from all boot devices\n");
++#ifdef CONFIG_TARGET_SUN20I_D1
++		f133_log_save();	/* SRNUBI T313D: why, onto the SD card (board/sunxi/board-riscv.c) */
++#endif
+ 		hang();
+ 	}
+ 

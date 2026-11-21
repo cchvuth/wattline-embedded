@@ -1,0 +1,39 @@
+#!/bin/sh
+#
+# Run the mdev daemon (Buildroot's S10mdev, for hotplug) without its coldplug: the one driver the boot needs, the Wi-Fi
+# chip's, is loaded by S05wifi in the background. The coldplug's walk of /sys (find, then modprobe for every alias)
+# took ~3 s on this core and then loaded that driver in the foreground (~6 s more), all before the rest of the boot.
+#
+
+DAEMON="mdev"
+PIDFILE="/var/run/$DAEMON.pid"
+
+
+start() {
+	echo -n "Starting $DAEMON... "
+	start-stop-daemon -S -b -m -p $PIDFILE -x /sbin/mdev -- -df
+	[ $? -eq 0 ] && echo "OK" || echo "ERROR"
+
+}
+
+stop() {
+	echo -n "Stopping $DAEMON... "
+	start-stop-daemon -K -p $PIDFILE
+	[ $? -eq 0 ] && echo "OK" || echo "ERROR"
+}
+
+restart() {
+	stop
+	start
+}
+
+case "$1" in
+  start|stop|restart)
+	"$1"
+	;;
+  *)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+esac
+
+exit $?

@@ -1,0 +1,189 @@
+#!/bin/sh
+# dash-aa start|restore|stop|forget: wireless Android Auto on demand on the F133 screen (SRNUBI T313D), from the dash's
+# AA button (the T113 Dash's dash-aa, for this hardware). It stays on across restarts: /data/aa-on is written once it is
+# up and removed by stop, and the dash runs `restore` at its start while the file is there: as start, but without the
+# 2-minute pairing window (nobody tapped). /run/dash-aa marks it up, for the button.
+#
+# Up: a 5 GHz AP for the phone (ch36, WPA2-PSK), the receiver (aa serve: TCP 5288 + TLS, the picture into the split
+# view's region through spike-vdec) and the Bluetooth start (aa mcu). This screen's classic Bluetooth is its power MCU,
+# whose firmware owns the Android Auto RFCOMM service: mcud (S03mcu) hands aa the channel when the phone opens it, and aa
+# gives the phone the AP's address and credentials there. The phone has to be paired with the screen's Bluetooth: start
+# opens a 2-minute window for that; a phone paired before connects at any time.
+#
+# The radio, as the T113: the station's link is dropped for the session (wpa_cli disconnect, reconnect at stop) so the
+# one radio serves the AP alone on its channel; the car link rides the Commander's Bluetooth meanwhile. The AP gets an
+# interface of its own (ap0, beside wlan0); if ap0 cannot be made or its AP does not start, or with /data/wifi/aa-solo,
+# the AP takes wlan0 and the station stops until stop. Either way a settings save
+# waits for stop (/run/dash-aa-radio): wifi-connect restarts every wpa_supplicant, the AP's included. The country, the
+# device's own setting (two letters), comes from /data/wifi/country if there.
+#
+# The head-unit certificate is user-supplied at /etc/wattline/aa.{crt,key}; without a usable one start refuses (and the
+# dash hides the button).
+SSID=${SSID:-WattlineAA}
+# A fresh random passphrase each session: a fixed one would be in this public repo. The phone needs no setup for it:
+# it gets the passphrase over Bluetooth (the paired AA channel) every time it connects.
+PSK=${PSK:-$(od -An -tx1 -N10 /dev/urandom 2>/dev/null | tr -d ' \n')}   # 20 hex digits
+IP=${IP:-192.168.53.1}   # the AP's /24: not the car's 192.168.4.x, nor a phone hotspot's 192.168.43.x
+CERT=/etc/wattline/aa.crt
+MARK=/run/dash-aa
+
+mcu() { printf '%s\n' "$@" | mcud ctl 1 >/dev/null 2>&1; }   # AT# commands to the MCU, through mcud
+# Hooks for additions kept outside this repository (absent on a plain image), output in /data/log/hook-<name>.log:
+#  - /data/hooks/aa-start: once the access point is up, before aa serve and aa mcu. Gets IFACE, SSID, PSK and IP. (A
+#    helper may take a channel of its own from mcud, on /run/mcud.sock.)
+#  - /data/hooks/aa-stop: at every stop (also after a failed start, or with no session up), so it must be safe to
+#    repeat. Gets IFACE and IP.
+# Each has 10 s, then SIGTERM, and SIGKILL 2 s later (the hook's own process: a daemon it started lives on).
+hook() {
+	[ -x "/data/hooks/$1" ] || return 0
+	if [ "$1" = aa-start ]; then IFACE=$IFACE SSID=$SSID PSK=$PSK IP=$IP "/data/hooks/$1" >"/data/log/hook-$1.log" 2>&1 & _hp=$!
+	else IFACE=$IFACE IP=$IP "/data/hooks/$1" >"/data/log/hook-$1.log" 2>&1 & _hp=$!; fi
+	( sleep 10; kill $_hp; sleep 2; kill -9 $_hp ) >/dev/null 2>&1 & _hk=$!
+	wait $_hp; kill $_hk 2>/dev/null; return 0
+}
+# The AP on $IFACE: wpa_supplicant's AP mode (no hostapd in this image), an instance of its own (control: /run/aa-ap),
+# up once it says so (<= 10 s); then its address and DHCP (busybox udhcpd). The lease table starts empty each time: a
+# phone can show a new random MAC per join, and a full table means no offer (AA stuck at "connecting").
+ap_up() {
+	( umask 077; printf 'ctrl_interface=/run/aa-ap\nap_isolate=1\nnetwork={\n\tmode=2\n\tssid=%s\n\tfrequency=5180\n\tkey_mgmt=WPA-PSK\n\tproto=RSN\n\tpairwise=CCMP\n\tgroup=CCMP\n\tpsk="%s"\n}\n' \
+		"$(printf %s "$SSID" | xxd -p | tr -d '\n')" "$PSK" > /run/aa-ap.conf )
+	: > /data/log/aa-ap.log
+	wpa_supplicant -B -i "$IFACE" -D nl80211 -c /run/aa-ap.conf -P /run/aa-ap.pid -f /data/log/aa-ap.log || return 1
+	i=0; until wpa_cli -p /run/aa-ap -i "$IFACE" status 2>/dev/null | grep -q '^wpa_state=COMPLETED'; do
+		[ $i -lt 20 ] || return 1; usleep 500000; i=$((i + 1)); done
+	ip addr flush dev "$IFACE"
+	ip addr add "$IP/24" dev "$IFACE" || return 1
+	B=${IP%.*}
+	printf 'interface %s\nstart %s.10\nend %s.200\nmax_leases 190\nlease_file /run/aa-udhcpd.leases\npidfile /run/aa-udhcpd.pid\noption subnet 255.255.255.0\noption lease 3600\n' \
+		"$IFACE" "$B" "$B" > /run/aa-udhcpd.conf
+	: > /run/aa-udhcpd.leases
+	udhcpd -f -a 100 /run/aa-udhcpd.conf > /data/log/aa-udhcpd.log 2>&1 &   # -a: a 100 ms ARP probe, not 2 s (the phone gives up waiting)
+}
+ap_down() {   # the AP's wpa_supplicant and DHCP gone (<= 5 s), its address, and ap0 (also a half-made AP)
+	# the phones on it told first, while the AP still sends: a deauthentication each. Stopped as it was, the AP went
+	# quiet before it let them go, and a phone could stay on the network for a while, waiting for it to come back
+	if [ -n "$IFACE" ] && [ -S "/run/aa-ap/$IFACE" ]; then
+		_sent=
+		for _m in $(wpa_cli -p /run/aa-ap -i "$IFACE" all_sta 2>/dev/null | grep -E '^([0-9a-f]{2}:){5}[0-9a-f]{2}$'); do
+			wpa_cli -p /run/aa-ap -i "$IFACE" deauthenticate "$_m" >/dev/null 2>&1 && _sent=1
+		done
+		[ -n "$_sent" ] && usleep 300000   # the frames on air before the AP goes
+	fi
+	p=$(cat /run/aa-ap.pid 2>/dev/null)
+	[ -n "$p" ] && kill "$p" 2>/dev/null
+	killall -q udhcpd
+	i=0; while { [ -n "$p" ] && [ -d "/proc/$p" ]; } || pidof udhcpd >/dev/null; do
+		[ $i -lt 25 ] || { [ -n "$p" ] && kill -9 "$p" 2>/dev/null; killall -q -9 udhcpd; break; }
+		usleep 200000; i=$((i + 1))
+	done
+	rm -f /run/aa-ap.pid /run/aa-ap.conf /run/aa-udhcpd.conf /run/aa-udhcpd.pid /run/aa-udhcpd.leases
+	[ -n "$IFACE" ] && ip addr del "$IP/24" dev "$IFACE" 2>/dev/null
+	[ -e /sys/class/net/ap0 ] && iw dev ap0 del 2>/dev/null
+}
+# New phones pair only in the 2 minutes after the button (someone at the screen), not for the whole session: Bluetooth
+# on (AT#CA; S03mcu also sends it at boot), each pairing request it reports (AP<code>) accepted (AT#KA). Never AT#CB: it
+# turns the MCU's Bluetooth off (the phone dropped, the screen gone from its list), not just hidden.
+# Its own process group: stop ends all of it.
+pair_on() {
+	setsid sh -c '{ echo "AT#CA"; sleep 120; } | mcud ctl 121 |
+		while read -r l; do case $l in AP*) printf "AT#KA\n" | mcud ctl 1 ;; esac; done' >/dev/null 2>&1 &
+	echo $! > /run/aa-pair.pid
+}
+pair_off() {   # a window still open: ended (Bluetooth stays on)
+	p=$(cat /run/aa-pair.pid 2>/dev/null); rm -f /run/aa-pair.pid
+	[ -n "$p" ] && kill -- -"$p" 2>/dev/null
+}
+stop() {
+	# the picture and the receiver off at once, whatever the hook takes (and again below: a helper may restart them);
+	# aa mcu too, so the phone's channel is let go and it stops redialling the AP's session meanwhile
+	killall aa spike-vdec 2>/dev/null
+	hook aa-stop
+	pair_off
+	killall aa spike-vdec 2>/dev/null   # aa first (its stop flag set before the decoder's pipe closes: it says goodbye
+	                                    # rather than end on a dead decoder), the decoder a moment later
+	i=0; while pidof aa spike-vdec >/dev/null 2>&1 && [ $i -lt 25 ]; do usleep 200000; i=$((i + 1)); done   # <= 5 s
+	killall -9 spike-vdec aa 2>/dev/null
+	rm -f /run/dash-project /run/dash-aa-session /run/dash-aa-focus /run/dash-pj-fps   # aa serve's and the decoder's, if killed mid-session
+	IFACE=$(cat /run/aa-ap.iface 2>/dev/null); rm -f /run/aa-ap.iface
+	ap_down
+	rm -f "$MARK" /run/dash-aa-radio   # before Wi-Fi comes back (S45wifi-auto waits while they are there); the button off
+	# the station: a list saved meanwhile (and the network picked, if one was), or back if the AP took wlan0
+	if [ -e /run/wifi-auto.pending ]; then
+		J=$(head -n 1 /run/wifi-auto.pending); rm -f /run/wifi-auto.pending; /etc/init.d/S45wifi-auto start "$J" >/dev/null 2>&1
+	elif [ "$IFACE" = wlan0 ] || ! pidof wpa_supplicant >/dev/null; then
+		/etc/init.d/S45wifi-auto start >/dev/null 2>&1
+	else
+		wpa_cli -i wlan0 reconnect >/dev/null 2>&1   # the station's link, dropped at start (as the T113)
+	fi
+}
+
+case "$1" in
+start|restore)
+	[ -f "$CERT" ] || { echo "dash-aa: no head-unit certificate at $CERT" >&2; exit 1; }
+	aa certcheck "$CERT" "${CERT%.crt}.key" || exit 1   # self-signed, or its key missing/another's: no session (it says why)
+	[ ${#PSK} -ge 8 ] || { echo "dash-aa: could not make the AP passphrase" >&2; exit 1; }
+	[ -f "$MARK" ] && exit 0   # already up
+	# one start at a time (a boot restore, or a tap once the UI stops waiting on this one at 90 s): the lock
+	# holds its start's pid; one whose start died (no such process) is taken over. Not by age: the clock jumps at boot.
+	L=/run/dash-aa.starting
+	if ! mkdir $L 2>/dev/null; then
+		p=$(cat $L/pid 2>/dev/null); [ -n "$p" ] || { sleep 1; p=$(cat $L/pid 2>/dev/null); }   # made, pid not written yet
+		[ -n "$p" ] && kill -0 "$p" 2>/dev/null && { echo "dash-aa: already starting" >&2; exit 0; }
+		rm -rf $L; mkdir $L 2>/dev/null || { echo "dash-aa: already starting" >&2; exit 0; }
+	fi
+	echo $$ > $L/pid
+	trap 'rm -rf /run/dash-aa.starting' EXIT
+	[ -f "$MARK" ] && exit 0   # up by the start that held the lock
+	# first: from here a settings save waits for stop (S45wifi-auto), never restarting wpa_supplicant under the AP. Under
+	# the Wi-Fi lock, so a join already past its check finishes first
+	i=0; got=; until mkdir /run/wifi-auto.lock 2>/dev/null && got=1; do [ $i -ge 30 ] && break; sleep 1; i=$((i+1)); done
+	: > /run/dash-aa-radio
+	[ -n "$got" ] && rmdir /run/wifi-auto.lock
+	for i in $(seq 1 40); do [ -e /sys/class/net/wlan0 ] && break; sleep 1; done   # a restore at boot: the driver's wlan0
+	# (the dash starts first, S05dash; the driver loads after it, in the background, ~5 s: S05wifi)
+	# as the T113: the station's link dropped for the session, so the radio serves the AP alone on its own channel (one
+	# radio hopping between the car's Wi-Fi and the AP's channel dropped the phone); during AA the car link rides the
+	# Commander's Bluetooth. wpa_cli disconnect holds until reconnect (stop): no auto-rejoin fighting the AP
+	wpa_cli -i wlan0 disconnect >/dev/null 2>&1 || true
+	# the kernel's rules for the device's country (wireless-regdb; the boot's load came before the root was there)
+	CC=$(cat /data/wifi/country 2>/dev/null | tr -dc A-Za-z | tr a-z A-Z)
+	[ ${#CC} = 2 ] && { iw reg reload 2>/dev/null; iw reg set "$CC"; }
+	mkdir -p /data/log   # per-session logs (overwritten each start): aa-ap, aa-udhcpd, aa-serve, aa-mcu
+	# the session before kept as *.log.1: a session that ended badly is usually looked at after the phone reconnected
+	for f in aa-ap aa-udhcpd aa-serve aa-mcu; do [ -f /data/log/$f.log ] && mv -f /data/log/$f.log /data/log/$f.log.1; done
+	IFACE=
+	if [ ! -e /data/wifi/aa-solo ] && iw dev wlan0 interface add ap0 type __ap 2>/dev/null; then
+		IFACE=ap0
+		ap_up || { echo "dash-aa: no AP beside the station: the AP takes wlan0" >&2; ap_down; IFACE=; }
+	fi
+	if [ -z "$IFACE" ]; then
+		IFACE=wlan0
+		echo wlan0 > /run/aa-ap.iface   # (stop brings the station back)
+		[ -f /run/wpa_cli.loop ] && kill "$(cat /run/wpa_cli.loop)" 2>/dev/null; rm -f /run/wpa_cli.loop   # (wifi-connect's)
+		killall -q wpa_cli udhcpc wpa_supplicant   # the station off until stop
+		i=0; while pidof wpa_supplicant >/dev/null && [ $i -lt 10 ]; do sleep 1; i=$((i+1)); done
+		ap_up || { echo "dash-aa: the AP did not come up (/data/log/aa-ap.log)" >&2; stop; exit 1; }
+	fi
+	echo $IFACE > /run/aa-ap.iface
+	BSSID=$(cat /sys/class/net/$IFACE/address)
+	echo "dash-aa: AP on $IFACE ($BSSID) ssid=$SSID ip=$IP"
+	# The AP carries live video: the radio out of power save for the session (latency, not a correctness fix)
+	iw dev "$IFACE" set power_save off 2>/dev/null; iw dev wlan0 set power_save off 2>/dev/null
+	hook aa-start
+	aa serve > /data/log/aa-serve.log 2>&1 &   # listening before aa mcu sends any phone to it
+	# the passphrase on its stdin, not in its arguments (any process can read those); printf is the shell's own
+	printf '%s\n' "$PSK" | aa mcu "$IP" "$SSID" - "$BSSID" > /data/log/aa-mcu.log 2>&1 &
+	[ "$1" = start ] && pair_on   # someone at the screen tapped it (not a restore at boot)
+	touch /data/aa-on 2>/dev/null && sync   # up: on again at the next start (the dash restores it), until stopped
+	# (touch, not `: >`: a failed redirect on a special builtin would end the script before the marker)
+	: > "$MARK"
+	;;
+stop)   # the user's stop (the button, the split's Exit): off, and off at the next start too (first: a power cut
+	# during the seconds stop takes must not bring it back)
+	rm -f /data/aa-on 2>/dev/null && sync || echo "dash-aa: /data/aa-on not removed: AA comes back at the next start" >&2
+	stop ;;
+forget)   # the T113's "forget the paired phones": here the pairings are the MCU's own, with no list it gives out
+	echo "dash-aa: forget: this screen's Bluetooth (its MCU) keeps its own pairings" >&2; exit 1 ;;
+*)
+	echo "usage: dash-aa start|restore|stop|forget" >&2; exit 2 ;;
+esac

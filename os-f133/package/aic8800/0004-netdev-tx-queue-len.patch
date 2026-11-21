@@ -1,0 +1,14 @@
+--- a/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_main.c
++++ b/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_main.c
+@@ -1535,6 +1535,11 @@
+ static void rwnx_netdev_setup(struct net_device *dev)
+ {
+ 	ether_setup(dev);
++	/* Each of the 257 tx queues gets a pfifo_fast of three rings of tx_queue_len pointers when the interface comes
++	 * up: ether_setup's 1000 made each ring 8 KB, 6 MB of a 64 MB board held for as long as the driver is loaded.
++	 * 64 makes a ring 512 B; the driver's own per-TID queues do the buffering and stop the subqueue when full.
++	 */
++	dev->tx_queue_len = 64;
+ 	dev->priv_flags &= ~IFF_TX_SKB_SHARING;
+ 	dev->netdev_ops = &rwnx_netdev_ops;
+ #if LINUX_VERSION_CODE <  KERNEL_VERSION(4, 12, 0)

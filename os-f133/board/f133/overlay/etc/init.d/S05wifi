@@ -1,0 +1,16 @@
+#!/bin/sh
+# The Wi-Fi chip (the AIC8800D on SDIO): its driver, so wlan0 comes. Always, card file or not: in the car the dash's own
+# networks (S3XY_OBD first) are what S45wifi-auto joins; the card's wpa_supplicant.conf is only the bench's extra.
+case "$1" in
+start)
+	L=/var/log/sd; [ -d $L ] || L=/run
+	# in the background, as soon as the dash is up (S05dash waits for it; beside the dash's start, the two slowed each
+	# other on the one flash): the driver and the chip's firmware take ~5 s, and what needs wlan0 waits for it
+	# (S45wifi-auto, dash-aa). The only modules the boot loads (S10mdev has no coldplug here). It was S40wifi, after the
+	# daemons: the Wi-Fi came ~10 s later.
+	{
+		modprobe aic8800_bsp aic_fw_path=/lib/firmware/aic8800
+		modprobe aic8800_fdrv
+	} >> $L/wifi.txt 2>&1 &
+	;;
+esac

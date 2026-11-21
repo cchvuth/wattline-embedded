@@ -1,0 +1,14 @@
+#!/bin/sh
+# dash-ssh-disable [forget]: (the T113 Dash's) SSH off and kept off across reboots, the card's key too: flag off
+# (/data/ssh/disabled), Dropbear and its open sessions stopped (this one too, when run over SSH). "forget" also deletes
+# the paired keys (/data/ssh/authorized_keys); the host key stays. dash-ssh-enable (the dash's SSH switch) turns it on.
+S=${DASH_SSH_DIR:-/data/ssh} R=${DASH_SSH_RUN:-/run/ssh-keys} PID=${DASH_SSH_PID:-/var/run/dropbear.pid}
+mkdir -p $S
+rm -f $S/enabled; touch $S/disabled
+[ "$1" = forget ] && rm -f $S/authorized_keys
+rm -f $R/authorized_keys   # a listener that outlives the kill below takes no key
+sync
+echo "ssh: off"
+start-stop-daemon -K -q -p $PID
+killall -q dropbear
+exit 0

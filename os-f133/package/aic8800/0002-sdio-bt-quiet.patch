@@ -1,0 +1,50 @@
+--- a/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/aic_btsdio.h
++++ b/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/aic_btsdio.h
+@@ -33,15 +33,12 @@
+ 
+ #define AICBT_DBG_FLAG          1
+ 
+-#if AICBT_DBG_FLAG
+-#define AICBT_DBG(fmt, arg...) printk( "aic_btsdio: " fmt "\n" , ## arg)
+-#else
+-#define AICBT_DBG(fmt, arg...)
+-#endif
+-
+-#define AICBT_INFO(fmt, arg...) printk("aic_btsdio: " fmt "\n" , ## arg)
+-#define AICBT_WARN(fmt, arg...) printk("aic_btsdio: " fmt "\n" , ## arg)
+-#define AICBT_ERR(fmt, arg...) printk("aic_btsdio: " fmt "\n" , ## arg)
++/* per-packet traces: pr_debug, i.e. compiled out (no DEBUG, no DYNAMIC_DEBUG). As plain printk they hit the console
++ * (fbcon, loglevel 5) from the SDIO rx path for every HCI packet and stalled Wi-Fi with them */
++#define AICBT_DBG(fmt, arg...) pr_debug("aic_btsdio: " fmt "\n" , ## arg)
++#define AICBT_INFO(fmt, arg...) pr_debug("aic_btsdio: " fmt "\n" , ## arg)
++#define AICBT_WARN(fmt, arg...) pr_warn("aic_btsdio: " fmt "\n" , ## arg)
++#define AICBT_ERR(fmt, arg...) pr_err("aic_btsdio: " fmt "\n" , ## arg)
+ 
+ #if LINUX_VERSION_CODE > KERNEL_VERSION(3, 4, 0)
+ #define GET_DRV_DATA(x)        hci_get_drvdata(x)
+--- a/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_cmds.c
++++ b/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_cmds.c
+@@ -152,10 +152,10 @@
+ 			if(!empty) {
+ 				spin_unlock_bh(&cmd_mgr->lock);
+ 				if(in_softirq()) {
+-					printk("in_softirq:check cmdqueue empty\n");
++					pr_debug("in_softirq:check cmdqueue empty\n");
+ 					mdelay(10);
+ 				} else {
+-					printk("check cmdqueue empty\n");
++					pr_debug("check cmdqueue empty\n");
+ 					msleep(50);
+ 				}
+ 			}
+--- a/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_msg_tx.c
++++ b/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_msg_tx.c
+@@ -2181,7 +2181,7 @@
+ 
+ 	error = rwnx_send_msg(rwnx_hw, req, 1, TDLS_SDIO_BT_SEND_CFM, &cfm);
+ 	if(!cfm.status){
+-		printk("bt send no cfm");
++		pr_debug("bt send no cfm\n");
+ 	}
+ 
+ 	return error;

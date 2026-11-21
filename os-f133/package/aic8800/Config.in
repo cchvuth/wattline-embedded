@@ -1,0 +1,8 @@
+config BR2_PACKAGE_AIC8800
+	bool "aic8800"
+	depends on BR2_LINUX_KERNEL
+	help
+	  AICSemi AIC8800 Wi-Fi driver (SDIO) and firmware, from Radxa's
+	  packaging of the vendor driver.
+
+	  https://github.com/radxa-pkg/aic8800

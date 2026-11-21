@@ -1,0 +1,64 @@
+#!/bin/sh
+# The card's F133 partition (p4, FAT): the logs, the Wi-Fi settings and the SSH key. No console is wired out, so
+# everything worth knowing goes to log/<boot>/ there, every 5 s.
+# If the partition can't be mounted, the backlight (PG15) flashes at 4 Hz for good. Booted from the SPI NOR
+# (root=mtd:), the card is optional: no wait for one (a card that is in was found seconds before this runs), and
+# without it the logs stay in RAM (/tmp/log).
+# The card's room for logs is capped: the 30 latest boots' folders are kept, and in the running boot's the files
+# others append to (dash.out, wpa.txt, wifi.txt, mcu.txt) are copied to <name>.1 and emptied once past 1 MiB. syslog has its own
+# rotation (/etc/default/syslogd), the dash's log (/data/log) and drive recordings (/data/rec) theirs (dash.conf).
+bl() {
+	v=$(devmem 0x02000130 32 2>/dev/null) && [ -n "$v" ] || return 0
+	if [ "$1" = on ]; then devmem 0x02000130 32 $((v | 0x8000)); else devmem 0x02000130 32 $((v & ~0x8000)); fi
+}
+sz() { set -- $(ls -ln "$1" 2>/dev/null) 0 0 0 0 0; echo $5; }   # a file's size without reading it (no stat here)
+
+case "$1" in
+start)
+	mkdir -p /mnt/sd
+	nor=; t=20
+	grep -q "root=mtd:" /proc/cmdline && nor=1 t=0
+	for i in $(seq 1 $t); do [ -b /dev/mmcblk0p4 ] && break; sleep 1; done
+	# the initramfs mounted it already (the root filesystem is rootfs.sqfs on it). Here only on a NOR boot, with files
+	# on the card (logs, a swapfile, an addition's): written synchronously, as the power just goes (the car, the MCU)
+	# and nothing ever unmounts it, so a write a power cut catches leaves no FAT half updated
+	if ! grep -q " /mnt/sd " /proc/mounts && ! mount -t vfat -o noatime,sync /dev/mmcblk0p4 /mnt/sd 2>/dev/null; then
+		if [ -n "$nor" ]; then
+			mkdir -p /tmp/log && ln -sfn /tmp/log /var/log/sd
+			exit 0
+		fi
+		(while :; do bl off; usleep 125000; bl on; usleep 125000; done) &
+		exit 0
+	fi
+	n=$(cat /mnt/sd/bootcount 2>/dev/null)
+	case $n in ''|0?*|*[!0-9]*) n=0 ;; esac   # none, or garbage (a power cut mid-write): 0, not an arithmetic error
+	n=$((n + 1))
+	echo $n > /mnt/sd/bootcount
+	L=/mnt/sd/log/$n
+	mkdir -p $L
+	ln -sfn $L /var/log/sd
+	for d in /mnt/sd/log/*; do   # older than the 30 latest boots: gone
+		b=${d##*/}; case $b in ''|*[!0-9]*) continue ;; esac
+		[ $b -le $((n - 30)) ] && rm -rf "$d"
+	done
+	# a swap file on the card (card-linux.sh makes it): a safety net for memory spikes on 64 MiB, not working
+	# memory; swappiness 10 drops cached files before paging anything out
+	if [ -f /mnt/sd/swapfile ]; then
+		swapon /mnt/sd/swapfile 2>/dev/null || { mkswap /mnt/sd/swapfile >/dev/null && swapon /mnt/sd/swapfile; }
+		echo 10 > /proc/sys/vm/swappiness
+	fi
+	# the boot before, if it crashed: its kernel log from ramoops
+	mount -t pstore pstore /sys/fs/pstore 2>/dev/null && cp /sys/fs/pstore/* $L/ 2>/dev/null
+	(
+		while :; do
+			dmesg > $L/dmesg.txt
+			{ cat /proc/uptime; free; ip addr; ip route; iw dev; ps; } > $L/state.txt 2>&1
+			for f in $L/dash.out $L/wpa.txt $L/wifi.txt $L/mcu.txt; do   # appended to (O_APPEND): emptied in place, the writer goes on
+				[ "$(sz $f)" -gt 1048576 ] && cp $f $f.1 && : > $f
+			done
+			sync
+			sleep 5
+		done
+	) &
+	;;
+esac

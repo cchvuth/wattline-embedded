@@ -1,0 +1,18 @@
+--- a/drivers/gpu/drm/sun4i/sun8i_tcon_top.c
++++ b/drivers/gpu/drm/sun4i/sun8i_tcon_top.c
+@@ -177,9 +177,13 @@
+ 
+ 	/*
+ 	 * At least on H6, some registers have some bits set by default
+-	 * which may cause issues. Clear them here.
++	 * which may cause issues. Clear them here. Port select 0 would route
++	 * both mixers to TCON LCD0, and only TV TCONs ever claim a mixer
++	 * (set_mux): an unused mixer 1 left on LCD0 leaks into its picture
++	 * (on the D1, black shows as blue). Park mixer 1 on TCON TV0 (2).
+ 	 */
+-	writel(0, regs + TCON_TOP_PORT_SEL_REG);
++	writel(FIELD_PREP(TCON_TOP_PORT_DE1_MSK, 2),
++	       regs + TCON_TOP_PORT_SEL_REG);
+ 	writel(0, regs + TCON_TOP_GATE_SRC_REG);
+ 
+ 	/*

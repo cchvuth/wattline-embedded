@@ -1,0 +1,11 @@
+# The initramfs built into the kernel (CONFIG_INITRAMFS_SOURCE): only /init (board/f133/init/init.c, compiled
+# static by build.sh), which mounts rootfs.sqfs from the card. Paths are the build container's.
+dir /dev 0755 0 0
+nod /dev/console 0600 0 0 c 5 1
+dir /proc 0755 0 0
+dir /sys 0755 0 0
+dir /sd 0755 0 0
+dir /ro 0755 0 0
+dir /rw 0755 0 0
+dir /newroot 0755 0 0
+file /init /work/out/f133-init/init 0755 0 0

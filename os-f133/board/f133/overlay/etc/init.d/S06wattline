@@ -1,0 +1,31 @@
+#!/bin/sh
+# Keep the Android Auto head-unit certificate (and the Bluetooth bonds, below) on /data (persistent across reboot and reflash). /etc/wattline -> there,
+# so the app, aa and dash-aa (all reading /etc/wattline) use the persistent copy with no code change. None is shipped or
+# made here: the user supplies a Google-signed one (/data/wattline/aa.crt + aa.key), and the dash's AA button shows only
+# with it. A self-signed one (an earlier version's placeholder: phones refuse it) is moved aside as *.unusable; one whose
+# key is missing / another's / passphrase-protected, or that cannot be read, stays, and only the button is hidden.
+case "$1" in start|"") ;; *) exit 0;; esac
+mkdir -p /data/wattline
+[ -L /etc/wattline ] || { rm -rf /etc/wattline; ln -s /data/wattline /etc/wattline; }
+# aa certcheck: 1 self-signed (a property of the certificate: set aside, renamed), 2 its key missing / another's /
+# passphrase-protected, 3 no readable certificate (perhaps a read error, or a version that cannot load it: files kept,
+# the button only hidden for this start); other codes (aa cannot run) prove nothing
+# In the background: aa loads OpenSSL from the flash (~2.4 s cold), beside the Wi-Fi driver's load (S05wifi), so
+# wpa_supplicant finds it loaded when the join starts (S45wifi-auto); the dash, up already (S05dash), looks for the
+# certificate and /run/dash-aa-unusable at each screen update.
+rm -f /run/dash-aa-unusable
+(
+	[ -f /data/wattline/aa.crt ] && { /usr/bin/aa certcheck /data/wattline/aa.crt /data/wattline/aa.key </dev/null 2>/dev/null; r=$?; }
+	if [ -f /data/wattline/aa.crt ] && [ "$r" = 1 ]; then
+		mv /data/wattline/aa.crt /data/wattline/aa.crt.unusable; mv /data/wattline/aa.key /data/wattline/aa.key.unusable 2>/dev/null
+		echo "S06wattline: aa.crt is self-signed (phones refuse it): set aside as *.unusable (no AA button)"
+	elif [ -f /data/wattline/aa.crt ] && { [ "$r" = 2 ] || [ "$r" = 3 ]; }; then
+		: > /run/dash-aa-unusable
+		echo "S06wattline: aa.crt cannot be used (aa certcheck says why): no AA button this start"
+	fi
+) &
+# Bluetooth bonds (the phones paired for Android Auto, their keys) on /data too, before bluetoothd starts (S40): in the
+# RAM root every power cycle forgot them, and a phone with an old key is then refused (aa takes bonded phones only)
+mkdir -p /data/bluetooth && chmod 700 /data/bluetooth
+[ -L /var/lib/bluetooth ] || { rm -rf /var/lib/bluetooth; ln -s /data/bluetooth /var/lib/bluetooth; }
+exit 0

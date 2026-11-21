@@ -1,0 +1,4 @@
+# syslog (udhcpc, dropbear, dash-update, ntp, kernel via klogd) into the boot's log folder on the card, not RAM: up to
+# 256 KiB, then messages.0, one of them. Lines before S02sd links /var/log/sd go to the console (busybox syslogd
+# reopens the file each second it writes).
+SYSLOGD_ARGS="-O /var/log/sd/messages -s 256 -b 1"

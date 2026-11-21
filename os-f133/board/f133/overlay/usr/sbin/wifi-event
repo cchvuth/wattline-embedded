@@ -1,0 +1,17 @@
+#!/bin/sh
+# wpa_cli's action script (wifi-connect): on every join, a fresh DHCP lease. Without it, udhcpc keeps the last network's
+# address after wpa_supplicant moves to another (home WiFi -> the car's), until its lease runs out: no data meanwhile.
+# Called as: wifi-event IFACE CONNECTED|DISCONNECTED
+[ "$2" = CONNECTED ] || exit 0
+# The same network back after a blip keeps its address (no DHCP gap); only a change of network gets a new lease.
+was=$(cat /run/wifi-id 2>/dev/null)
+[ "$WPA_ID" = "$was" ] && exit 0
+echo "$WPA_ID" > /run/wifi-id
+# The first join since wifi-connect started udhcpc (it removes /run/wifi-id): no address to give back, so the network is
+# asked at once. The release and its second were a second of every boot's wait for an address.
+if [ -n "$was" ]; then
+	killall -q -USR2 udhcpc   # release the old address
+	sleep 1                   # the release done before the renew is asked
+fi
+killall -q -USR1 udhcpc   # and ask the network now joined
+exit 0

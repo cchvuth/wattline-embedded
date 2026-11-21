@@ -1,0 +1,59 @@
+--- a/lib/sbi/sbi_console.c
++++ b/lib/sbi/sbi_console.c
+@@ -7,6 +7,7 @@
+  *   Anup Patel <anup.patel@wdc.com>
+  */
+ 
++#include <sbi/riscv_asm.h>
+ #include <sbi/riscv_locks.h>
+ #include <sbi/sbi_console.h>
+ #include <sbi/sbi_hart.h>
+@@ -55,10 +56,48 @@
+ 	return len;
+ }
+ 
++/*
++ * SRNUBI T313D (F133): no console is wired out, so the output also goes to DRAM (0x43b00000, 256 KiB, reserved in
++ * Linux's device tree: magic "SBIL", length, 8 spare bytes, text; the kernel console comes through here too).
++ * After a reset U-Boot's SPL finds it on its next run and puts it on the SD card. The D-cache keeps written lines
++ * back (they never reached DRAM before a watchdog reset), so each written line is cleaned out (th.dcache.cpa).
++ * While output keeps coming, for the first 60 s, the watchdog the SPL armed is fed (riscv_wdt CTRL): a kernel that
++ * stops printing is reset 16 s later, one still printing at 60 s 16 s after that, and its log is on the card.
++ */
++#define F133_LOG		0x43b00000UL
++#define F133_LOG_SIZE		0x40000UL
++
++static inline void f133_clean(unsigned long pa)
++{
++	__asm__ __volatile__(".insn r 0x0b, 0, 1, x0, %0, x9" : : "r"(pa) : "memory");	/* th.dcache.cpa */
++}
++
++static void f133_log(const char *str, unsigned long len)
++{
++	volatile u32 *h = (volatile u32 *)F133_LOG;
++	volatile char *t = (volatile char *)(F133_LOG + 16);
++	unsigned long i, a, from;
++
++	if (h[0] != 0x4c494253 || h[1] > F133_LOG_SIZE - 16) {
++		h[0] = 0x4c494253;
++		h[1] = 0;
++	}
++	from = h[1];
++	for (i = 0; i < len && h[1] < F133_LOG_SIZE - 16; i++)
++		t[h[1]++] = str[i];
++	for (a = (F133_LOG + 16 + from) & ~63UL; a < F133_LOG + 16 + h[1]; a += 64)
++		f133_clean(a);
++	f133_clean(F133_LOG);
++	__asm__ __volatile__(".long 0x0180000b" : : : "memory");				/* th.sync */
++	if (csr_read(CSR_TIME) < 60UL * 24000000UL)
++		*(volatile u32 *)0x06011010UL = (0xa57 << 1) | 1;
++}
++
+ static void nputs_all(const char *str, unsigned long len)
+ {
+ 	unsigned long p = 0;
+ 
++	f133_log(str, len);
+ 	while (p < len)
+ 		p += nputs(&str[p], len - p);
+ }

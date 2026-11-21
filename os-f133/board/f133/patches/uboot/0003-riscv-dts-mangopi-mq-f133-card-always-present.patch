@@ -1,0 +1,24 @@
+--- a/arch/riscv/dts/sun20i-d1s-mangopi-mq.dts
++++ b/arch/riscv/dts/sun20i-d1s-mangopi-mq.dts
+@@ -76,7 +76,8 @@
+ 
+ &mmc0 {
+ 	bus-width = <4>;
+-	cd-gpios = <&pio 5 6 GPIO_ACTIVE_LOW>; /* PF6 */
++	/* SRNUBI T313D: the card is always there; its PF6 detect switch's polarity is not known */
++	broken-cd;
+ 	disable-wp;
+ 	vmmc-supply = <&reg_vcc_3v3>;
+ 	vqmmc-supply = <&reg_vcc_3v3>;
+@@ -111,6 +112,11 @@
+ 	vcc-pe-supply = <&reg_avdd2v8>;
+ };
+ 
++/* SRNUBI T313D: the console's RX (PB7) is not wired out; pulled up so it can't float */
++&uart3_pb_pins {
++	bias-pull-up;
++};
++
+ &uart3 {
+ 	pinctrl-0 = <&uart3_pb_pins>;
+ 	pinctrl-names = "default";

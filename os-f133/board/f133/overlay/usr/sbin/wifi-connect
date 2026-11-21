@@ -1,0 +1,77 @@
+#!/bin/sh
+# wifi-connect SSID [PASSPHRASE] [SSID2 PASSPHRASE2 ...]: (the T113 Dash's, for the F133) join whichever of these networks
+# is in range (the first listed wins when several are) as a station, then DHCP. WPA2/WPA3 personal (WPA3 when this
+# wpa_supplicant has SAE: BR2_PACKAGE_WPA_SUPPLICANT_WPA3; WPA2 alone otherwise, as "SAE" would fail the whole file);
+# an empty passphrase = open. A network wpa_supplicant would refuse (SSID not 1-32 bytes, passphrase not 8-63, or one
+# with a ") is skipped, so it cannot take the others down with it.
+# F133: the card's /mnt/sd/wpa_supplicant.conf (the bench's network, development) is read too (-I), its networks below
+# these (no priority: 0); a card file that does not load is left out rather than leaving no Wi-Fi.
+# The config is written to /run (RAM) only, mode 600; no passphrase is printed.
+# bgscan (the global one): rescans while joined, so a better-placed network takes over (home WiFi in the garage, then
+# the car's on the road); off on the first network, which has nothing better to roam to. wifi-event renews DHCP on
+# every change of network. The old wpa_supplicant is stopped first, even with no networks left (a removed one must not
+# stay joined). WIFI_DRY=1: write the config ($WIFI_CONF) and stop there, nothing else touched (tests).
+# wifi-connect -: the SSID/passphrase pairs on stdin, a line each (as /data/wifi/networks.conf). S45wifi-auto's way: no
+# passphrase in any process's arguments, which ps shows (and this script's own children keep them)
+if [ "$1" = - ]; then
+	set --
+	while IFS= read -r S || [ -n "$S" ]; do K=; IFS= read -r K; set -- "$@" "$S" "$K"; done
+fi
+C=${WIFI_CONF:-/run/wpa_supplicant.conf} CARD=${WIFI_CARD_CONF-/mnt/sd/wpa_supplicant.conf}
+# no card (running from the NOR): the copy nor.sh seed put in /data
+[ -n "${WIFI_CARD_CONF+x}" ] || [ -f "$CARD" ] || CARD=/data/wpa_supplicant.conf
+KM="WPA-PSK WPA-PSK-SHA256"
+# SAE when this wpa_supplicant has sae.c built in: post-build looked once (/etc/wpa_supplicant.sae). A grep of the 1.9 MB
+# binary here read all of it from the flash, ~2.5 s of the boot's Wi-Fi join.
+[ -e /etc/wpa_supplicant.sae ] && KM="$KM SAE"
+umask 077
+{
+	echo "ctrl_interface=/run/wpa_supplicant"   # the dash's WiFi button and Network tab ask it there (app/wifi.c)
+	echo 'bgscan="simple:30:-70:60"'
+	P=100; N=0
+	while [ $# -gt 0 ]; do
+		S=$1; K=$2; N=$((N + 1))
+		shift; [ $# -gt 0 ] && shift
+		s=$(printf %s "$S" | wc -c); k=$(printf %s "$K" | wc -c)
+		if [ $s -lt 1 ] || [ $s -gt 32 ] || { [ $k -ne 0 ] && { [ $k -lt 8 ] || [ $k -gt 63 ]; }; }; then
+			echo "wifi-connect: network $N skipped: SSID must be 1-32 bytes, passphrase empty or 8-63" >&2
+			continue
+		fi
+		case $K in *\"*)   # psk="..." with a " in it: the T113's rule, kept
+			echo "wifi-connect: network $N skipped: a passphrase with \" in it" >&2; continue ;; esac
+		echo "network={"
+		echo "	ssid=$(printf %s "$S" | xxd -p | tr -d '\n')"
+		echo "	priority=$P"
+		[ $P = 100 ] && echo '	bgscan=""'
+		if [ -n "$K" ]; then
+			echo "	psk=\"$K\""
+			echo "	key_mgmt=$KM"
+			echo "	ieee80211w=1"
+		else
+			echo "	key_mgmt=NONE"
+		fi
+		echo "}"
+		P=$((P - 1))
+	done
+} > $C
+[ -n "$WIFI_DRY" ] && exit 0
+st() { echo "wifi-connect: $1 at $(cut -d' ' -f1 /proc/uptime) s" >&2; }   # the join's steps, timed (wifi.txt)
+st "config written"
+WL=/run/wpa_cli.loop   # the loop below that keeps wpa_cli running: ended first, or it would start wpa_cli again
+[ -f $WL ] && kill "$(cat $WL)" 2>/dev/null; rm -f $WL
+killall -q wpa_cli udhcpc wpa_supplicant
+rm -f /run/wifi-id
+i=0; while pidof wpa_supplicant >/dev/null && [ $i -lt 10 ]; do sleep 1; i=$((i+1)); done
+grep -q '^network=' $C || [ -f "$CARD" ] || { echo "wifi-connect: no networks" >&2; exit 1; }
+ip link set wlan0 up || exit 1
+st "wlan0 up"
+L=/var/log/sd; [ -d $L ] || L=/run
+W="wpa_supplicant -B -i wlan0 -D nl80211 -c $C -f $L/wpa.txt"
+{ [ -f "$CARD" ] && $W -I "$CARD"; } || { [ -f "$CARD" ] && echo "wifi-connect: $CARD does not load: left out" >&2; $W; } || exit 1
+st "wpa_supplicant started"
+# before udhcpc, which can wait ~45 s. wpa_cli runs wifi-event (DHCP renewed on each change of network) and quits when
+# wpa_supplicant misses its ping (seen when the RAM ran out): kept running, started again
+# 2 s after it quits, until the next wifi-connect ends the loop
+( while :; do wpa_cli -i wlan0 -p /run/wpa_supplicant -a /usr/sbin/wifi-event; sleep 2; done ) </dev/null >/dev/null 2>&1 &
+echo $! > $WL
+udhcpc -i wlan0 -b -t 3 -T 2 -A 5 -S -x hostname:"$(hostname)"   # a few seconds here, then on in the background

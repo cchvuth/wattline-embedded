@@ -1,0 +1,11 @@
+#!/bin/sh
+# The clock from NTP when a lease comes, unless the network is the car's (S3XY_OBD has no internet: there the dash sets
+# the clock from the car's CAN 0x318, set_clock = 1 in dash.conf). The F133's RTC has no battery: after a power-off
+# the clock starts in 1970 and the dash shows none until the car or NTP sets it.
+# Busybox ntpd (CONFIG_NTPD, board/f133/busybox.fragment), one try of up to 30 s, in the background (udhcpc waits for
+# its script). Called by udhcpc's default.script with the event: deconfig, bound, renew, ...
+case "$1" in bound|renew) ;; *) exit 0 ;; esac
+command -v ntpd >/dev/null && command -v timeout >/dev/null || exit 0
+[ "$(wpa_cli -i "${interface:-wlan0}" status 2>/dev/null | sed -n 's/^ssid=//p')" = S3XY_OBD ] && exit 0
+( timeout 30 ntpd -n -q -p pool.ntp.org && logger -t ntp "clock set: $(date -u)" ) </dev/null >/dev/null 2>&1 &
+exit 0

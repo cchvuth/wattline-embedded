@@ -1,0 +1,6 @@
+config BR2_PACKAGE_MCUD
+	bool "mcud"
+	help
+	  The SRNUBI T313D's power MCU on ttyS1: holds the screen's power (the MCU cuts it otherwise), sends the release
+	  for a power cycle, and relays the MCU's classic Bluetooth (AT# lines and its RFCOMM data channels) over
+	  /run/mcud.sock. S03mcu starts it.

@@ -1,0 +1,20 @@
+#!/bin/sh
+# OTA, after the boot (the T113 Dash's S99ota, on the F133's try-once): what came of the last update (dash-update
+# confirm: kept, S98try having taken the tried files once the screen worked; given up; a try that ended before S98try
+# decided: armed again for the next power-up; or still on trial: looked at again for 2 min). Then, if automatic
+# updates are on (ota_auto in /data/settings.conf, the dash's Advanced settings), look for a newer release while there
+# is internet: download, verify and put it in place for the next power-up. Tried every 10 min for the first hour of a drive, quietly. First, for the dash's settings: whether this card install
+# can be copied to the built-in flash (dash-nor status: nothing on a screen running from its NOR).
+case "$1" in start|"") ;; *) exit 0;; esac
+dash-nor status </dev/null >/dev/null 2>&1
+(
+	sleep 15
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12; do dash-update confirm && break; sleep 10; done
+	grep -qE '^ota_auto *= *1' /data/settings.conf 2>/dev/null || exit 0
+	for i in 1 2 3 4 5 6; do
+		dash-update auto && exit 0
+		grep -qE "^state=(armed|current|ready)$" /run/dash-update.status 2>/dev/null && exit 0
+		sleep 600
+	done
+) </dev/null >/dev/null 2>&1 &
+exit 0

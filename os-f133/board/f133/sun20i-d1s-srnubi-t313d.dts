@@ -1,0 +1,427 @@
+// SPDX-License-Identifier: (GPL-2.0+ or MIT)
+// SRNUBI T313D 11.26" car screen: Allwinner F133 (D1s), 64 MiB DDR2, SD card, AIC8800D Wi-Fi on SDIO,
+// the screen's MCU on UART1 (it holds the power; see U-Boot's f133_mcu_hold and /etc/init.d/S03mcu).
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/pwm/pwm.h>
+#include <dt-bindings/power/allwinner,sun20i-d1-ppu.h>
+
+/dts-v1/;
+
+#include "allwinner/sun20i-d1s.dtsi"
+#include "allwinner/sun20i-common-regulators.dtsi"
+
+/ {
+	model = "SRNUBI T313D (Allwinner F133)";
+	compatible = "srnubi,t313d", "allwinner,sun20i-d1s";
+
+	aliases {
+		mmc0 = &mmc0;
+		mmc1 = &mmc1;
+		serial1 = &uart1;
+		serial3 = &uart3;
+		i2c2 = &i2c2;	/* /dev/i2c-2: the stock firmware's /dev/twi2 */
+		i2c3 = &i2c3;	/* /dev/i2c-3: the touch */
+	};
+
+	chosen {
+		stdout-path = "serial3:115200n8";
+	};
+
+	/*
+	 * The in-package 64 MiB. U-Boot on RISC-V adds no memory node at booti (it copies only OpenSBI's reserved
+	 * regions), and without one the kernel had no memory: "INITRD ... is not a memory region", then a panic.
+	 */
+	memory@40000000 {
+		device_type = "memory";
+		reg = <0x40000000 0x4000000>;
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+		/* Empty: U-Boot adds OpenSBI's own regions here. The bring-up's two were given back to Linux (2.5 MiB of the
+		 * 64; a projection's video decoder died for want of memory): ramoops@43800000 (0x80000: the kernel log across a reset,
+		 * which U-Boot copied to the card as ramoops.bin) and logs@43a00000 (0x200000, no-map: U-Boot proper's log at
+		 * 0x43a00000, OpenSBI's at 0x43b00000, for the SPL to save after a reset). Both were read only from the card;
+		 * the screen runs from the NOR. The early boot may still write its logs there: Linux has not started yet, and
+		 * the command line names no SBI console (console=tty0, no earlycon), so OpenSBI prints nothing once Linux
+		 * runs. Put them back to debug a reset loop with a card. */
+	};
+
+	reg_vcc_core: vcc-core {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc-core";
+		regulator-min-microvolt = <900000>;
+		regulator-max-microvolt = <900000>;
+		vin-supply = <&reg_vcc>;
+	};
+
+	/* stock: lcd_bl_en PG15, PWM7 on PD22 at 50 kHz, active low (lcd_pwm_pol 1); as on the T113 Dash */
+	backlight: backlight {
+		compatible = "pwm-backlight";
+		pwms = <&pwm 7 20000 PWM_POLARITY_INVERTED>;
+		enable-gpios = <&pio 6 15 GPIO_ACTIVE_HIGH>;
+		brightness-levels = <0 100>;	/* 0..100 = percent duty */
+		num-interpolated-steps = <100>;
+		default-brightness-level = <15>;	/* until the dash sets its own */
+	};
+
+	soc {
+		/* D1/T113 PWM (8 channels); the 6.6 dtsi has no node yet (patches/linux/0003, as on the T113 Dash) */
+		pwm: pwm@2000c00 {
+			compatible = "allwinner,sun20i-d1-pwm";
+			reg = <0x02000c00 0x400>;
+			clocks = <&ccu CLK_BUS_PWM>, <&dcxo>, <&ccu CLK_APB0>;
+			clock-names = "bus", "hosc", "apb";
+			resets = <&ccu RST_BUS_PWM>;
+			pinctrl-0 = <&pwm7_pd22_pin>;
+			pinctrl-names = "default";
+			#pwm-cells = <3>;
+			allwinner,npwms = <8>;
+		};
+
+		/* the video engine: cedrus, Android Auto's H.264 (as the Dash R4; the 6.6 dtsi has none). PLIC 82 =
+		 * SOC_PERIPHERAL_IRQ(66), the T113's SPI 66; no SRAM to claim (patches/linux/0005); the VE power domain
+		 * needs SUN20I_PPU; buffers from CMA (no IOMMU driver for the D1 in 6.6) */
+		ve: video-codec@1c0e000 {
+			compatible = "allwinner,sun20i-d1-video-engine";
+			reg = <0x01c0e000 0x2000>;
+			interrupts = <SOC_PERIPHERAL_IRQ(66) IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ccu CLK_BUS_VE>, <&ccu CLK_VE>, <&ccu CLK_MBUS_VE>;
+			clock-names = "ahb", "mod", "ram";
+			resets = <&ccu RST_BUS_VE>;
+			power-domains = <&ppu PD_VE>;
+		};
+	};
+};
+
+&cpu0 {
+	cpu-supply = <&reg_vcc_core>;
+};
+
+&dcxo {
+	clock-frequency = <24000000>;
+};
+
+/* the SD card */
+&mmc0 {
+	bus-width = <4>;
+	broken-cd;
+	disable-wp;
+	vmmc-supply = <&reg_vcc_3v3>;
+	vqmmc-supply = <&reg_vcc_3v3>;
+	pinctrl-0 = <&mmc0_pins>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
+/* the AIC8800D Wi-Fi */
+&mmc1 {
+	bus-width = <4>;
+	non-removable;
+	keep-power-in-suspend;
+	vmmc-supply = <&reg_vcc_3v3>;
+	vqmmc-supply = <&reg_vcc_3v3>;
+	pinctrl-0 = <&mmc1_pins>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
+&pio {
+	uart1_pg12_pins: uart1-pg12-pins {
+		pins = "PG12", "PG13";
+		function = "uart1";
+	};
+
+	/* RX pulled up: it is not wired out and must not float (noise is console input) */
+	uart3_pb6_pins: uart3-pb6-pins {
+		pins = "PB6", "PB7";
+		function = "uart3";
+		bias-pull-up;
+	};
+
+	/* stock [twi2]: PE12 SCL, PE13 SDA, function 2 */
+	i2c2_pe12_pins: i2c2-pe12-pins {
+		pins = "PE12", "PE13";
+		function = "i2c2";
+	};
+
+	i2c3_pg10_pins: i2c3-pg10-pins {
+		pins = "PG10", "PG11";
+		function = "i2c3";
+	};
+
+	/* PD22: the panel's brightness input, active low (floating or low = lit). Never a gpio-hog (on the T113 Dash
+	 * that broke the pinctrl probe) */
+	pwm7_pd22_pin: pwm7-pd22-pin {
+		pins = "PD22";
+		function = "pwm7";
+	};
+};
+
+/* the screen's MCU */
+&uart1 {
+	pinctrl-0 = <&uart1_pg12_pins>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
+/* the debug UART (stock sys_config: uart_debug_tx = PB06), not wired out */
+&uart3 {
+	pinctrl-0 = <&uart3_pb6_pins>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
+/* TWI2 (the stock firmware's /dev/twi2): the audio codec and the board's other I2C devices, enabled so userspace
+ * can reach them */
+&i2c2 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c2_pe12_pins>;
+	status = "okay";
+};
+
+/* the touch, the panel controller's own (stock ctp_lcd_integrated): a Jadard JD9366T (IC id 0x9032), I2C3 on
+ * PG10/PG11 at 0x68 (it answers at 0x5a too), interrupt PG7 level low, its reset PG8 (stock ctp_wakeup) */
+&i2c3 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c3_pg10_pins>;
+	status = "okay";
+
+	touchscreen@68 {
+		compatible = "jadard,jd9366t";
+		reg = <0x68>;
+		interrupt-parent = <&pio>;
+		interrupts = <6 7 IRQ_TYPE_LEVEL_LOW>;
+		reset-gpios = <&pio 6 8 GPIO_ACTIVE_LOW>;
+	};
+};
+
+/* The display: DE2 mixer -> TCON LCD -> MIPI-DSI, 4 lanes on PD0-PD9, as the stock [lcd0] (lcd_if 4) */
+&de {
+	status = "okay";
+};
+
+&dphy {
+	status = "okay";
+};
+
+&dsi {
+	pinctrl-names = "default";
+	pinctrl-0 = <&dsi_4lane_pins>;
+	status = "okay";
+
+	panel@0 {
+		compatible = "dash,dsi-panel";
+		reg = <0>;
+		reset-gpios = <&pio 3 21 GPIO_ACTIVE_LOW>;	/* stock lcd_reset PD21 */
+		backlight = <&backlight>;
+		/* 11.26" at 720x1920: about 100 x 268 mm in portrait (6.6's of_get_drm_panel_display_mode needs both) */
+		width-mm = <100>;
+		height-mm = <268>;
+
+		/* the stock [mipi_reg] list (sys_config.fex), as <len cmd args...>; 11/29 are sent by the driver */
+		dash,init = [
+			02 30 01
+			05 78 49 61 02 00
+			02 30 02
+			02 31 22
+			02 32 08
+			02 33 31
+			02 3d 3c
+			02 3e 67
+			02 3f 60
+			02 42 83
+			02 43 f0
+			02 44 21
+			02 49 a1
+			02 40 38
+			0d 41 00 00 08 08 00 00 08 08 00 00 08 08
+			0c 5a 23 23 23 23 23 22 23 18 00 21 20
+			0c 5b 08 0a 0c 0e 04 23 23 23 23 23 23
+			0c 5c 23 23 23 23 23 22 23 19 01 21 20
+			0c 5d 09 0b 0d 0f 05 23 23 23 23 23 23
+			0c 5e 23 23 23 23 23 23 22 05 01 21 20
+			0c 5f 0f 0d 0b 09 19 23 23 23 23 23 23
+			0c 60 23 23 23 23 23 23 22 04 00 21 20
+			0c 61 0e 0c 0a 08 18 23 23 23 23 23 23
+			02 68 80
+			03 4e aa aa
+			03 50 aa aa
+			04 64 ff ff 7f
+			04 65 ff ff 7f
+			04 6f 00 04 00
+			04 70 00 04 00
+			04 71 ff ff 3f
+			04 72 ff ff 3f
+			02 30 07
+			02 31 c0
+			02 30 08
+			02 33 05
+			02 40 50
+			02 41 80
+			02 42 1a
+			02 47 0a
+			02 48 0c
+			02 50 14
+			02 5a d0
+			02 5b 80
+			02 5c 72
+			02 62 04
+			02 65 5f
+			02 5e 00
+			02 73 01
+			02 30 0a
+			02 33 30
+			02 3f 53
+			02 40 15
+			02 47 20
+			02 48 80
+			02 49 03
+			02 30 0b
+			03 33 00 40
+			03 3c 00 57
+			02 43 a1
+			02 44 21
+			06 3e 00 04 0c 12 18
+			0f 3f 27 41 4a 53 53 73 7d 86 99 98 9e a6 b8 b6
+			0a 40 5e 5f 69 65 00 04 0c 12 18
+			0f 41 27 41 4b 52 53 73 7d 86 99 98 9e a6 b8 b6
+			05 42 5e 5f 69 65
+			02 45 4e
+			02 46 4a
+			02 48 2e
+			02 49 27
+			02 4a 2b
+			02 30 0c
+			02 32 62
+			02 62 40
+			02 71 47
+			02 30 0d
+			02 4c 74
+			02 30 08
+			02 52 c3
+			02 54 20
+			02 30 00
+			02 35 00
+		];
+
+		/*
+		 * stock [lcd0]: 720x1920, dclk 101 MHz, ht 796 hbp 28 hspw 8, vt 2168 vbp 20 vspw 8 (Allwinner's
+		 * back porch counts the sync): 58.5 Hz
+		 */
+		panel-timing {
+			clock-frequency = <101000000>;
+			hactive = <720>;
+			hfront-porch = <48>;
+			hsync-len = <8>;
+			hback-porch = <20>;
+			vactive = <1920>;
+			vfront-porch = <228>;
+			vsync-len = <8>;
+			vback-porch = <12>;
+		};
+	};
+};
+
+/*
+ * USB for the SRNUBI T313D: paste at the end of sun20i-d1s-srnubi-t313d.dts (or #include "usb.dtsi" there).
+ *
+ * USB0 is the phone port (wired projection). In the stock firmware it becomes the USB device after a phone's role
+ * switch (a gadget with a vendor interface + CDC NCM), and the app powers the port itself: Config.ini usb0PowerGpio=103 = PB03 (the file
+ * writes port*100+pin), set 0 at boot then 1, and cycled 0 -> 1 whenever a phone link starts. USB1 is host only
+ * (stock "USB2", usb1PowerGpio=320 = PD20, raised after a start-up delay).
+ *
+ * dr_mode "otg" so the role can change at run time: write host | peripheral to musb-hdrc.*.auto/mode. PHY0 is
+ * dual-routed (the PHY driver's sun20i-d1 cfg): host mode puts the port on EHCI0/OHCI0 (high speed, DMA),
+ * peripheral mode on the musb. No ID or VBUS-detect pin (stock usb_detect_type 0); EHCI0's probe sets the PHY to
+ * host mode, so the port comes up as a host.
+ *
+ * VBUS is not given to the PHY on purpose: PB03 (gpio 35, active high) stays with userspace as in stock. A wired
+ * phone link needs VBUS on while the screen is the USB device, and the link code power-cycles the port to reset a stuck phone;
+ * a PHY regulator would be held on by EHCI0/OHCI0 and could not be cycled. PD20 (gpio 116) likewise.
+ */
+
+&usb_otg {
+	dr_mode = "otg";
+	status = "okay";
+};
+
+&usbphy {
+	status = "okay";
+};
+
+&ehci0 {
+	status = "okay";
+};
+
+&ohci0 {
+	status = "okay";
+};
+
+/* USB1, the second port if this model wires one: on for the boot test (which bus the phone lands on) */
+&ehci1 {
+	status = "okay";
+};
+
+&ohci1 {
+	status = "okay";
+};
+
+/*
+ * The SPI NOR: 16 MiB XMC XM25QH128C (JEDEC 20 40 18, spi-nor-generic from its SFDP) on SPI0, PC2..PC5, at 24 MHz (the
+ * clock the stock backup was read at). The screen runs from it without a card: U-Boot's SPL and
+ * U-Boot, a kernel FIT, the root squashfs, and /data. CONFIG_MTD_PARTITIONED_MASTER also gives the whole chip as mtd0
+ * (backup reads, a restore, U-Boot's writes: its own partition is read only). nor.sh writes them from a card boot.
+ * Sized for the first images (U-Boot 0.81 MiB, the kernel FIT 3.9, the root 9.92 in xz): the boundaries are
+ * only here, U-Boot's norkernel (0x100000) and nor.sh (/proc/mtd).
+ */
+&spi0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&spi0_pins>;
+	status = "okay";
+
+	flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		/*
+		 * 50 MHz: the whole chip read the same as at 24 MHz at 40, 50, 60 and 75 MHz (FAST_READ, four passes
+		 * each); 50 keeps a margin for the car's temperatures. 64 KiB reads 2.3 -> 5.7 MB/s.
+		 */
+		spi-max-frequency = <50000000>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			/* the eGON SPL the BROM loads, then U-Boot's FIT (OpenSBI, U-Boot proper) */
+			partition@0 {
+				label = "boot";
+				reg = <0x000000 0x100000>;
+				read-only;
+			};
+
+			/* a FIT: the LZMA kernel and this device tree, sha256 each (bootm checks them) */
+			partition@100000 {
+				label = "kernel";
+				reg = <0x100000 0x440000>;
+			};
+
+			/* squashfs (xz, 128 KiB blocks): the root, root=mtd:rootfs */
+			partition@540000 {
+				label = "rootfs";
+				reg = <0x540000 0xa40000>;
+			};
+
+			/* JFFS2: /data (settings, Wi-Fi, SSH keys, the AA certificate, Bluetooth bonds); logs stay in RAM */
+			partition@f80000 {
+				label = "data";
+				reg = <0xf80000 0x080000>;
+			};
+		};
+	};
+};

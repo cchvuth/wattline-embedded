@@ -1,0 +1,7 @@
+source "$BR2_EXTERNAL_F133_PATH/package/aic8800/Config.in"
+source "$BR2_EXTERNAL_F133_PATH/package/dash-ota/Config.in"
+source "$BR2_EXTERNAL_F133_PATH/package/g2drot/Config.in"
+source "$BR2_EXTERNAL_F133_PATH/package/mcud/Config.in"
+source "$BR2_EXTERNAL_F133_PATH/package/dashapp/Config.in"
+source "$BR2_EXTERNAL_F133_PATH/package/wattline-aa/Config.in"
+source "$BR2_EXTERNAL_F133_PATH/package/spike-vdec/Config.in"

@@ -1,0 +1,78 @@
+#!/bin/sh
+# The screen's MCU (ttyS1) cuts the power unless told the SoC is busy: U-Boot sent B0 [CE 01 00 00 00] (the hold) at
+# ~2 s and before booti; from here mcud (/usr/sbin/mcud, package/mcud) repeats it each minute. mcud is
+# the line's one reader and writer: the MCU is also the classic Bluetooth, and mcud hands its Bluetooth
+# channels (Android Auto's, and any other) to aa and the rest over /run/mcud.sock. Its log (the MCU's lines and keys) is mcu.txt in the boot's log.
+# B0 [CE 00 00 00 00] releases the hold: the MCU then cuts the power ~40 s later and restores it ~3 s after, a real
+# power cycle (mcud sends it on SIGUSR1, and exits). A warm reset (the watchdog, a panic) leaves the Wi-Fi chip unusable
+# until one, so a boot that finds no Wi-Fi chip on mmc1 releases the hold to get it: at most 3 times in a row
+# (/mnt/sd/mcu-cycles, else /data's; a boot with the chip clears the count), then it stays up without Wi-Fi.
+#   S03mcu power-cycle    the same on purpose (the release from mcud, or straight to the line without it)
+# mcud's end is the hold's, and so the power's: it is started again 2 s after it dies (a crash, a failed poll), and the
+# OOM killer never picks it (oom_score_adj -1000). Not after an exit 0 (asked to go: SIGTERM, or SIGUSR1 once the
+# release is sent) nor a SIGKILL (the release's fallback here and in norw; never the OOM killer's at -1000).
+P=/var/run/mcud.pid
+S=/var/run/mcud-supervise.pid
+C=/mnt/sd/mcu-cycles
+grep -q " /mnt/sd " /proc/mounts || C=/data/mcu-cycles   # no card (running from the NOR): the NOR's /data
+release() { printf '\002\200\260\005\316\000\000\000\000\373' > /dev/ttyS1; }
+# the release: SIGUSR1 to mcud (it sends it, whole, and exits: no hold after it); straight to the line if mcud is not
+# running or does not go within 2 s. Its supervisor first, so no mcud starts again after it.
+let_go() {
+	s=$(cat $S 2>/dev/null); rm -f $S
+	[ -n "$s" ] && kill "$s" 2>/dev/null
+	p=$(cat $P 2>/dev/null)
+	if [ -n "$p" ] && [ "$(cat /proc/$p/comm 2>/dev/null)" = mcud ] && kill -USR1 "$p" 2>/dev/null; then
+		i=0; while [ -d /proc/$p ] && [ $i -lt 20 ]; do usleep 100000; i=$((i + 1)); done
+		[ -d /proc/$p ] || return 0
+		kill -9 "$p" 2>/dev/null
+	fi
+	release
+}
+case "$1" in
+start)
+	stty -F /dev/ttyS1 115200 raw -echo 2>/dev/null || exit 0
+	n=$(cat $C 2>/dev/null || echo 0)
+	cycle() {   # the MCU's power cycle, at most 3 in a row (a boot whose Wi-Fi comes up clears the count)
+		[ "$n" -lt 3 ] 2>/dev/null || return 1
+		echo $((n + 1)) > $C
+		sync
+		echo "<4>S03mcu: $1: the MCU's power cycle, $((n + 1)) of 3" > /dev/kmsg
+		let_go
+	}
+	sdio() { ls /sys/bus/sdio/devices/ 2>/dev/null | grep -q .; }
+	for i in 1 2 3 4 5; do sdio && break; sleep 1; done
+	sdio || { cycle "no Wi-Fi chip (a warm reset?)" && exit 0; }
+	L=/var/log/sd/mcu.txt; [ -d /var/log/sd ] || L=/dev/null
+	(
+		echo -1000 > /proc/self/oom_score_adj   # this loop's, and so each mcud's (inherited)
+		while :; do
+			mcud 2>> $L & echo $! > $P
+			wait $!; r=$?
+			[ $r = 0 ] || [ $r = 137 ] && break
+			echo "$(date +%T) mcud: exit $r: started again in 2 s" >> $L
+			sleep 2
+		done
+		rm -f $S
+	) &
+	echo $! > $S
+	# the Bluetooth name phones see is the MCU's (stock set CAR-BT_XXXX at each MCU start): ours, every boot; and its
+	# Bluetooth on (AT#CA), on by default while testing (dash-aa's pairing window no longer turns it off)
+	( sleep 2; ( sleep 1; printf 'AT#MMWattline\r\nAT#CA\r\n' ) | mcud ctl 3 > /dev/null 2>&1 ) &
+	# a warm reset can also leave the chip enumerated but dead: no wlan0 a minute in (the modules load after this
+	# script: S05wifi) is the same; wlan0 there clears the count. Past 3 in a row mcud goes on holding.
+	(
+		sleep 60
+		if [ -e /sys/class/net/wlan0 ]; then
+			[ "$n" = 0 ] || { echo 0 > $C; sync; }
+		else
+			cycle "no wlan0 a minute in"
+		fi
+	) &
+	;;
+power-cycle)
+	sync
+	echo "<5>S03mcu: power cycle asked: the MCU cuts the power in ~40 s" > /dev/kmsg
+	let_go
+	;;
+esac

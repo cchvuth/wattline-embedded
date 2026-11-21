@@ -1,0 +1,48 @@
+/*
+ * The NOR's "kernel" partition: the kernel, LZMA, and its device tree, sha256 each; U-Boot's bootm checks them, unpacks
+ * the kernel to its run address and boots it with that device tree. post-image.sh makes it (xz --format=lzma -9, then
+ * U-Boot's mkimage -f kernel.its kernel.itb) and checks that it fits the partition (0x440000).
+ */
+/dts-v1/;
+
+/ {
+	description = "SRNUBI T313D: Linux and its device tree";
+	#address-cells = <1>;
+
+	images {
+		kernel {
+			description = "Linux";
+			data = /incbin/("Image.lzma");
+			type = "kernel";
+			arch = "riscv";
+			os = "linux";
+			compression = "lzma";
+			load = <0x40200000>;
+			entry = <0x40200000>;
+			hash {
+				algo = "sha256";
+			};
+		};
+
+		fdt {
+			description = "sun20i-d1s-srnubi-t313d";
+			data = /incbin/("f133.dtb");
+			type = "flat_dt";
+			arch = "riscv";
+			compression = "none";
+			hash {
+				algo = "sha256";
+			};
+		};
+	};
+
+	configurations {
+		default = "conf";
+
+		conf {
+			description = "SRNUBI T313D";
+			kernel = "kernel";
+			fdt = "fdt";
+		};
+	};
+};

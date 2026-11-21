@@ -1,0 +1,74 @@
+#!/bin/sh
+# The dash program (app/, built for riscv64): /mnt/sd/dash/dash with its dash.conf if the card has one, else the image's
+# /usr/lib/dash/dash; started again 2 s after
+# it exits (as the T113's dash-supervise: its start and exit lines too); a dash.off file there keeps it off. The text
+# console lets go of the screen first, or its cursor draws over the dash. Its output: the boot's log folder on the card
+# (dash.out, capped by S02sd).
+# Early in the boot (S05, right after the MCU's hold): the screen is what the driver waits for. The boot goes on once
+# the dash has drawn its first frame (/run/dash-shown; /run/dash-ready comes before it, once the UI is built) or after
+# 10 s, so the Wi-Fi's driver and the daemons do not compete with its start for the one core and the slow flash. (It was
+# S99dash, last: the dash showed ~30 s after power-on.)
+# The watchdog policy: a reset of the board loses the Wi-Fi chip until power off and on (S03mcu then has the MCU cycle
+# the power: a second boot, the screen dark for a minute or two), so the hardware watchdog stays off (dash.conf
+# watchdog = 0) and a hung dash is caught here instead: its log (dash.conf's log, else /data/log/dash.log, a line at
+# least every 10 s) unchanged for over a minute while the card takes writes = hung: killed (TERM, then KILL) and so
+# restarted, the board and its Wi-Fi left as they are.
+D=/mnt/sd/dash O=/var/log/sd/dash.out S=/run/dash-supervise.pid
+# the card's dash (development: the newest build) if there is one, else the image's own (no card: the NOR)
+[ -x $D/dash ] || D=/usr/lib/dash
+hung() {   # hung PID: watches the dash's log, kills PID when it stops
+	G=$(sed -n 's/^[[:space:]]*log[[:space:]]*=[[:space:]]*\([^[:space:]#]*\).*/\1/p' $D/dash.conf 2>/dev/null | tail -n 1)
+	[ -n "$G" ] || { G=/run/dash.log; [ -w /data ] && G=/data/log/dash.log; }   # the dash's own default (app/main.c)
+	was=; n=0
+	while sleep 15; do
+		kill -0 $1 2>/dev/null || return   # the dash gone (stop kills it and its supervisor): nothing left to watch
+		now=$(ls -ln "$G" 2>/dev/null)
+		if [ -z "$now" ] || [ "$now" != "$was" ]; then was=$now; n=0; continue; fi
+		case $G in /mnt/sd/*|/data/*)   # a log on a card gone read-only: no lines, nothing hung
+			grep -q ' /mnt/sd vfat rw' /proc/mounts || continue;; esac
+		n=$((n + 1)); [ $n -ge 5 ] || continue
+		echo "$(date) no log line for over a minute: hung, killed" >> $O
+		kill $1; sleep 5; kill -9 $1 2>/dev/null
+		return
+	done
+}
+case "$1" in
+start)
+	[ -d /var/log/sd ] || O=/tmp/dash.out   # no card: the output in RAM
+	# backlight.off on the card: the screen stays dark (the panel's backlight powered down; the dash sets only the level)
+	[ -e /mnt/sd/backlight.off ] && echo 4 > /sys/class/backlight/backlight/bl_power
+	[ -x $D/dash ] && [ ! -e $D/dash.off ] || exit 0
+	for v in /sys/class/vtconsole/vtcon*; do
+		grep -q "frame buffer" $v/name 2>/dev/null && echo 0 > $v/bind
+	done
+	mkdir -p /mnt/sd/data
+	# one supervisor: a start while one runs changes nothing (a quick stop + start had left two, each with a dash)
+	s=$(cat $S 2>/dev/null); [ -n "$s" ] && kill -0 "$s" 2>/dev/null && exit 0
+	(
+		rm -f /tmp/dash.stop /run/dash-shown
+		while [ ! -e $D/dash.off ] && [ ! -e /tmp/dash.stop ]; do
+			echo "$(date) start" >> $O
+			$D/dash -c $D/dash.conf >> $O 2>&1 &
+			p=$!
+			hung $p & h=$!
+			wait $p; r=$?
+			kill $h 2>/dev/null
+			echo "$(date) exit $r" >> $O
+			sleep 2
+		done
+	) &
+	echo $! > $S
+	# (a dash from before the mark, the card's perhaps: on 3 s after it is ready)
+	i=0; r=0; while [ ! -e /run/dash-shown ] && [ $i -lt 100 ] && [ $r -lt 30 ]; do
+		[ -e /run/dash-ready ] && r=$((r + 1)); usleep 100000; i=$((i + 1))
+	done
+	;;
+stop)
+	# the supervisor first (else it starts the dash again), then the dash; back only once it is gone (<= 5 s)
+	touch /tmp/dash.stop
+	s=$(cat $S 2>/dev/null); [ -n "$s" ] && kill "$s" 2>/dev/null
+	killall dash 2>/dev/null
+	i=0; while pidof dash >/dev/null && [ $i -lt 25 ]; do usleep 200000; i=$((i + 1)); done
+	rm -f $S
+	;;
+esac

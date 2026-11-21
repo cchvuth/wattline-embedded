@@ -1,0 +1,10 @@
+#!/bin/sh
+# SSH at boot (the T113 Dash's S50dropbear; replaces Buildroot's and S49sshkeys): Dropbear, key logins only, runs only
+# when there is a key: the computers paired from the dash's screen (/data/ssh, while SSH is on) and the card's
+# authorized_keys (development, unless SSH was turned off). See dash-ssh-enable.
+case "$1" in
+start|"") /usr/sbin/dash-ssh-enable boot ;;
+stop) start-stop-daemon -K -q -p /var/run/dropbear.pid ;;
+restart|reload) "$0" stop; sleep 1; "$0" start ;;
+esac
+exit 0

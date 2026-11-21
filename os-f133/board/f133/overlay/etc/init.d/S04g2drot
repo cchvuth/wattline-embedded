@@ -1,0 +1,5 @@
+#!/bin/sh
+# The G2D's rotation (/dev/g2drot, package/g2drot): the dash's flush turns its strips into the framebuffer on the
+# 2D engine rather than the CPU (68 -> 25 ms a scrolled frame). Before S05dash; without it the dash rotates them itself.
+case "$1" in start|"") modprobe g2drot 2>/dev/null ;; esac
+exit 0

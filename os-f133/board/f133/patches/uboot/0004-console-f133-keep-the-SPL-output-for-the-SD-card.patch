@@ -1,0 +1,28 @@
+--- a/common/console.c
++++ b/common/console.c
+@@ -684,6 +684,8 @@
+ static inline void pre_console_puts(const char *s) {}
+ static inline void print_pre_console_buffer(int flushpoint) {}
+ #endif
++
++void f133_log_putc(char c);	/* board/sunxi/board-riscv.c */
+ 
+ void putc(const char c)
+ {
+@@ -691,6 +693,7 @@
+ 		return;
+ 
+ 	console_record_putc(c);
++	f133_log_putc(c);	/* SRNUBI T313D: the output kept for the SD card (SPL: SRAM, U-Boot proper: DRAM) */
+ 
+ 	/* sandbox can send characters to stdout before it has a console */
+ 	if (IS_ENABLED(CONFIG_SANDBOX) && !(gd->flags & GD_FLG_SERIAL_READY)) {
+@@ -732,6 +735,8 @@
+ 		return;
+ 
+ 	console_record_puts(s);
++	for (const char *p = s; *p; p++)
++		f133_log_putc(*p);
+ 
+ 	/* sandbox can send characters to stdout before it has a console */
+ 	if (IS_ENABLED(CONFIG_SANDBOX) && !(gd->flags & GD_FLG_SERIAL_READY)) {

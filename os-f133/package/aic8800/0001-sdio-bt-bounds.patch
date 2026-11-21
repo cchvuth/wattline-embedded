@@ -1,0 +1,26 @@
+--- a/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/btsdio.c
++++ b/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/btsdio.c
+@@ -148,9 +148,12 @@
+         return -ENODEV;
+     }
+ 
++	if (len < 2)
++		return -EINVAL;
+ 	skb = alloc_skb(len-1,GFP_ATOMIC);
+ 	if(!skb){
+ 		AICWFDBG(LOGERROR, "alloc skb fail %s \n",__func__);
++		return -ENOMEM;
+ 	}
+ 	memcpy(skb_put(skb,len-1) ,(data+1), len-1);
+ 	hdev->stat.byte_rx += len;
+--- a/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_msg_tx.c
++++ b/src/SDIO/driver_fw/driver/aic8800/aic8800_fdrv/rwnx_msg_tx.c
+@@ -2168,6 +2168,8 @@
+ 		return 0;
+ 	}
+ 	cfm.status = 0;
++	if (len > sizeof(((struct mm_bt_send_req *)0)->bt_data))
++		return -EMSGSIZE;
+     req = rwnx_msg_zalloc(TDLS_SDIO_BT_SEND_REQ, TASK_TDLS, DRV_TASK_ID, sizeof(struct mm_bt_send_req));
+ 
+     if (!req) {

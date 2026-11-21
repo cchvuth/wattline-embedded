@@ -1,0 +1,57 @@
+CONFIG_DEFAULT_DEVICE_TREE="sun20i-d1s-mangopi-mq"
+# the same device tree in the FIT for U-Boot proper (nezha_defconfig leaves the Nezha's there: SD card detect active-high,
+# console on UART0)
+CONFIG_OF_LIST="sun20i-d1s-mangopi-mq"
+CONFIG_SPL_OF_LIST="sun20i-d1s-mangopi-mq"
+# The stock boot0's DRAM settings (in-package 64 MiB DDR2)
+CONFIG_SUNXI_DRAM_TYPE_DDR2=y
+# CONFIG_SUNXI_DRAM_TYPE_DDR3 is not set
+CONFIG_DRAM_SUNXI_ODT_EN=0x0
+CONFIG_DRAM_SUNXI_TPR0=0x00471992
+CONFIG_DRAM_SUNXI_TPR11=0x00030010
+CONFIG_DRAM_SUNXI_TPR12=0x00000035
+CONFIG_DRAM_SUNXI_TPR13=0x34000000
+# CONFIG_SUN8I_EMAC is not set
+# CONFIG_PHY_REALTEK is not set
+# CONFIG_VIDEO is not set
+# no "usb start" before the boot (nothing is booted from USB; one less thing that can stall); sunxi selects
+# USE_PREBOOT, so the command is emptied instead
+CONFIG_PREBOOT=""
+# boot straight away: no key check (the console input is not wired out; noise on it would stop the boot)
+CONFIG_BOOTDELAY=-2
+# the built-in environment only, never a saved one from the card (its first partition is the Dash's)
+CONFIG_ENV_IS_NOWHERE=y
+# CONFIG_ENV_IS_IN_FAT is not set
+# the kernel at its run address (RAM + 2 MiB, after OpenSBI), the initramfs and the device tree above it, below
+# U-Boot (top of the 64 MiB, 2 MiB malloc); nothing moved. No console is wired out, so a boot that returns writes
+# its environment to the card as uboot-fail.txt and then blinks the backlight at 2 Hz for good.
+CONFIG_CMD_GPIO=y
+CONFIG_CMD_FAT=y
+CONFIG_FAT_WRITE=y
+CONFIG_CMD_FDT=y
+CONFIG_USE_BOOTCOMMAND=y
+# booti: no initrd (the kernel's own initramfs mounts rootfs.sqfs from the card); the console on the screen only,
+# turned to landscape (fbcon rotate 1, 90 degrees: 3 showed the text upside down), 32 bpp (16 banded the car
+# pictures). Quiet: kernel messages only at emergency level (loglevel 1: a panic still shows, the boot's warnings
+# do not) and no cursor, so the screen stays black until the splash (S00splash). The watchdog
+# U-Boot runs stays on into Linux: its
+# driver stops it at probe, and a kernel stuck before that is reset at 16 s, the SPL then saving its log. The MCU hold
+# (B0 [CE 01 00 00 00] into UART1's FIFO, as the SPL left it) again: the SPL's comes at ~0.4 s, which the MCU
+# seems to miss (the probe that kept the power on sent it ~1 s in); here at ~2 s and right before booti.
+# The NOR's kernel read at 50 MHz first (Linux read the whole chip right at 40..75 MHz), again at
+# 24 if anything in that try fails (a SPI timeout, a header that is not a FIT or too big for the partition, bootm's
+# sha256): 2 s of the boot at 24 MHz. Try-once (tested in U-Boot sandbox): an Image.try (with f133.dtb.try if there)
+# beside rootfs.sqfs.try, the root it comes with, boots once: only once try.boot, its mark, is written (a card too
+# full for it boots Image), with "try=kernel" in bootargs, which alone has the initramfs mount rootfs.sqfs.try.
+# S98try keeps both once the screen works, else the next boot finds try.boot and goes back to Image. (U-Boot no
+# longer writes ramoops.bin and uboot-env.txt at each boot: Linux copies pstore itself.)
+CONFIG_BOOTCOMMAND="setenv kernel_addr_r 0x40200000; setenv ramdisk_addr_r 0x42000000; setenv fdt_addr_r 0x43000000; setenv initrd_high 0xffffffffffffffff; setenv fdt_high 0xffffffffffffffff; setenv mcuhold 'mw.l 0x02500400 0x02; mw.l 0x02500400 0x80; mw.l 0x02500400 0xb0; mw.l 0x02500400 0x05; mw.l 0x02500400 0xce; mw.l 0x02500400 0x01; mw.l 0x02500400 0x00; mw.l 0x02500400 0x00; mw.l 0x02500400 0x00; mw.l 0x02500400 0xfa'; run mcuhold; setenv norkernel 0x100000; setenv norboot 'f133nor 0x42000000 ${norkernel} 0x1000 && fdt addr 0x42000000 && fdt header get fitsize totalsize && itest ${fitsize} -le 440000 && f133nor 0x42000000 ${norkernel} ${fitsize} && setenv fdt_high 0x43000000 && setenv bootargs console=tty0 fbcon=rotate:1 panic=5 oops=panic loglevel=1 vt.global_cursor_default=0 root=mtd:rootfs && run mcuhold && bootm 0x42000000; setenv fdt_high 0xffffffffffffffff'; if env exists mmc_bootdev; then if test -e mmc 0:4 nor.boot; then run norboot; fi; else setenv norclk 50; run norboot; setenv norclk; run norboot; fi; fdt addr ${fdtcontroladdr}; fdt get value memreg /memory reg; if test -e mmc 0:4 nortest; then setenv norclk 24; load mmc 0:4 0x43900000 nortest; env import -t 0x43900000 ${filesize}; f133nor id; f133nor 0x40200000 0 0x1000000 && fatwrite mmc 0:4 0x40200000 nor-uboot.bin 0x1000000; env export -t 0x43900000 norclk nor_mhz nor_id nor_sr nor_ms; fatwrite mmc 0:4 0x43900000 nortest.txt ${filesize}; setenv norclk; fi; setenv kfile Image; setenv dfile f133.dtb; setenv tryarg; if test -e mmc 0:4 Image.try && test -e mmc 0:4 rootfs.sqfs.try; then if test -e mmc 0:4 try.boot; then echo Image.try failed before: Image; else mw.b ${kernel_addr_r} 0x31 1; fatwrite mmc 0:4 ${kernel_addr_r} try.boot 1 && setenv kfile Image.try && setenv tryarg try=kernel; if test ${kfile} = Image.try && test -e mmc 0:4 f133.dtb.try; then setenv dfile f133.dtb.try; fi; fi; fi; load mmc 0:4 ${kernel_addr_r} ${kfile} && load mmc 0:4 ${fdt_addr_r} ${dfile} && setenv bootargs console=tty0 fbcon=rotate:1 panic=5 oops=panic loglevel=1 vt.global_cursor_default=0 ${tryarg} && run mcuhold && booti ${kernel_addr_r} - ${fdt_addr_r}; env export -t 0x43900000; fatwrite mmc 0:4 0x43900000 uboot-fail.txt ${filesize}; while itest 1 == 1; do gpio toggle PG15; sleep 0.25; done"
+# The SPL's malloc pool after the DRAM init defaults to the end of the BSS area (0x43f80000 + 1 MiB = 0x44080000):
+# past the 64 MiB (the board's DRAM ends at 0x44000000). Below SPL_STACK_R (0x43e00000) instead.
+CONFIG_SPL_HAS_CUSTOM_MALLOC_START=y
+CONFIG_SPL_CUSTOM_SYS_MALLOC_ADDR=0x43c00000
+# The NOR boot: FIT kernels need bootm room; U-Boot fits
+# the NOR boot partition without its EFI loader and networking
+CONFIG_SYS_BOOTM_LEN=0x2000000
+# CONFIG_EFI_LOADER is not set
+# CONFIG_NET is not set

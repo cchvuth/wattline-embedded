@@ -1,0 +1,558 @@
+--- a/board/sunxi/board-riscv.c
++++ b/board/sunxi/board-riscv.c
+@@ -29,6 +29,8 @@
+ #include <asm/csr.h>
+ #include <asm/global_data.h>
+ #include <asm/io.h>
++#include <linux/delay.h>
++#include <time.h>
+ 
+ #ifdef CONFIG_RISCV
+ int board_init(void)
+@@ -176,8 +178,460 @@
+ u32 spl_boot_device(void)
+ {
+ 	return sunxi_get_boot_device();
++}
++
++/*
++ * SRNUBI T313D (Allwinner F133): the screen's MCU (UART1 on PG12/PG13, 115200 8N1) power-cycles the SoC about 30 s
++ * after power-on unless it gets B0 [CE 01 00 00 00], the frame the stock app sends before a firmware update.
++ * Frames: 02 80 cmd len payload xor, the xor over the bytes after 02.
++ */
++#define F133_REG(a)		((void __iomem *)(uintptr_t)(a))
++#define F133_UART1		0x02500400
++#define F133_PG_CFG1		F133_REG(0x02000124)
++#define F133_PG_PULL0		F133_REG(0x02000144)
++#define F133_CCU_APB1		F133_REG(0x02001524)
++#define F133_CCU_UART_BGR	F133_REG(0x0200190c)
++
++/* polls until cond holds, for 250 ms at most: time, not loop counts (the CPU may still run at 24 MHz here) */
++#define F133_WAIT(cond)		({ ulong _t = get_timer(0); bool _ok;			\
++				   while (!(_ok = (cond)) && get_timer(_t) < 250)	\
++					;						\
++				   _ok; })
++
++static void f133_mcu_send(u8 cmd, const u8 *p, int n)
++{
++	u8 f[32];
++	int i, len = 0;
++	u8 x = 0;
++
++	f[len++] = 0x02;
++	f[len++] = 0x80;
++	f[len++] = cmd;
++	f[len++] = n;
++	for (i = 0; i < n; i++)
++		f[len++] = p[i];
++	for (i = 1; i < len; i++)
++		x ^= f[i];
++	f[len++] = x;
++	for (i = 0; i < len; i++) {
++		F133_WAIT(readl(F133_REG(F133_UART1 + 0x14)) & (1 << 5));	/* room in the FIFO */
++		writel(f[i], F133_REG(F133_UART1));
++	}
++}
++
++/* UART1 as the probe that kept the power on set it up (src/talk.rs): the divisor only while the UART is idle */
++static void f133_mcu_uart_init(void)
++{
++	clrsetbits_le32(F133_PG_CFG1, 0xff << 16, 0x77 << 16);	/* PG12 TX, PG13 RX */
++	clrsetbits_le32(F133_PG_PULL0, 0xf << 24, 0x5 << 24);
++	writel(0, F133_CCU_APB1);				/* the 24 MHz crystal */
++	setbits_le32(F133_CCU_UART_BGR, (1 << 17));	/* UART1 out of reset */
++	setbits_le32(F133_CCU_UART_BGR, (1 << 1));		/* and clocked */
++	udelay(1000);
++	F133_WAIT(!(readl(F133_REG(F133_UART1 + 0x7c)) & 1));		/* USR: not busy */
++	writel(0x83, F133_REG(F133_UART1 + 0x0c));			/* divisor latch */
++	writel(13, F133_REG(F133_UART1));				/* 24 MHz / 16 / 13 = 115385 baud */
++	writel(0, F133_REG(F133_UART1 + 0x04));
++	writel(0x03, F133_REG(F133_UART1 + 0x0c));			/* 8N1 */
++	writel(0x07, F133_REG(F133_UART1 + 0x08));			/* FIFOs on */
++	writel(0, F133_REG(F133_UART1 + 0x04));				/* no interrupts */
++}
++
++/*
++ * B0 [CE 01 00 00 00], sent at start-up, again after the DRAM init (the probe sent it a second after power-on, not
++ * at once) and every 10 s while the SPL is stuck
++ */
++static void f133_mcu_hold(void)
++{
++	static const u8 hold[] = { 0xce, 0x01, 0x00, 0x00, 0x00 };
++
++	f133_mcu_send(0xb0, hold, sizeof(hold));
++	udelay(2000);						/* out of the FIFO */
++}
++
++/*
++ * The backlight on (stock sys_config [lcd0]: lcd_reset PD21, lcd_bl_en PG15, driven high): with no console wired
++ * out, a lit screen is the sign the SPL runs; U-Boot and Linux blink it at their stages.
++ */
++static void f133_backlight_on(void)
++{
++	setbits_le32(F133_REG(0x020000a0), 1 << 21);			/* PD_DAT */
++	clrsetbits_le32(F133_REG(0x02000098), 0xf << 20, 0x1 << 20);	/* PD21 output */
++	setbits_le32(F133_REG(0x02000130), 1 << 15);			/* PG_DAT */
++	clrsetbits_le32(F133_REG(0x02000124), 0xf << 28, 0x1 << 28);	/* PG15 output */
++}
++
++/*
++ * No console is wired out, so the SPL keeps its output (common/console.c hands each character here) in SRAM nothing
++ * else uses (0x38000: past the SPL image, below its stack; BSS is in DRAM, hence the fixed address for all state) and
++ * puts it on the SD card after the DRAM init, failed or not: raw sectors from F133_LOG_SECTOR (a raw read of the card
++ * at sector 20400000), and only on a card whose MBR leaves that whole area free: outside every partition and inside
++ * the card (f133_sd_log_room). Any other card is never written. The SD code is the probes' (src/sd.rs, proven on this
++ * board): SMHC0 from scratch, 1-bit at 6 MHz, the CPU feeding the FIFO.
++ */
++#define F133_LOG_SECTOR		20400000	/* the SPL's log; U-Boot proper's at +64, OpenSBI's at +256 */
++#define F133_LOG_SECTORS	768		/* the three: OpenSBI's (256 KiB) ends the area */
++
++/*
++ * U-Boot proper keeps its output the same way, in DRAM that nothing else uses until Linux (0x43a00000, as OpenSBI does
++ * at 0x43b00000, patched): after a hang the watchdog the SPL arms resets the board, the DRAM keeps its contents, and
++ * the next SPL run puts both logs on the card. The SPL runs the D-cache write-through, so nothing waits in it.
++ */
++#ifdef CONFIG_SPL_BUILD
++#define F133_LOG_MAGIC		0x474f4c33	/* "3LOG" */
++#define F133_LOG_ADDR		0x38000
++#define F133_LOG_SIZE		0x4000
++#else
++#define F133_LOG_MAGIC		0x4c544255	/* "UBTL" */
++#define F133_LOG_ADDR		0x43a00000
++#define F133_LOG_SIZE		0x10000
++#endif
++
++struct f133_log {
++	u32 magic;
++	u32 len;
++	u32 sd_step;	/* the SD step that failed (f133_sd_save), 0: none */
++	u32 sd_err;	/* its interrupt bits, or the last write error */
++	char text[F133_LOG_SIZE - 16];
++};
++
++#define F133_LOG_BUF		((struct f133_log *)F133_LOG_ADDR)
++
++void f133_log_putc(char c)
++{
++	struct f133_log *l = F133_LOG_BUF;
++
++	if (l->magic != F133_LOG_MAGIC || l->len > sizeof(l->text)) {
++		l->magic = F133_LOG_MAGIC;
++		l->len = 0;
++	}
++	if (l->len < sizeof(l->text))
++		l->text[l->len++] = c;
+ }
+ 
++#define F133_SD(o)		F133_REG(0x04020000 + (o))
++#define F133_SD_GCTRL		0x00
++#define F133_SD_CLKCR		0x04
++#define F133_SD_TIMEOUT		0x08
++#define F133_SD_WIDTH		0x0c
++#define F133_SD_BLKSZ		0x10
++#define F133_SD_BYTECNT		0x14
++#define F133_SD_CMD		0x18
++#define F133_SD_ARG		0x1c
++#define F133_SD_RESP0		0x20
++#define F133_SD_RINT		0x38
++#define F133_SD_STATUS		0x3c
++#define F133_SD_FIFO		0x200
++#define F133_RINT_CMD_DONE	BIT(2)
++#define F133_RINT_DATA_OVER	BIT(3)
++#define F133_RINT_ERR		0xbfc2		/* response, CRC, timeouts, FIFO, start/end bit */
++#define F133_ST_FIFO_EMPTY	BIT(2)
++#define F133_ST_FIFO_FULL	BIT(3)
++#define F133_ST_BUSY		BIT(9)
++#define F133_C_START		BIT(31)
++#define F133_C_RESP		BIT(6)
++#define F133_C_LONG		BIT(7)
++#define F133_C_CRC		BIT(8)
++#define F133_C_WAIT_PRE		BIT(13)
++#define F133_C_INIT		BIT(15)
++#define F133_C_UPCLK		BIT(21)
++
++static u32 f133_sd_rd(u32 o)
++{
++	return readl(F133_SD(o));
++}
++
++static void f133_sd_wr(u32 o, u32 v)
++{
++	writel(v, F133_SD(o));
++}
++
++static bool f133_sd_upclk(void)
++{
++	bool ok;
++
++	f133_sd_wr(F133_SD_CMD, F133_C_START | F133_C_UPCLK | F133_C_WAIT_PRE);
++	ok = F133_WAIT(!(f133_sd_rd(F133_SD_CMD) & F133_C_START));
++	f133_sd_wr(F133_SD_RINT, f133_sd_rd(F133_SD_RINT));
++	return ok;
++}
++
++/* card clock = 24 MHz / (2 x div), stopped while it changes */
++static bool f133_sd_clock(u32 div)
++{
++	bool ok;
++
++	f133_sd_wr(F133_SD_CLKCR, f133_sd_rd(F133_SD_CLKCR) & ~BIT(16));
++	ok = f133_sd_upclk();
++	f133_sd_wr(F133_SD_CLKCR, (f133_sd_rd(F133_SD_CLKCR) & ~(0xff | BIT(17))) | div);
++	ok &= f133_sd_upclk();
++	f133_sd_wr(F133_SD_CLKCR, f133_sd_rd(F133_SD_CLKCR) | BIT(16));
++	return ok & f133_sd_upclk();
++}
++
++/* a command without data: 0 and RESP0 in *resp, or the interrupt bits */
++static u32 f133_sd_cmd(u32 idx, u32 arg, u32 flags, u32 *resp)
++{
++	u32 r;
++
++	F133_WAIT(!(f133_sd_rd(F133_SD_CMD) & F133_C_START));
++	f133_sd_wr(F133_SD_RINT, ~0);
++	f133_sd_wr(F133_SD_ARG, arg);
++	f133_sd_wr(F133_SD_CMD, F133_C_START | flags | idx);
++	if (!F133_WAIT(f133_sd_rd(F133_SD_RINT) & (F133_RINT_CMD_DONE | F133_RINT_ERR)))
++		return 0x01000000 | f133_sd_rd(F133_SD_RINT);
++	r = f133_sd_rd(F133_SD_RINT);
++	if (r & F133_RINT_ERR)
++		return r;
++	*resp = f133_sd_rd(F133_SD_RESP0);
++	return 0;
++}
++
++/*
++ * pins, clocks, controller reset, CMD0/8/ACMD41/CMD2/3/9/7/16 at 400 kHz, then 6 MHz: 0, or the step that failed.
++ * *sectors: the card's size, from its CSD (CMD9).
++ */
++static u32 f133_sd_init(bool *hc, u64 *sectors, u32 *err)
++{
++	u32 c, pu, dv, r = 0, ocr = 0, rca, csd1, csd2;
++	bool v2;
++	int i;
++
++	c = readl(F133_REG(0x020000f0));	/* PF_CFG0 */
++	pu = readl(F133_REG(0x02000114));	/* PF_PULL0 */
++	dv = readl(F133_REG(0x02000104));	/* PF_DRV0 */
++	for (i = 0; i < 6; i++) {		/* PF0..PF5: SMHC0 (function 2), pull-up, drive 2 */
++		c = (c & ~(0xf << (i * 4))) | (2 << (i * 4));
++		pu = (pu & ~(0x3 << (i * 2))) | (1 << (i * 2));
++		dv = (dv & ~(0xf << (i * 4))) | (2 << (i * 4));
++	}
++	writel(c, F133_REG(0x020000f0));
++	writel(pu, F133_REG(0x02000114));
++	writel(dv, F133_REG(0x02000104));
++	setbits_le32(F133_REG(0x0200184c), BIT(16));	/* SMHC0 out of reset */
++	setbits_le32(F133_REG(0x0200184c), BIT(0));	/* and clocked */
++	writel(BIT(31), F133_REG(0x02001830));		/* from the 24 MHz crystal */
++	f133_sd_wr(F133_SD_GCTRL, 0x7);			/* soft, FIFO and DMA reset */
++	if (!F133_WAIT(!(f133_sd_rd(F133_SD_GCTRL) & 0x7)))
++		return 1;
++	f133_sd_wr(F133_SD_TIMEOUT, 0xffffff40);
++	f133_sd_wr(F133_SD_WIDTH, 0);
++	if (!f133_sd_clock(30))
++		return 2;
++	udelay(10000);
++	*err = f133_sd_cmd(0, 0, F133_C_INIT, &r);
++	if (*err)
++		return 3;
++	udelay(2000);
++	v2 = !f133_sd_cmd(8, 0x1aa, F133_C_RESP | F133_C_CRC, &r) && (r & 0xfff) == 0x1aa;
++	for (i = 0; i < 1000; i++) {
++		*err = f133_sd_cmd(55, 0, F133_C_RESP | F133_C_CRC, &r);
++		if (*err)
++			return 4;
++		*err = f133_sd_cmd(41, v2 ? 0x40ff8000 : 0x00ff8000, F133_C_RESP, &ocr);
++		if (*err)
++			return 5;
++		if (ocr & BIT(31))
++			break;
++		udelay(1000);
++	}
++	if (!(ocr & BIT(31))) {
++		*err = ocr;
++		return 6;
++	}
++	*hc = ocr & BIT(30);
++	*err = f133_sd_cmd(2, 0, F133_C_RESP | F133_C_LONG | F133_C_CRC, &r);
++	if (*err)
++		return 7;
++	*err = f133_sd_cmd(3, 0, F133_C_RESP | F133_C_CRC, &r);
++	if (*err)
++		return 8;
++	rca = r >> 16;
++	/* csd1, csd2: the CSD's bits 95..64 and 63..32 (RESP2, RESP1), as U-Boot's mmc.c reads them */
++	*err = f133_sd_cmd(9, rca << 16, F133_C_RESP | F133_C_LONG | F133_C_CRC, &r);
++	if (*err)
++		return 12;
++	csd1 = f133_sd_rd(F133_SD_RESP0 + 8);
++	csd2 = f133_sd_rd(F133_SD_RESP0 + 4);
++	if (f133_sd_rd(F133_SD_RESP0 + 12) >> 30)	/* CSD 2.0: (C_SIZE + 1) x 512 KiB */
++		*sectors = ((u64)((csd1 & 0x3f) << 16 | csd2 >> 16) + 1) << 10;
++	else		/* 1.0: (C_SIZE + 1) x 2^(C_SIZE_MULT + 2) blocks of 2^READ_BL_LEN bytes */
++		*sectors = ((u64)((csd1 & 0x3ff) << 2 | csd2 >> 30) + 1) <<
++			   (((csd2 >> 15) & 7) + 2 + ((csd1 >> 16) & 0xf)) >> 9;
++	*err = f133_sd_cmd(7, rca << 16, F133_C_RESP | F133_C_CRC, &r);
++	if (*err)
++		return 9;
++	F133_WAIT(!(f133_sd_rd(F133_SD_STATUS) & F133_ST_BUSY));
++	*err = f133_sd_cmd(16, 512, F133_C_RESP | F133_C_CRC, &r);
++	if (*err)
++		return 10;
++	if (!f133_sd_clock(2))
++		return 11;
++	return 0;
++}
++
++/* one 512-byte block, written from buf (CMD24) or read into it (CMD17): 0, or the interrupt bits plus a stage marker */
++static u32 f133_sd_block(u64 sector, u32 *buf, bool hc, bool write)
++{
++	u64 addr = hc ? sector : sector * 512;		/* a standard-capacity card takes byte addresses */
++	int i;
++
++	if (addr >> 32)
++		return 0x60000000;
++	if (!F133_WAIT(!(f133_sd_rd(F133_SD_STATUS) & F133_ST_BUSY)))
++		return 0x10000000;
++	f133_sd_wr(F133_SD_GCTRL, (f133_sd_rd(F133_SD_GCTRL) & ~BIT(5)) | BIT(31));	/* the FIFO by the CPU */
++	f133_sd_wr(F133_SD_RINT, ~0);
++	f133_sd_wr(F133_SD_BLKSZ, 512);
++	f133_sd_wr(F133_SD_BYTECNT, 512);
++	f133_sd_wr(F133_SD_ARG, addr);
++	/* start | wait for the previous | write and CMD24, or CMD17 | data | CRC check | response */
++	f133_sd_wr(F133_SD_CMD, F133_C_START | F133_C_WAIT_PRE | (write ? BIT(10) | 24 : 17) | BIT(9) | F133_C_CRC |
++		   F133_C_RESP);
++	for (i = 0; i < 128; i++) {
++		if (!F133_WAIT(!(f133_sd_rd(F133_SD_STATUS) & (write ? F133_ST_FIFO_FULL : F133_ST_FIFO_EMPTY)) ||
++			       (f133_sd_rd(F133_SD_RINT) & F133_RINT_ERR)))
++			return 0x20000000 | f133_sd_rd(F133_SD_RINT);
++		if (f133_sd_rd(F133_SD_RINT) & F133_RINT_ERR)
++			return 0x30000000 | f133_sd_rd(F133_SD_RINT);
++		if (write)
++			f133_sd_wr(F133_SD_FIFO, buf[i]);
++		else
++			buf[i] = f133_sd_rd(F133_SD_FIFO);
++	}
++	if (!F133_WAIT(f133_sd_rd(F133_SD_RINT) & (F133_RINT_CMD_DONE | F133_RINT_ERR)) ||
++	    (f133_sd_rd(F133_SD_RINT) & F133_RINT_ERR))
++		return 0x40000000 | f133_sd_rd(F133_SD_RINT);
++	if (!F133_WAIT(f133_sd_rd(F133_SD_RINT) & (F133_RINT_DATA_OVER | F133_RINT_ERR)) ||
++	    (f133_sd_rd(F133_SD_RINT) & F133_RINT_ERR))
++		return 0x40000000 | f133_sd_rd(F133_SD_RINT);
++	if (!F133_WAIT(!(f133_sd_rd(F133_SD_STATUS) & F133_ST_BUSY)))
++		return 0x50000000;
++	f133_sd_wr(F133_SD_RINT, ~0);
++	return 0;
++}
++
++/*
++ * The logs' area is free on this card: it ends inside the card (sectors), and the card's MBR (sector 0) holds
++ * partitions, none of them reaching into the area. False for a card whose last partition fills it, a GPT (its
++ * protective entry covers the card), a sector 0 that is no partition table, or a read that fails.
++ */
++static bool f133_sd_log_room(u64 sectors, bool hc)
++{
++	u32 mbr[128], v[2];
++	const u8 *b = (const u8 *)mbr, *e;
++	int i, n = 0;
++
++	if (F133_LOG_SECTOR + F133_LOG_SECTORS > sectors || f133_sd_block(0, mbr, hc, false) ||
++	    b[510] != 0x55 || b[511] != 0xaa)
++		return false;
++	for (i = 0; i < 4; i++) {
++		e = b + 446 + 16 * i;
++		memcpy(v, e + 8, sizeof(v));	/* first sector, sector count: little-endian, as this CPU */
++		if (e[0] & 0x7f)		/* the boot flag is 0 or 0x80 in a partition table */
++			return false;
++		if (!e[4] || !v[1])		/* type 0 or no sectors: no partition */
++			continue;
++		if (v[0] < F133_LOG_SECTOR + F133_LOG_SECTORS && (u64)v[0] + v[1] > F133_LOG_SECTOR)
++			return false;
++		n++;
++	}
++	return n;
++}
++
++/*
++ * bytes from buf onto the card from sector (in the logs' area), a few tries per block. *step, *err: the step that
++ * failed (0: none; 1..12 the bring-up, 13 no free area for the logs on this card) and its interrupt bits, or the last
++ * write error. Returns true if every block went.
++ */
++static bool f133_sd_save(u64 sector, const void *buf, u32 bytes, u32 *step, u32 *err)
++{
++	bool hc = true, ok = true;
++	u64 sectors = 0;
++	u32 i, t, e;
++
++	*err = 0;
++	*step = f133_sd_init(&hc, &sectors, err);
++	if (!*step && !f133_sd_log_room(sectors, hc))
++		*step = 13;
++	if (*step)
++		return false;
++	for (i = 0; i < (bytes + 511) / 512; i++) {
++		for (t = 0; t < 4; t++) {
++			e = f133_sd_block(sector + i, (u32 *)buf + i * 128, hc, true);
++			if (!e)
++				break;
++			*err = e;
++			f133_sd_wr(F133_SD_GCTRL, f133_sd_rd(F133_SD_GCTRL) | BIT(1));	/* FIFO reset */
++			F133_WAIT(!(f133_sd_rd(F133_SD_GCTRL) & BIT(1)));
++			f133_sd_wr(F133_SD_RINT, ~0);
++		}
++		ok &= t < 4;
++	}
++	return ok;
++}
++
++/*
++ * The log onto the card (the whole of it each time, from F133_LOG_SECTOR); also called by the DRAM driver and on the
++ * SPL's failure path. Returns true if every block went.
++ */
++bool f133_log_save(void)
++{
++	struct f133_log *l = F133_LOG_BUF;
++
++	printf("F133: log save at %lu ms\n", get_timer(0));
++	return f133_sd_save(F133_LOG_SECTOR, l, offsetof(struct f133_log, text) + l->len, &l->sd_step, &l->sd_err);
++}
++
++/*
++ * After the DRAM init: the logs OpenSBI and U-Boot proper left in DRAM, if the watchdog reset the board on them, go
++ * onto the card (a "NONE" block where there is none), then their headers are cleared for this run.
++ */
++static void f133_dram_logs_save(void)
++{
++	static const struct {
++		ulong addr;
++		u32 magic, size, sector;
++		const char *name;
++	} logs[] = {
++		{ 0x43a00000, 0x4c544255 /* "UBTL" */, 0x10000, F133_LOG_SECTOR + 64, "U-Boot proper" },
++		{ 0x43b00000, 0x4c494253 /* "SBIL" */, 0x40000, F133_LOG_SECTOR + 256, "OpenSBI and kernel" },
++	};
++	u32 none[128] = { 0x454e4f4e /* "NONE" */ }, step, err;
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(logs); i++) {
++		u32 *h = (u32 *)logs[i].addr;
++		bool found = h[0] == logs[i].magic && h[1] <= logs[i].size - 16;
++
++		printf("F133: %s log from the run before: %d bytes\n", logs[i].name, found ? (int)h[1] : -1);
++		if (found)
++			f133_sd_save(logs[i].sector, h, 16 + h[1], &step, &err);
++		else
++			f133_sd_save(logs[i].sector, none, sizeof(none), &step, &err);
++		h[0] = 0;
++		h[1] = 0;
++	}
++}
++
++/*
++ * DRAM init failed: the log goes to the card, then the backlight flashes for good: fast (5 Hz) with the log saved,
++ * slow (1 Hz) if the card took no log. The MCU hold goes out again every 10 s.
++ */
++static void __noreturn f133_dram_failed(void)
++{
++	ulong half = f133_log_save() ? 100 : 500, n;
++
++	for (n = 0;; n++) {
++		clrbits_le32(F133_REG(0x02000130), 1 << 15);
++		mdelay(half);
++		setbits_le32(F133_REG(0x02000130), 1 << 15);
++		mdelay(half);
++		if (n % (5000 / half) == 0)
++			f133_mcu_hold();
++	}
++}
++
+ #define CSR_MXSTATUS		0x7c0
+ #define CSR_MHCR		0x7c1
+ #define CSR_MCOR		0x7c2
+@@ -187,18 +641,41 @@
+ {
+ 	int ret;
+ 	struct udevice *dev;
++	/* RTC general-purpose register 6 keeps its value over a reset: counts the SPL's starts (a watchdog loop shows) */
++	u32 starts = readl(F133_REG(0x07090118)) + 1;
+ 
++	f133_backlight_on();
++	writel(starts, F133_REG(0x07090118));
++	printf("F133: start %u; caches as the BROM left them: mxstatus %08lx mhcr %08lx mcor %08lx\n", starts,
++	       csr_read(CSR_MXSTATUS), csr_read(CSR_MHCR), csr_read(CSR_MCOR));
++
+ 	ret = cpu_probe_all();
+ 	if (ret) {
+ 		debug("CPU init failed: %d\n", ret);
+ 	}
+ 
++	f133_mcu_uart_init();
++	f133_mcu_hold();
++
++	/* what the DRAM init starts from (registers it reads anyway): the standby flag, LDO and ZQ pads, the clocks */
++	printf("F133: 70005d4 %08x 3000150 %08x 3000160 %08x\n", readl(F133_REG(0x070005d4)),
++	       readl(F133_REG(0x03000150)), readl(F133_REG(0x03000160)));
++	printf("F133: PLL_CPU %08x PLL_DDR %08x PLL_PERI %08x MBUS %08x DRAM %08x DRAM_BGR %08x RISCV_CLK %08x\n",
++	       readl(F133_REG(0x02001000)), readl(F133_REG(0x02001010)), readl(F133_REG(0x02001020)),
++	       readl(F133_REG(0x02001540)), readl(F133_REG(0x02001800)), readl(F133_REG(0x0200180c)),
++	       readl(F133_REG(0x02001d00)));
++	/* a first save before the DRAM init: proves the card takes the log, whatever happens next */
++	f133_log_save();
++
+ 	/* DDR init */
+ 	ret = uclass_get_device(UCLASS_RAM, 0, &dev);
++	f133_mcu_hold();
+ 	if (ret) {
+-		debug("DRAM init failed: %d\n", ret);
+-		return ret;
++		printf("DRAM init failed: %d\n", ret);
++		f133_dram_failed();
+ 	}
++	f133_dram_logs_save();
++	f133_log_save();
+ 
+ 	/* Initialize extension CSRs. */
+ 	printf("mxstatus=0x%08lx mhcr=0x%08lx mcor=0x%08lx mhint=0x%08lx\n",
+@@ -207,15 +684,39 @@
+ 	       csr_read(CSR_MCOR),
+ 	       csr_read(CSR_MHINT));
+ 
++	/*
++	 * SRNUBI T313D: the caches cleaned before they are invalidated (0x70013 dropped dirty lines: the SPL's log lost
++	 * its last lines here), and the D-cache write-through (MHCR WB off, 0x11ff before): nothing waits in it, neither
++	 * the images about to be loaded nor the logs a watchdog reset must find in DRAM
++	 */
+ 	csr_set(CSR_MXSTATUS, 0x638000);
+-	csr_write(CSR_MCOR, 0x70013);
+-	csr_write(CSR_MHCR, 0x11ff);
++	csr_write(CSR_MCOR, 0x70033);
++	csr_write(CSR_MHCR, 0x11f7);
+ 	csr_write(CSR_MHINT, 0x16e30c);
++	printf("F133: now mxstatus %08lx mhcr %08lx (0x11f7 written) mhint %08lx\n", csr_read(CSR_MXSTATUS),
++	       csr_read(CSR_MHCR), csr_read(CSR_MHINT));
+ 
+ 	return 0;
+ }
+ 
+ #ifdef CONFIG_SPL_BUILD
++/*
++ * Right before OpenSBI and U-Boot proper take over: the watchdog U-Boot proper later runs itself (riscv_wdt, 16 s,
++ * system reset), so a hang before that resets the board and the next SPL run finds their logs; the SPL's log again.
++ */
++void spl_board_prepare_for_boot(void)
++{
++	void __iomem *w = F133_REG(0x06011000);
++
++	writel((readl(w + 0x14) & ~0x3) | 0x1 | 0x16aa0000, w + 0x14);			/* CFG: reset the system */
++	writel((readl(w + 0x18) & ~(0xf << 4)) | (0xb << 4) | 0x16aa0000, w + 0x18);	/* MODE: 16 s */
++	writel(readl(w + 0x18) | BIT(0) | 0x16aa0000, w + 0x18);			/* on */
++	writel((0xa57 << 1) | 1, w + 0x10);						/* CTRL: restart */
++	printf("F133: watchdog %08x %08x; on to OpenSBI and U-Boot proper at %lu ms\n", readl(w + 0x14),
++	       readl(w + 0x18), get_timer(0));
++	f133_log_save();
++}
++
+ void spl_perform_fixups(struct spl_image_info *spl_image)
+ {
+ 	struct ram_info info;

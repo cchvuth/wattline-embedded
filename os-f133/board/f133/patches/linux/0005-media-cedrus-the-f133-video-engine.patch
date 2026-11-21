@@ -1,0 +1,27 @@
+diff -uNr a/drivers/staging/media/sunxi/cedrus/cedrus_hw.c b/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
+@@ -257,6 +257,10 @@
+ 	}
+ 
+ 	ret = sunxi_sram_claim(dev->dev);
++	/* D1/F133: no switchable VE SRAM section, so no allwinner,sram (as the Dash's 7.3.4 patch and the proposal
++	 * upstream, "media: cedrus: Make SRAM section claiming optional"). sunxi_sram_release() is a no-op then. */
++	if (ret == -ENOENT)
++		ret = 0;
+ 	if (ret) {
+ 		dev_err(dev->dev, "Failed to claim SRAM\n");
+ 
+diff -uNr a/drivers/staging/media/sunxi/cedrus/cedrus_video.c b/drivers/staging/media/sunxi/cedrus/cedrus_video.c
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_video.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_video.c
+@@ -605,6 +605,9 @@
+ 	dst_vq->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY;
+ 	dst_vq->lock = &ctx->dev->dev_mutex;
+ 	dst_vq->dev = ctx->dev->dev;
++	/* cached pictures on request (V4L2_MEMORY_FLAG_NON_COHERENT, as the Dash's 7.3.4 patch): uncached, the CPU
++	 * reads them for the rotate at a fraction of the speed. vb2 keeps them coherent (synced at QBUF and at done) */
++	dst_vq->allow_cache_hints = 1;
+ 
+ 	return vb2_queue_init(dst_vq);
+ }

@@ -1,0 +1,5 @@
+config BR2_PACKAGE_SPIKE_VDEC
+	bool "spike-vdec"
+	help
+	  The H.264 decoder sink of the projection (Linux's cedrus stateless decoder), built from the app checkout
+	  (/native/vdec): it draws the phone's picture into the dash's region of the portrait framebuffer.
