@@ -2133,7 +2133,7 @@ static int aa_ap_up(const char *iface, const char *ssid, const char *key, const 
 	fprintf(f, "interface=%s\ndriver=nl80211\nctrl_interface=/run/aa-hostapd\nssid=%s\nhw_mode=a\nchannel=36\nieee80211n=1\nwmm_enabled=1\n"
 		   "auth_algs=1\nwpa=2\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\nwpa_passphrase=%s\nap_isolate=1\n", iface, ssid, key);   // ap_isolate: clients cannot reach each other
 	fclose(f);
-	snprintf(c, sizeof c, ": > /data/log/aa-hostapd.log; hostapd -B -P /run/aa-hostapd.pid -f /data/log/aa-hostapd.log /run/aa-hostapd.conf");
+	snprintf(c, sizeof c, "( : > /data/log/aa-hostapd.log ) 2>/dev/null; hostapd -B -P /run/aa-hostapd.pid -f /data/log/aa-hostapd.log /run/aa-hostapd.conf");
 	if (sh(c)) { fprintf(stderr, "aa: hostapd failed\n"); return -1; }
 	snprintf(c, sizeof c, "ip addr add %s/24 dev %s", ip, iface); sh(c);
 	f = fopen("/run/aa-udhcpd.conf", "w");
@@ -2146,7 +2146,10 @@ static int aa_ap_up(const char *iface, const char *ssid, const char *key, const 
 			   "lease_file /run/aa-udhcpd.leases\npidfile /run/aa-udhcpd.pid\noption subnet 255.255.255.0\noption lease 3600\n",
 			iface, base, base);
 		fclose(f);
-		sh(": > /run/aa-udhcpd.leases; udhcpd -f -a 100 /run/aa-udhcpd.conf >/data/log/aa-udhcpd.log 2>&1 &");   // -a: 100 ms ARP probe, not 2 s (the phone gives up waiting for its offer)
+		// (its log in RAM when /data cannot be written: the shell does not run a command whose redirection fails, and a
+		// phone then joined the AP and got no address)
+		sh(": > /run/aa-udhcpd.leases; L=/data/log; ( : > $L/aa-udhcpd.log ) 2>/dev/null || L=/run; "
+		   "udhcpd -f -a 100 /run/aa-udhcpd.conf >$L/aa-udhcpd.log 2>&1 &");   // -a: 100 ms ARP probe, not 2 s (the phone gives up waiting for its offer)
 	}
 	fprintf(stderr, "aa: AP %s up on %s (ch36, %s/24)\n", ssid, iface, ip);
 	return 0;

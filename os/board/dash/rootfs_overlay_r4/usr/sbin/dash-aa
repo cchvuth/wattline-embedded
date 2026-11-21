@@ -40,8 +40,9 @@ btc() {
 # socket belongs in a root-only directory such as /run; the profile's socket reaches it in blocking mode.
 hook() {
 	[ -x "/data/hooks/$1" ] || return 0
-	if [ "$1" = aa-start ]; then IFACE=$IFACE SSID=$SSID PSK=$PSK IP=$IP "/data/hooks/$1" >"/data/log/hook-$1.log" 2>&1 & _hp=$!
-	else IFACE=$IFACE IP=$IP "/data/hooks/$1" >"/data/log/hook-$1.log" 2>&1 & _hp=$!; fi
+	HL=/data/log; ( : >> "$HL/hook-$1.log" ) 2>/dev/null || HL=/run   # (/data read-only: the hook all the same)
+	if [ "$1" = aa-start ]; then IFACE=$IFACE SSID=$SSID PSK=$PSK IP=$IP "/data/hooks/$1" >"$HL/hook-$1.log" 2>&1 & _hp=$!
+	else IFACE=$IFACE IP=$IP "/data/hooks/$1" >"$HL/hook-$1.log" 2>&1 & _hp=$!; fi
 	( sleep 10; kill $_hp; sleep 2; kill -9 $_hp ) >/dev/null 2>&1 & _hk=$!
 	wait $_hp; kill $_hk 2>/dev/null; return 0
 }
@@ -132,14 +133,17 @@ start|restore)
 	# times at most. A receiver that died mid-session left its markers: the split showed its last picture for good, and
 	# a phone found nothing listening; they go with it.
 	: > /run/aa-keep
-	( : > /data/log/aa-serve.log; : > /data/log/aa-bt.log ) 2>/dev/null   # (in a subshell: /data read-only must not end the start here)
+	# (each in a subshell: /data read-only must not end the start here)
+	( : > /data/log/aa-serve.log ) 2>/dev/null; ( : > /data/log/aa-bt.log ) 2>/dev/null
 	( n=0; while [ -e /run/aa-keep ] && [ $n -lt 20 ]; do
-		AA_LISTEN=$IP aa serve >>/data/log/aa-serve.log 2>&1
+		L=/data/log; ( : >> $L/aa-serve.log ) 2>/dev/null || L=/run   # (/data read-only: not without the receiver)
+		AA_LISTEN=$IP aa serve >>$L/aa-serve.log 2>&1
 		rm -f /run/dash-project /run/dash-aa-session /run/dash-aa-focus /run/dash-pj-fps
 		[ -e /run/aa-keep ] && sleep 1; n=$((n + 1))
 	done ) &
 	( n=0; while [ -e /run/aa-keep ] && [ $n -lt 20 ]; do
-		printf '%s\n' "$PSK" | aa bt "$IP" "$SSID" - "$BSSID" >>/data/log/aa-bt.log 2>&1
+		L=/data/log; ( : >> $L/aa-bt.log ) 2>/dev/null || L=/run
+		printf '%s\n' "$PSK" | aa bt "$IP" "$SSID" - "$BSSID" >>$L/aa-bt.log 2>&1
 		[ -e /run/aa-keep ] && sleep 2; n=$((n + 1))
 	done ) &
 	# New phones can pair only in the first 2 minutes after the button (someone at the Dash), not for the whole session;
@@ -152,7 +156,7 @@ start|restore)
 	fi
 	touch /data/aa-on 2>/dev/null && sync   # up: on again at the next start (the dash restores it), until stopped
 	# (touch, not `: >`: a failed redirect on a special builtin would end the script before the marker)
-	: > "$MARK"
+	touch "$MARK"
 	;;
 stop)   # the owner's stop (the button, the split's Exit): off, and off at the next start too (first: a power cut
 	# during the seconds stop takes must not bring it back)

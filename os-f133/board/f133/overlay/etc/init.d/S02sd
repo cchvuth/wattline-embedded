@@ -60,7 +60,7 @@ start)
 			[ $k = 0 ] && cp /run/state.txt $L/state.txt
 			k=$(((k + 1) % 12))
 			for f in $L/dash.out $L/wpa.txt $L/wifi.txt $L/mcu.txt $L/dmesg.txt; do   # appended to (O_APPEND): emptied in place, the writer goes on
-				[ "$(sz $f)" -gt 1048576 ] && cp $f $f.1 && : > $f
+				[ "$(sz $f)" -gt 1048576 ] && cp $f $f.1 && ( : > $f ) 2>/dev/null
 			done
 			sync
 			sleep 5

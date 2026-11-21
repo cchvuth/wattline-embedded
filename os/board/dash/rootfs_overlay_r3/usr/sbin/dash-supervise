@@ -8,6 +8,9 @@ trap '[ -n "$P" ] && kill $P && wait $P; exit 0' TERM INT
 while :; do
 	[ -e /run/dashdata/dash.off ] && { echo "$(date) dash.off on the card: not started" >> $O; exit 0; }
 	[ "$(stat -c %s $O 2>/dev/null || echo 0)" -gt 262144 ] && mv $O $O.1
+	# /data gone read-only (its journal aborted): the dash all the same: the shell does not run a command whose
+	# redirection fails, and ends on a ":" whose does (hence the subshell)
+	( : >> $O ) 2>/dev/null || O=/run/dash.out
 	echo "$(date) start" >> $O
 	/usr/bin/dash >> $O 2>&1 &   # a newer build comes through /data/overlay (dash-push), dropped at an image change
 	P=$!; wait $P; r=$?; P=

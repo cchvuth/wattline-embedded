@@ -194,19 +194,21 @@ start|restore)
 	# the split showed its last picture for good; they go with it.
 	: > /run/aa-keep
 	( n=0; while [ -e /run/aa-keep ] && [ $n -lt 20 ]; do
+		( : >> $LOG/aa-serve.log ) 2>/dev/null || LOG=/tmp   # (the card gone read-only meanwhile: not without the receiver)
 		AA_LISTEN=$IP aa serve >> $LOG/aa-serve.log 2>&1   # listening before aa mcu sends any phone to it
 		rm -f /run/dash-project /run/dash-aa-session /run/dash-aa-focus /run/dash-pj-fps
 		[ -e /run/aa-keep ] && sleep 1; n=$((n + 1))
 	done ) &
 	# the passphrase on its stdin, not in its arguments (any process can read those); printf is the shell's own
 	( n=0; while [ -e /run/aa-keep ] && [ $n -lt 20 ]; do
+		( : >> $LOG/aa-mcu.log ) 2>/dev/null || LOG=/tmp
 		printf '%s\n' "$PSK" | aa mcu "$IP" "$SSID" - "$BSSID" >> $LOG/aa-mcu.log 2>&1
 		[ -e /run/aa-keep ] && sleep 2; n=$((n + 1))
 	done ) &
 	[ "$1" = start ] && pair_on   # someone at the screen tapped it (not a restore at boot)
 	touch /data/aa-on 2>/dev/null && sync   # up: on again at the next start (the dash restores it), until stopped
 	# (touch, not `: >`: a failed redirect on a special builtin would end the script before the marker)
-	: > "$MARK"
+	touch "$MARK"
 	;;
 stop)   # the user's stop (the button, the split's Exit): off, and off at the next start too (first: a power cut
 	# during the seconds stop takes must not bring it back)

@@ -68,8 +68,8 @@ start)
 		sleep 60
 		if [ -e /sys/class/net/wlan0 ]; then
 			[ "$n" = 0 ] || { echo 0 > $C; sync; }
-		else
-			cycle "no wlan0 a minute in"
+		elif ! grep -q "try=kernel" /proc/cmdline; then   # (a tried boot's verdict is S98try's, with its own power cycle:
+			cycle "no wlan0 a minute in"                    # this one came before it, and the try was made again)
 		fi
 	) &
 	;;

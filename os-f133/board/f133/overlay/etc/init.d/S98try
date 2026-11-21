@@ -47,7 +47,7 @@ start)
 			echo "<5>S98try: the tried boot is kept" > $R/dev/kmsg
 		else
 			echo "<3>S98try: no dash, Wi-Fi or SSH on the tried boot (or its root not tried): back to the last good one" > $R/dev/kmsg
-			: > $C/try.failed
+			( : > $C/try.failed ) 2>/dev/null   # (a card that cannot be written: the power cycle all the same)
 			sync
 			rm -f $C/Image.try
 			sync
