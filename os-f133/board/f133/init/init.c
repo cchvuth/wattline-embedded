@@ -165,7 +165,7 @@ int main(void)
 
 	for (i = 0; i < 100 && stat("/dev/mmcblk0p4", &st); i++)
 		usleep(100000);
-	if (mount("/dev/mmcblk0p4", "/sd", "vfat", MS_NOATIME, "utf8"))
+	if (mount("/dev/mmcblk0p4", "/sd", "vfat", MS_NOATIME, "utf8,fmask=0077,dmask=0077"))
 		fail("mounting the card's F133 partition (/dev/mmcblk0p4)");
 
 	if (!stat("/sd/rootfs.sqfs.new", &st)) {

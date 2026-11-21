@@ -53,9 +53,10 @@ working.
 
 The boot ROM tries the SD card first, so a card boots Linux with the screen's own firmware untouched.
 
-1. **Make the card.** Write `u-boot-sunxi-with-spl.bin` 8 KiB into it. Then copy everything in `out-f133/card/`
-   onto its fourth partition, formatted FAT, which is where U-Boot and `/init` look: the boot files, and `nor/` with
-   the built-in flash's files. Add a `wpa_supplicant.conf` with your network, and your SSH public key as
+1. **Make the card.** An MBR partition table whose **fourth** primary partition is FAT32 and starts at 1 MiB or
+   later (U-Boot and `/init` look only there; partitions 1 to 3 can be small placeholders or hold anything else).
+   Write `u-boot-sunxi-with-spl.bin` 8 KiB into the card (`dd if=u-boot-sunxi-with-spl.bin of=/dev/sdX bs=1024 seek=8 conv=notrunc`). Then copy
+   everything in `out-f133/card/` onto that partition: the boot files, and `nor/` with the built-in flash's files. Add a `wpa_supplicant.conf` with your network, and your SSH public key as
    `authorized_keys`.
 2. **Boot and back up.** Boot the screen with the card in and SSH in. Save the stock firmware first:
    `tools/nor/nor.sh read /mnt/sd/stock.bin`. That command reads the chip twice and checks that both reads agree.
@@ -77,11 +78,20 @@ settings, Wi-Fi networks and SSH keys into the flash's `/data` (the flash's own,
 the card first as `nor-data.bin`). While the card is in, the screen still starts from the card; without it, from the
 flash. Its log is `nor.txt` in the boot's log folder on the card.
 
+### A card with files only
+
+A card without U-Boot on it (nothing at 8 KiB) does not start the screen: the boot ROM goes on to the built-in flash,
+and the system there mounts the card's fourth partition. The boot's logs then go to the card instead of RAM
+(`log/<boot>/`), a `swapfile` there is used, `wpa_supplicant.conf` and `authorized_keys` are read, and a `dash/dash`
+there runs in place of the image's (for trying a build). If the flash's kernel cannot be started, its U-Boot falls
+back to an `Image`, `f133.dtb` and `rootfs.sqfs` on the card.
+
 ## Over-the-air updates: the card install
 
 Run from an SD card (the first install's step 1, without writing the NOR), the screen updates itself from this
 repository's releases: the dash's **Settings → Advanced → Software update**, or on its own with **Automatic updates**
-(internet only, never on the car's Wi-Fi). `dash-update` downloads a release's F133 bundle onto the card, checks its
+(internet only, never on the car's Wi-Fi: while the car's adapter is in range the screen stays on its network, so
+updates happen where it is not, or from Settings after picking another network). `dash-update` downloads a release's F133 bundle onto the card, checks its
 signature (the project's Ed25519 key, `board/f133/wattline-ota.pub.raw`) and puts its files there as `.try` files.
 Nothing restarts: at the next power-up U-Boot tries the new kernel once, with its new root (`/init` mounts that only on
 the tried boot), and `S98try` keeps them once the dash is on screen and the Wi-Fi works (the screen sees networks, or
@@ -126,6 +136,8 @@ free memory (`MemAvailable` at least the image's size plus 8 MB) before staging 
 - **Display.** The dash draws in strips and the 2D engine's rotation unit turns them into the portrait framebuffer
   (`package/g2drot`). Without the module, the CPU rotates them.
 - **Heat.** The SoC's temperature sensor is read by the kernel (`/sys/class/thermal/thermal_zone0/temp`, logged with
-  the boot's state): at 85 °C the CPU is held at 408 MHz instead of 1008, and at 110 °C the system powers off.
+  the boot's state): at 85 °C the CPU is held at 408 MHz instead of 1008. At 110 °C the system shuts down and halts with
+  the backlight off; the MCU, no longer held, then cycles the power, and a start that is still that hot shuts down
+  again.
 - **Memory.** Android Auto's video decoder uses 16 MiB of CMA for its pictures and the framebuffer. The decoder keeps
   only as many pictures as the stream's references need, plus one.

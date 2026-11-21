@@ -37,6 +37,7 @@ start)
 		[ "$n" -lt 3 ] 2>/dev/null || return 1
 		echo $((n + 1)) > $C
 		sync
+		[ "$(cat $C 2>/dev/null)" = "$((n + 1))" ] || return 1   # not kept (no storage for it): no cycle, or one at every boot
 		echo "<4>S03mcu: $1: the MCU's power cycle, $((n + 1)) of 3" > /dev/kmsg
 		let_go
 	}

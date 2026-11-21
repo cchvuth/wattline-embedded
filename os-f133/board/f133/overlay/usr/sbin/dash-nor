@@ -38,6 +38,11 @@ status)
 	;;
 copy)
 	card_install || fail "this is not a card install with the built-in flash's files (nor/)"
+	# an update on trial: S98try's keep renames the files this reads, and the flash could get the old root with the new
+	# kernel
+	for f in "$SD"/*.try "$SD"/nor/*.try; do
+		[ -e "$f" ] && fail "an update is on trial, or waits for it: copy once it is kept"
+	done
 	mkdir "$RUN/dash-nor.lock" 2>/dev/null || { echo "dash-nor: a copy is running" >&2; exit 1; }
 	trap 'rmdir "$RUN/dash-nor.lock"' EXIT
 	log "copy: $(cat /etc/image-id 2>/dev/null) to the built-in flash"

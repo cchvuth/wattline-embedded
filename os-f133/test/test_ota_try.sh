@@ -61,8 +61,8 @@ is() { [ "$(cat $SD/$1 2>/dev/null)" = "$2" ]; }   # is FILE CONTENT
 none() { for f in "$@"; do [ ! -e $SD/$f ] || return 1; done; }
 has() { for f in "$@"; do [ -e $SD/$f ] || return 1; done; }
 all_new() { for f in Image f133.dtb rootfs.sqfs nor/kernel.itb nor/u-boot-sunxi-with-spl.bin; do is $f new || return 1; done; }
-kept() { all_new && none Image.try rootfs.sqfs.try try.boot rootfs.try try.failed && ! grep -q power-cycle $T/log; }
-gaveup() { has try.failed rootfs.sqfs.try && none Image.try && is Image old && grep -q power-cycle $T/log && grep -q reboot $T/log; }
+kept() { all_new && none Image.try rootfs.sqfs.try try.boot rootfs.try try.failed && ! grep -q power-cycle $T/log && [ -e $R/run/try-judging ] && [ -e $R/run/try-judged ]; }
+gaveup() { has try.failed rootfs.sqfs.try && none Image.try && is Image old && grep -q power-cycle $T/log && grep -q reboot $T/log && [ -e $R/run/try-judging ] && [ -e $R/run/try-judged ]; }
 nexta() { echo console=tty0 > $R/proc/cmdline; rm -f $R/.rootfs-tried; rm -rf "$R/run"; mkdir -p $R/run; }   # the next start
 
 # S98try

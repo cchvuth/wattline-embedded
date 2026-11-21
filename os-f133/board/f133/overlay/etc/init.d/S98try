@@ -14,6 +14,7 @@
 # power-cycle; a warm reboot would lose the Wi-Fi chip, and the fallback boot might not see that it is gone). A try
 # that ends before either (a power cut, a crash) is tried again at the next power-up, 3 starts at most (dash-update
 # confirm). A boot that is not a try changes nothing.
+# Either verdict is told to S01try (/run/try-judged), whose watchdog covers a try that never gets this far.
 # S98TRY_ROOT: the paths under another root (test/test_ota_try.sh).
 R=${S98TRY_ROOT:-}
 C=$R/mnt/sd
@@ -23,11 +24,14 @@ start)
 	(
 		ok() {
 			[ -e $R/.rootfs-tried ] && [ -e $R/run/dash-ready ] && [ -e $R/run/dash-shown ] || return 1
-			{ wpa_cli -p /run/wpa_supplicant -i wlan0 scan_results 2>/dev/null | grep -qE '^([0-9a-f]{2}:){5}[0-9a-f]{2}'; } ||
+			{ timeout 3 wpa_cli -p /run/wpa_supplicant -i wlan0 scan_results 2>/dev/null | grep -qE '^([0-9a-f]{2}:){5}[0-9a-f]{2}'; } ||
 				[ -e $R/run/dash-aa ] || return 1
 			[ -s $R/run/ssh-keys/authorized_keys ] || return 0
 			netstat -tln 2>/dev/null | grep -q ":22 "
 		}
+		# (S01try: the boot got this far, the verdict's own time starts: the 45 passes of 2 s and a check each, wpa_cli
+		# cut at 3 s where its daemon does not answer, then the keep's writes)
+		: > $R/run/try-judging
 		i=0
 		while [ $i -lt 45 ] && ! ok; do sleep 2; i=$((i + 1)); done
 		if ok; then
@@ -39,6 +43,7 @@ start)
 			# boots it in place of Image, the old kernel under the root just kept
 			rm -f $C/try.boot $C/rootfs.try $C/kernel.itb
 			sync
+			: > $R/run/try-judged   # (S01try lets the watchdog go)
 			echo "<5>S98try: the tried boot is kept" > $R/dev/kmsg
 		else
 			echo "<3>S98try: no dash, Wi-Fi or SSH on the tried boot (or its root not tried): back to the last good one" > $R/dev/kmsg
@@ -46,6 +51,7 @@ start)
 			sync
 			rm -f $C/Image.try
 			sync
+			: > $R/run/try-judged   # only now: a card stuck in those writes is the watchdog's to end
 			if [ -x $R/etc/init.d/S03mcu ]; then $R/etc/init.d/S03mcu power-cycle; sleep 120; fi
 			reboot   # the MCU did not cut the power: a reboot all the same (S03mcu then sees no Wi-Fi chip)
 		fi

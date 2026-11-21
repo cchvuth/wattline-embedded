@@ -64,6 +64,10 @@ rm $T/fail-flash
 mkdir $T/run/dash-nor.lock
 run copy 2>/dev/null; [ $? -ne 0 ] && ok "one copy at a time" || no "lock"
 rmdir $T/run/dash-nor.lock
+: > $T/sd/Image.try; : > $T/calls
+run copy; [ "$(st)" = error ] && grep -q "on trial" $T/run/dash-nor.status && ! grep -q "^flash" $T/calls &&
+	ok "an update on trial: refused until it is kept" || no "copy during a try"
+rm $T/sd/Image.try
 echo "console=tty0 root=mtd:rootfs" > $T/cmdline
 run copy; [ "$(st)" = error ] && ok "copy on a NOR boot: refused" || no "copy on a NOR boot"
 [ $bad -eq 0 ] && echo "dash-nor: ok" || { echo "dash-nor: $bad failed"; exit 1; }

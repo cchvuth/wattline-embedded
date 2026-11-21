@@ -1,0 +1,26 @@
+#!/bin/sh
+# A tried boot (try=kernel: S98try) that hangs before S98try can judge it: the hardware watchdog (16 s), kept fed from
+# here: 150 s at most until S98try starts judging (/run/try-judging), then 300 s more for its own wait and checks.
+# Its verdict ends that (/run/try-judged: the watchdog let go; a try given up gets its own power cycle there). No
+# verdict by then (a script on the way stuck, the system wedged): the feeding stops, and the reset starts the last
+# good files (U-Boot marked the try before starting it). Without this such a try stayed up,
+# dark, until the power went, and was tried again at the next two starts.
+# Only on a tried boot: otherwise the hardware watchdog stays off (a reset loses the Wi-Fi chip: S03mcu).
+case "$1" in
+start)
+	grep -q "try=kernel" /proc/cmdline && [ -c /dev/watchdog ] || exit 0
+	(
+		# never the OOM's pick, this loop and the watchdog it starts: without the loop the watchdog would be fed for ever
+		echo -1000 > /proc/self/oom_score_adj 2>/dev/null
+		watchdog -F -t 5 -T 16 /dev/watchdog & w=$!
+		renice -10 -p $w >/dev/null 2>&1   # a healthy try that swaps hard still feeds it: ahead of the rest on the one core
+		i=0; n=30
+		while [ $i -lt $n ] && [ ! -e /run/try-judged ]; do
+			sleep 5; i=$((i + 1))
+			[ $n = 30 ] && [ -e /run/try-judging ] && n=$((i + 60))
+		done
+		# judged: ended with TERM (busybox's watchdog disarms it as it goes); not: killed, and the reset follows
+		if [ -e /run/try-judged ]; then kill $w; else kill -9 $w; fi
+	) &
+	;;
+esac

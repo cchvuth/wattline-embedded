@@ -106,8 +106,9 @@
 /*
  * Heat: the SoC's temperature sensor (the D1's THS: the driver's entry is patches/linux/0009, its node and thermal
  * zone as upstream has them since 6.8), calibrated from the efuse. At 85 C the CPU is held at 408 MHz (its other
- * operating point: cpufreq stays at 1008 MHz otherwise); at 110 C the system powers off, and the MCU, no longer
- * held, cuts the power.
+ * operating point: cpufreq stays at 1008 MHz otherwise); at 110 C the system shuts down (forced after 10 s) and halts,
+ * the backlight off: nothing here can cut the power, and the MCU, no longer held, cycles it; a start still that hot
+ * shuts down again.
  */
 &sid {
 	ths_calibration: thermal-sensor-calibration@14 {

@@ -22,7 +22,7 @@ start)
 	# the initramfs mounted it already (the root filesystem is rootfs.sqfs on it). Here only on a NOR boot, with files
 	# on the card (logs, a swapfile, an addition's). Not synchronous: that cost the boot 1.6 s (the dash's and the
 	# scripts' log lines each waited for the card); the loop below syncs it every 5 s, as the power just goes
-	if ! grep -q " /mnt/sd " /proc/mounts && ! mount -t vfat -o noatime /dev/mmcblk0p4 /mnt/sd 2>/dev/null; then
+	if ! grep -q " /mnt/sd " /proc/mounts && ! mount -t vfat -o noatime,fmask=0077,dmask=0077 /dev/mmcblk0p4 /mnt/sd 2>/dev/null; then
 		if [ -n "$nor" ]; then
 			mkdir -p /tmp/log && ln -sfn /tmp/log /var/log/sd
 			exit 0
@@ -41,19 +41,25 @@ start)
 		b=${d##*/}; case $b in ''|*[!0-9]*) continue ;; esac
 		[ $b -le $((n - 30)) ] && rm -rf "$d"
 	done
-	# a swap file on the card (card-linux.sh makes it): a safety net for memory spikes on 64 MiB, not working
+	# a swap file on the card, if one was made there (dd, 64 MiB): a safety net for memory spikes on 64 MiB, not working
 	# memory; swappiness 10 drops cached files before paging anything out
 	if [ -f /mnt/sd/swapfile ]; then
 		swapon /mnt/sd/swapfile 2>/dev/null || { mkswap /mnt/sd/swapfile >/dev/null && swapon /mnt/sd/swapfile; }
 		echo 10 > /proc/sys/vm/swappiness
 	fi
-	# the boot before, if it crashed: its kernel log from ramoops
-	mount -t pstore pstore /sys/fs/pstore 2>/dev/null && cp /sys/fs/pstore/* $L/ 2>/dev/null
+	# The kernel's log: each record once, appended as it comes (/dev/kmsg). Rewritten whole every 5 s, as it and the
+	# state were, each pass freed and took clusters again on the FAT that also holds the system's files (and an
+	# addition's): a power cut in one of those updates can cross-link them, and the power is always just cut. The
+	# state (memory, addresses, processes) is in RAM, /run/state.txt, every 5 s, and on the card once a minute.
+	# (one open file for every cat: after an overrun the next goes on from where the log still holds, not from its start)
+	( exec 3< /dev/kmsg; while :; do cat <&3; sleep 1; done >> $L/dmesg.txt 2>/dev/null ) &
 	(
+		k=0
 		while :; do
-			dmesg > $L/dmesg.txt
-			{ cat /proc/uptime; cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null; free; ip addr; ip route; iw dev; ps; } > $L/state.txt 2>&1
-			for f in $L/dash.out $L/wpa.txt $L/wifi.txt $L/mcu.txt; do   # appended to (O_APPEND): emptied in place, the writer goes on
+			{ cat /proc/uptime; cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null; free; ip addr; ip route; iw dev; ps; } > /run/state.txt 2>&1
+			[ $k = 0 ] && cp /run/state.txt $L/state.txt
+			k=$(((k + 1) % 12))
+			for f in $L/dash.out $L/wpa.txt $L/wifi.txt $L/mcu.txt $L/dmesg.txt; do   # appended to (O_APPEND): emptied in place, the writer goes on
 				[ "$(sz $f)" -gt 1048576 ] && cp $f $f.1 && : > $f
 			done
 			sync

@@ -24,8 +24,10 @@ rm -f /run/dash-aa-unusable
 		echo "S06wattline: aa.crt cannot be used (aa certcheck says why): no AA button this start"
 	fi
 ) &
-# Bluetooth bonds (the phones paired for Android Auto, their keys) on /data too, before bluetoothd starts (S40): in the
-# RAM root every power cycle forgot them, and a phone with an old key is then refused (aa takes bonded phones only)
-mkdir -p /data/bluetooth && chmod 700 /data/bluetooth
-[ -L /var/lib/bluetooth ] || { rm -rf /var/lib/bluetooth; ln -s /data/bluetooth /var/lib/bluetooth; }
+# BlueZ's own files stay in RAM (/var/lib/bluetooth, in the root's overlay): nothing of them needs keeping on this
+# screen (the Commander's link does not bond and keeps its identity in /data itself; Android Auto's pairings are the
+# MCU's). On /data BlueZ's cache of every named device it ever heard (a car park's) filled the NOR's 512 KiB until
+# settings could not be saved; and a card's FAT cannot hold its folders at all (a ":" in their names).
+rm -rf /data/bluetooth
+mount -t tmpfs -o size=256k,mode=700 tmpfs /var/lib/bluetooth   # (bounded there too: 64 MiB of RAM)
 exit 0

@@ -16,7 +16,8 @@ CONFIG_PANIC_TIMEOUT=5
 CONFIG_RISCV_SBI_V01=y
 CONFIG_HVC_RISCV_SBI=y
 CONFIG_SERIAL_EARLYCON_RISCV_SBI=y
-# the kernel log kept in RAM across the reset (ramoops@43800000 in the device tree)
+# pstore, for a ramoops region (the device tree has none now: its memory went back to Linux, so a crash's log is
+# not kept across the reset)
 CONFIG_PSTORE=y
 CONFIG_PSTORE_RAM=y
 CONFIG_PSTORE_CONSOLE=y
@@ -339,3 +340,5 @@ CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y
 # CONFIG_CPU_FREQ_GOV_CONSERVATIVE is not set
 # CONFIG_CPU_FREQ_GOV_SCHEDUTIL is not set
 # CONFIG_CPU_FREQ_STAT is not set
+# 110 C: the shutdown forced after 10 s if userspace cannot finish it (it may be what is wedged)
+CONFIG_THERMAL_EMERGENCY_POWEROFF_DELAY_MS=10000
