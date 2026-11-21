@@ -81,6 +81,8 @@ typedef struct {
     double cruise_raw;
     bool bt_up;
     bool car_kph;               // the car's own display unit (DI_uiSpeedUnits)
+    bool car_kph_known;         // ... and the car has said it (now, or before: the dash keeps it): until then no speed
+                                // is converted (main.dart _fromCar), or a guess would turn a right number wrong
     int64_t bright_at;          // display_brightness's last write
     int64_t bright_can_at;      // the last 0x273 frame's (the car's own word on it over WiFi; Bluetooth never moves it)
     bool bright_bt;             // ... and it came from the Commander (pushed on a change: no age limit)

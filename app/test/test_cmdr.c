@@ -491,6 +491,44 @@ int main(void) {
   for (int i = 0; i < 40 && c.state != CS_APPROVING; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
   CHECK(c.state == CS_APPROVING);
 
+  // ... but not for ever: seen only long after the tap (nobody at the unit any more), no prompt: refused, as a dial
+  // nobody asked for.
+  fresh(&c, 1);
+  dev.approved = 0;
+  cmdr_connect(&c, now);
+  cmdr_step_aside(&c, now), cmdr_wifi(&c, 1, 0, now), run(&c, 2500);
+  dev.advertising = 0;
+  cmdr_kick(&c, 1, now);
+  for (int i = 0; i < 400; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
+  CHECK(c.state == CS_AWAY);
+  dev.advertising = 1;
+  for (int i = 0; i < 60 && c.state == CS_AWAY; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
+  CHECK(c.state == CS_REFUSED && c.asks == 0);
+  // and so a tap kept while stepped aside, WiFi letting go only long after it
+  fresh(&c, 1);
+  dev.approved = 0;
+  cmdr_connect(&c, now);
+  cmdr_step_aside(&c, now), cmdr_wifi(&c, 1, 0, now), run(&c, 2500);
+  cmdr_wifi(&c, 0, 1, now), cmdr_step_aside(&c, now), run(&c, 1000);
+  cmdr_kick(&c, 1, now);
+  CHECK(c.state == CS_PAUSED && c.asks == 1);
+  run(&c, 301000);
+  cmdr_resume(&c, now), cmdr_wifi(&c, 1, 0, now), run(&c, 5000);
+  CHECK(c.state == CS_REFUSED && c.asks == 0);
+  // a second tap has its own time: 4 min not seen, tapped again, 4 min more, then seen: asked
+  fresh(&c, 1);
+  dev.approved = 0;
+  cmdr_connect(&c, now);
+  cmdr_step_aside(&c, now), cmdr_wifi(&c, 1, 0, now), run(&c, 2500);
+  dev.advertising = 0;
+  cmdr_kick(&c, 1, now);
+  for (int i = 0; i < 240; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
+  cmdr_kick(&c, 1, now);
+  for (int i = 0; i < 240; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
+  dev.advertising = 1;
+  for (int i = 0; i < 60 && c.state != CS_APPROVING; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
+  CHECK(c.state == CS_APPROVING);
+
   // --- Stepped aside for WiFi's first try while it waits for WiFi; Android Auto then takes the radio before the
   // stream goes live (wifi_first off): back, not paused for the whole session. A ready link stepped aside alike. ---
   fresh(&c, 1);

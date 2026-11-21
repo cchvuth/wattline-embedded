@@ -286,6 +286,22 @@ bool settings_apply_tz(const char *tz) {
   return true;
 }
 
+// <root>/car-unit: "kph" or "mph", the car's own display unit as it last said it (over WiFi: main.dart keeps carKph
+// alike). On Bluetooth alone it never comes, and its speeds are in it.
+static int unit_kept = -1;
+int settings_car_unit_load(void) {
+  char path[256], w[8] = "";
+  snprintf(path, sizeof path, "%s/car-unit", settings_root ? settings_root : "");
+  FILE *f = settings_root ? fopen(path, "r") : NULL;
+  if (f) { if (fscanf(f, "%7s", w) != 1) w[0] = 0; fclose(f); }
+  return unit_kept = !strcmp(w, "kph") ? 1 : !strcmp(w, "mph") ? 0 : -1;
+}
+void settings_car_unit_keep(bool kph) {
+  if (unit_kept == (int)kph) return;
+  unit_kept = kph;
+  if (writable()) put_sync(settings_root, "car-unit", kph ? "kph\n" : "mph\n", 0644, false);
+}
+
 // <root>/tyres: "FL FR RL RR" in bar, "nan" for none (main.dart _saveTyres keeps '' for a null).
 static double kept[4] = {NAN, NAN, NAN, NAN};
 static int64_t keep_at;   // the next write may happen from here (once a minute at most)

@@ -34,7 +34,8 @@ bt_motor_bad_ms = 30000
 
 # The car and how it shows
 car = modelY7             # model3rwd model3 modelY5rwd modelY5 modelY7 modelYL
-units = km                # km or mi until the car's own setting arrives (CAN 0x257), which then rules
+units = km                # km or mi until the car's own setting arrives (CAN 0x257), which then rules and is
+                          # remembered; before it a speed is shown as it comes, under this unit's name
 minor_figures = 1         # 12 V, other power and cell imbalance rows
 
 # Time: the clock comes from CAN 0x318 (UTC); no NTP on S3XY_OBD

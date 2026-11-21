@@ -70,8 +70,9 @@ static GVariant *call(bz *t, const char *path, const char *iface, const char *me
   GError *e = NULL;
   GVariant *r = g_dbus_connection_call_sync(t->bus, BLUEZ, path, iface, method, args, ret ? G_VARIANT_TYPE(ret) : NULL,
                                             G_DBUS_CALL_FLAGS_NONE, ms, NULL, &e);
-  if (!r) {
-    fprintf(stderr, "ble: %s %s: %s\n", method, path, e->message);
+  if (!r) {   // said a few times, then one in a hundred: with no controller every 5 s look fails, for as long as it is up
+    static unsigned fails;
+    if (fails++ < 10 || fails % 100 == 0) fprintf(stderr, "ble: %s %s: %s (failure %u)\n", method, path, e->message, fails);
     g_error_free(e);
   }
   return r;

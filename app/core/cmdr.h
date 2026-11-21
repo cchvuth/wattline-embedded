@@ -101,6 +101,7 @@ typedef struct {
   sec1_t sec;
   int linked, has, secure, push_on;
   int on, paused, redial, asked, asks, parked, attempt;
+  int64_t ask_at;   // the owner's tap behind asks: it stands for ASK_KEEP_MS
   int wifi_live, wifi_trying, data_hold;
   int64_t wifi_at, subscribed_at;
   int64_t retry_at, approve_at, approve_by, refit_at, back_at, buttons_at, data_at;  // -1 = not set

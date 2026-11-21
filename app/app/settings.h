@@ -38,5 +38,7 @@ extern bool settings_car_saved;   // settings.conf names the car (loaded or save
 bool settings_apply_tz(const char *tz);   // TZ for localtime (the clocks); true if it changed
 // The last tyre pressures (bar, NAN none): the car sends them only on the move, the picture shows the last ones meanwhile
 // (main.dart _saveTyres). keep: written when changed, at most once a minute, and at stop (stop true).
+int settings_car_unit_load(void);            // <root>/car-unit: 1 km/h, 0 mph, -1 not known yet
+void settings_car_unit_keep(bool kph);      // written when it changes (the car said its unit)
 void settings_tyres_load(double tp[4]);
 void settings_tyres_keep(const double tp[4], int64_t now, bool stop);

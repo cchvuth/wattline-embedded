@@ -14,7 +14,9 @@ typedef struct {
   int gear_fresh_ms, grip_hold_ms, steer_hold_ms, yaw_steer_ms, bt_motor_bad_ms;   // car_t.cfg
   int sparse;                   // the app's "Sparse polling" (on)
   int car;                      // CAR_* (car=modelY7 ...)
-  int kph;                      // units until the car says (0x257 speedIsKph): 1 km, 0 mi
+  int kph;                      // the units until the car says its own (0x257 speedIsKph, then kept): 1 km, 0 mi. Range
+                                // and route lengths (miles on the bus) are converted from the start; a speed is
+                                // only named until the car's unit is known
   char tz[64];                  // POSIX TZ ("UTC0", "CET-1CEST,M3.5.0,M10.5.0/3") or a zone name with tzdata
   int hour12;
   int minor_figures;            // the app's "Show 12 V, other power and cell imbalance"

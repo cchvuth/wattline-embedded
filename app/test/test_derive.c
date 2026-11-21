@@ -257,7 +257,12 @@ static void test_bt_tyres_cabin(void) {   // "Bluetooth's tyres and cabin: milli
 
 static void test_km_pick(void) {   // "the owner's units: miles turn the car's km/h speeds"
   fresh();
-  car_set_km_pick(&C, 0);   // a km/h car (the default) shown in mph
+  car_set_km_pick(&C, 0);   // the car's unit not known yet (Bluetooth alone never says it): nothing converted
+  BT(&C, {61, 60}, {110, 50});
+  CHECK(!C.kph); NEAR(C.speed, 60, 1e-9); NEAR(C.speed_limit, 50, 1e-9);
+  fresh();
+  C.p.car_kph_known = true;   // a km/h car that said so (kept from a WiFi stream), shown in mph
+  car_set_km_pick(&C, 0);
   BT(&C, {61, 100}, {110, 80});
   CHECK(!C.kph); NEAR(C.speed, 62.137, 1e-3); NEAR(C.speed_limit, 49.710, 1e-3);
   car_set_km_pick(&C, -1);   // back to the car's, parked: what Bluetooth gave turns with it

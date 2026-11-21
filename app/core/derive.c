@@ -26,13 +26,14 @@ static double *tyre(car_t *c, int w) { return w == 0 ? &c->tp_fl : w == 1 ? &c->
 
 // A speed in the car's display unit, in the display's (the owner's pick may differ).
 static double from_car(const car_t *c, double v) {
+  if (!c->p.car_kph_known) return v;   // (on Bluetooth alone the unit never comes: only what was kept from a WiFi stream)
   return c->p.car_kph == c->kph ? v : c->p.car_kph ? v / 1.609344 : v * 1.609344;
 }
 // Speeds in hand turn with the unit: a Bluetooth value comes again only when it changes.
 static void shown_unit(car_t *c) {
   bool was = c->kph;
   c->kph = c->km_pick >= 0 ? c->km_pick : c->p.car_kph;
-  if (c->kph == was) return;
+  if (c->kph == was || !c->p.car_kph_known) return;   // (unknown: the number in hand was not converted either)
   double k = c->kph ? 1.609344 : 1 / 1.609344;
   c->speed *= k;
   if (!isnan(c->speed_limit)) c->speed_limit *= k;
@@ -146,7 +147,7 @@ void car_frame(car_t *c, uint16_t id, uint8_t bus, const uint8_t *d, uint8_t len
     if (!sig_decode(&kSignals[s], d, len, &v)) continue;
     switch (s) {
     case SIG_speed: c->speed = from_car(c, v); break;
-    case SIG_speedIsKph: c->p.car_kph = v == 1, shown_unit(c); break;
+    case SIG_speedIsKph: c->p.car_kph = v == 1, c->p.car_kph_known = true, shown_unit(c); break;
     case SIG_pedal: c->pedal_pct = clampd(v, 0, 100); break;
     case SIG_brake: c->braking = v == 1 && rnd(c->gear); break;   // 'gear' comes first in kSignals
     case SIG_gear: {
