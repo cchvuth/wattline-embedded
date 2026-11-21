@@ -311,7 +311,9 @@ static void dial(cmdr_t *c, int64_t now) {
   cmdr_state kind;
   int e = open_link(c, now, &kind, &why);
   if (c->io.now) now = c->io.now(c->io.ctx); // the dial can block 20 s: retries count from its end
-  if (e < 0 && kind == CS_AWAY && spent) c->asks++;   // not seen: nothing was asked, the tap still stands
+  // not seen, or a dial that failed before the Commander answered (a connect, the handshake): nothing was asked, the
+  // tap still stands (for its ASK_KEEP_MS), where two such failures left the next dial refused with no prompt
+  if (e < 0 && spent) c->asks++;
   if (e < 0) {
     teardown(c);
     schedule_retry(c, why, kind, now);

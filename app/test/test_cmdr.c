@@ -495,6 +495,20 @@ int main(void) {
   for (int i = 0; i < 40 && c.state != CS_APPROVING; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
   CHECK(c.state == CS_APPROVING);
 
+  // Nor do dials that fail before the Commander answers (seen, the link not made): the tap stands, the approval asked
+  // once one gets through.
+  fresh(&c, 1);
+  dev.approved = 0;
+  cmdr_connect(&c, now);
+  cmdr_step_aside(&c, now), cmdr_wifi(&c, 1, 0, now), run(&c, 2500);
+  dev.has = 0;
+  cmdr_kick(&c, 1, now);
+  for (int i = 0; i < 8; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
+  CHECK(c.state != CS_APPROVING && c.asks == 1);
+  dev.has = CMDR_HAS_SESSION | CMDR_HAS_API | CMDR_HAS_PUSH;
+  for (int i = 0; i < 40 && c.state != CS_APPROVING; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
+  CHECK(c.state == CS_APPROVING);
+
   // ... but not for ever: seen only long after the tap (nobody at the unit any more), no prompt: refused, as a dial
   // nobody asked for.
   fresh(&c, 1);
