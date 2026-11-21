@@ -6,7 +6,7 @@
 #include "state.h"
 #include <stddef.h>
 
-typedef struct {                // PLAN 5.3: kept in dash.conf, not hard-coded in the logic
+typedef struct {                // kept in dash.conf, not hard-coded in the logic
   int tick_ms;                  // keep-alive hello and the link checks (1000)
   int quiet_ms;                 // stream silence before resubscribing; the wheel stops too (3000)
   int lost_ms;                  // silence before the link is given up and retried (8000)

@@ -155,7 +155,7 @@ void app_on_settings(int what, const dash_settings_t *st, void *ctx) {
   case DASH_SETTINGS_OPEN:  // looked at again by the loop (settings_refresh), not from inside the UI's own call
     app_settings_refresh = true;
     break;
-  case DASH_CMDR_APPROVE:  // the owner's tap: the Dash never prompts on its own (PLAN 5.4)
+  case DASH_CMDR_APPROVE:  // a tap: the Dash never prompts on its own
     log_msg("settings: approve the Commander");
 #ifdef DASH_CMDR
     cmdr_hook_ask();

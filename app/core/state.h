@@ -20,7 +20,7 @@ enum { BT_FIELDS = 160 };   // up to the cabin's 159
 typedef struct { uint8_t has[BT_FIELDS], is_int[BT_FIELDS]; int64_t v[BT_FIELDS]; } bt_map_t;
 
 typedef struct {
-  // Times the derivations hold, configurable (PLAN 5.3: nothing hard-coded in the logic).
+  // Times the derivations hold, configurable (nothing hard-coded in the logic).
   struct { int gear_fresh_ms, grip_hold_ms, steer_hold_ms, yaw_steer_ms, bt_motor_bad_ms, bright_stale_ms; } cfg;
   const car_type_t *car;
   bool wifi_live;               // written by the link (sched.c): frames are arriving over WiFi
@@ -99,7 +99,7 @@ void car_set_gear(car_t *c, char g, int64_t now);
 void car_set_km_pick(car_t *c, int pick);   // 1 km, 0 miles, -1 the car's unit (Panda.kmPick)
 void car_set_steer(car_t *c, double deg, int64_t now);
 
-bool car_parked(const car_t *c, int64_t now);        // fails closed (PLAN 5.3)
+bool car_parked(const car_t *c, int64_t now);        // fails closed
 bool car_via_bt(const car_t *c);
 bool car_live(const car_t *c);
 bool car_bt_has(const car_t *c, int f);   // the Commander pushed field f this session

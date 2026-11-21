@@ -541,7 +541,7 @@ static void test_steer_brake(void) {
   CHECK(isnan(C.steer_deg) && !car_steer_lines(&C, now));
 }
 
-static void test_parked(void) {   // PLAN 5.3: fails closed (the app's getter, its clock now one monotonic)
+static void test_parked(void) {   // fails closed (the app's getter, its clock now one monotonic)
   fresh();
   CHECK(!car_parked(&C, now));                      // nothing heard
   FR(0x118, 0, 0, 0, 0x20, 0, 0, 0, 0, 0); CHECK(car_parked(&C, now));

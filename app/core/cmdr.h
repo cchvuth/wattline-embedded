@@ -3,7 +3,7 @@
 // and cmdr_tick() runs what is due. The transport (cmdr_io) is blocking: each
 // call returns when the GATT operation is done (port/linux/ble_bluez.c later).
 //
-// Deliberate changes from the phone app (PLAN-merged 5.4):
+// Deliberate changes from the phone app:
 // - No automatic approval prompt: a refusal always parks; only a tap
 //   (cmdr_kick ask=1) starts the one-minute SendUUID approval loop.
 // - No S3XY Dash borrow/lend logic (no Dash software runs on this unit), so no
@@ -131,7 +131,7 @@ void cmdr_data_hold(cmdr_t *c, int hold, int64_t now);
 int cmdr_press_guard(cmdr_action a, int parked, char gear);
 int cmdr_press(cmdr_t *c, cmdr_action a, int parked, char gear, int64_t now);
 
-// The one function that writes to the Commander (rule 6). prov-session takes
+// The one function that writes to the Commander. prov-session takes
 // only SessionCmd0/Cmd1 with device type 1, and only before the session is
 // confirmed; enhapi only cmdr_req_ok() requests, encrypted, after it; the reply
 // is decrypted in place and must be type + 1. Nothing else is ever written.

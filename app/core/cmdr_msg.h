@@ -16,7 +16,7 @@ int cmdr_action_opens(cmdr_action a); // frunk, trunk, doors: P only
 
 enum { CMDR_MSG_MAX = 512 };
 
-// The only EnhAPI request types ever sent (rule 6): 32 SendUUID, 28 TryAction,
+// The only EnhAPI request types ever sent: 32 SendUUID, 28 TryAction,
 // 124 Subscribe, 82 ReqGetTeslaAPIStatus, 48 ReqDashTriggerAllDataPush.
 // Returns the payload field that type must carry, 0 = refused.
 uint32_t cmdr_payload_field(uint64_t type);

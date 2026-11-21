@@ -1,4 +1,4 @@
-// The loop (PLAN-merged 5.1, 5.3, 5.6): the Panda UDP socket, core/sched driving the link, a frame every
+// The loop: the Panda UDP socket, core/sched driving the link, a frame every
 // frame_ms that maps the car state to the UI, the backlight from the car's screen or lamps, the clock from CAN 0x318.
 // Time is CLOCK_MONOTONIC throughout. Datagrams carry the kernel's arrival stamp (SO_TIMESTAMP), so a frame
 // drawn while they queue does not shift the flasher's or the grip hold's timing.

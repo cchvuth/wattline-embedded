@@ -1,4 +1,4 @@
-// The dash program (PLAN-merged 5.1): one poll() loop over the Panda UDP socket and a 33 ms frame timer;
+// The dash program: one poll() loop over the Panda UDP socket and a 33 ms frame timer;
 // core/ (sched, panda, derive) keeps the car state, bridge.c turns it into what the UI shows.
 #pragma once
 #include "../core/sched.h"

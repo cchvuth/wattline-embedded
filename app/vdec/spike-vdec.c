@@ -1059,6 +1059,7 @@ static void fb_show(dec_t *D)
 		int sw = crop_w, sh = (int)(((int64_t)crop_w * RGN_H + rgn_w - 1) / rgn_w + 1) & ~1;   /* up to even: 800 -> 332, aa.c's UI area */
 #endif
 		if (sh > crop_h) sh = crop_h & ~1, sw = (int)((int64_t)crop_h * rgn_w / rgn_h) & ~1;   /* a wider frame: its middle columns */
+		if (sw > crop_w) sw = crop_w & ~1;   /* (sh's rounding up can ask for a little more than the frame has) */
 		if (sw < 2 || sh < 2) { D->last_ci = -1; return; }
 		int sx = (crop_x + (crop_w - sw) / 2) & ~1, sy = (crop_y + (crop_h - sh) / 2) & ~1;   /* even: 4:2:0 */
 		const uint8_t *sy0 = cy, *suv = cuv;
@@ -1288,7 +1289,7 @@ static int decode_stream(int fd)
 			if (next_fps < now()) next_fps = now() + 1;
 		}
 		if (cap - len < 65536) {   /* a NAL this large is not a 720p picture: refuse rather than grow without end */
-			if (cap >= (16u << 20)) die("over 16 MB without a complete NAL");
+			if (cap >= (2u << 20)) die("over 2 MB without a complete NAL");   /* dec_one takes at most 1 MB */
 			cap *= 2; buf = realloc(buf, cap); if (!buf) die("out of memory");
 		}
 		struct pollfd in = { .fd = fd, .events = POLLIN };

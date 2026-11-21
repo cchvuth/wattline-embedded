@@ -15,7 +15,7 @@
 //   notify      StartNotify/StopNotify on push-enhapi; each PropertiesChanged Value is a push.
 //   disconnect  Device1.Disconnect (also cancels BlueZ's pending connect).
 //   random      getrandom(2).
-// The controller keeps its own address; the /dev/ttyS5 module is never touched (PLAN 0.1 rule 6).
+// The controller keeps its own address; the /dev/ttyS5 module is never touched.
 // Every byte written goes through cmdr_send(): this file has no write path of its own.
 #pragma once
 #include "../../core/cmdr.h"

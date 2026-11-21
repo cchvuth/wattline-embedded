@@ -1,5 +1,5 @@
 {
-  "_doc": "Dash-only rows, appended after kSignals by gen_signals.py. 0x273 UI_displayBrightnessLevel (docs/signals-and-actions.md, 'Screen brightness'; capture 54.5 %; 0x273 already streams for the dome light) for the backlight. 0x318 SystemTimeUTC for the clock (docs/signals-and-actions.md, 'Date and time (UTC)'; PLAN 5.6). Streamed (3.8 Hz). The vector is a synthetic frame laid out as the doc says (2026-11-13 10:42:07 UTC), not a capture: the doc gives no raw bytes.",
+  "_doc": "Dash-only rows, appended after kSignals by gen_signals.py. 0x273 UI_displayBrightnessLevel (docs/signals-and-actions.md, 'Screen brightness'; capture 54.5 %; 0x273 already streams for the dome light) for the backlight. 0x318 SystemTimeUTC for the clock (docs/signals-and-actions.md, 'Date and time (UTC)'). Streamed (3.8 Hz). The vector is a synthetic frame laid out as the doc says (2026-11-13 10:42:07 UTC), not a capture: the doc gives no raw bytes.",
   "signals": {
     "utcYear":    {"id": "0x318", "start": 0,  "len": 8, "offset": 2000},
     "utcMonth":   {"id": "0x318", "start": 8,  "len": 8},

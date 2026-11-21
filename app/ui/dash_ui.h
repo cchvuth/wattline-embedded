@@ -1,4 +1,4 @@
-/* The dash, drawn with LVGL in the Dash arrangement (PLAN-merged.md 5.2) of the app's look. */
+/* The dash, drawn with LVGL in the Dash arrangement of the app's look. */
 #pragma once
 #include "lvgl.h"
 #include "dash_state.h"

@@ -1,5 +1,5 @@
 /* The dash in LVGL: the wattline app's look (lib/main.dart, widgets.dart, gauge.dart, glyphs.dart), arranged
- * for the Dash's trapezoid screen (PLAN-merged.md 5.2). Sizes are the app's, in dp, through px() (1.25 px per dp
+ * for the Dash's trapezoid screen. Sizes are the app's, in dp, through px() (1.25 px per dp
  * at H = 480); the app's names are kept in comments so each piece can be checked against its widget. The icons
  * and car pictures are the app's own renders (ui/assets/export.sh), the text is Roboto through tiny_ttf. */
 #include "dash_ui.h"
@@ -3018,11 +3018,13 @@ static void ota_field(const char *txt, const char *key, char *out, size_t n)
  * the file says there is something to copy: the F133 screen run from its card, with its flash's files on it ---- */
 static lv_obj_t *set_nor_title, *set_nor_l;
 const char *dash_ui_nor_status = "/run/dash-nor.status";
+static uint32_t nor_tapped; /* when Copy was tapped, until the status file answers */
 static void nor_tap(lv_event_t *e)
 {
 	(void)e;
 	if (!forget_second(&fg_nor)) return;
 	save(DASH_NOR_COPY);
+	nor_tapped = lv_tick_get() | 1;
 	set_text(set_nor_l, "Copying: starting...");
 	show(fg_nor.btn, false); /* back if dash-nor reports an error */
 }
@@ -3036,8 +3038,16 @@ static void nor_refresh(bool force)
 	FILE *f = fopen(dash_ui_nor_status, "r");
 	bool on = f != NULL;
 	if (f) { txt[fread(txt, 1, sizeof txt - 1, f)] = 0; fclose(f); }
-	if (!force && !strcmp(txt, prev)) return;
+	/* dash-nor writes it anew each time (a rename): a new inode is an answer even with the same words (a copy that
+	 * failed the same way again); no answer within a minute (dash-nor never started), the button again */
+	struct stat sb;
+	static ino_t prev_ino;
+	ino_t ino = stat(dash_ui_nor_status, &sb) == 0 ? sb.st_ino : 0;
+	if (nor_tapped && lv_tick_elaps(nor_tapped) > 60000) force = true;
+	if (!force && !strcmp(txt, prev) && ino == prev_ino) return;
+	nor_tapped = 0;
 	snprintf(prev, sizeof prev, "%s", txt);
+	prev_ino = ino;
 	lv_obj_t *row = lv_obj_get_parent(set_nor_l);
 	show(set_nor_title, on), show(row, on);
 	if (!on) return;
@@ -4049,6 +4059,11 @@ static void set_snack(const dash_state_t *s)
 	set_text(snack_text, "%s", t);
 	lv_point_t sz;
 	float max = G.W * 0.42f;
+	if (G.phone && view == DASH_VIEW_PROJECT) { /* the split: the whole snack in its right half, off the picture */
+		lv_obj_update_layout(snack);
+		int32_t extra = lv_obj_get_width(snack) - lv_obj_get_width(snack_text); /* the wheel and the padding */
+		max = fminf(max, G.W - pj_vw() - PB(24) - extra);
+	}
 	lv_text_get_size(&sz, t, lv_obj_get_style_text_font(snack_text, 0), 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
 	lv_obj_set_width(snack_text, ri(fminf(sz.x + 1, max)));
 	lv_obj_update_layout(snack);

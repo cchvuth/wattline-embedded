@@ -1236,6 +1236,7 @@ static int aa_conn(int fd, SSL_CTX *ctx, int *touchp)
 			fprintf(stderr, "aa: the phone left before its session (AUTH_COMPLETE not sent)\n");
 			goto done;   /* no decoder and no split for a session that never starts */
 		}
+		if (aa_quit) { fprintf(stderr, "aa: stopped during the handshake: no session\n"); goto done; }   /* no split */
 		char c; struct pollfd pp = { fd, POLLIN, 0 };   /* nor for one that leaves at once: its first byte first */
 		if (poll(&pp, 1, AA_SILENT_US / 1000) != 1 || recv(fd, &c, 1, MSG_PEEK | MSG_DONTWAIT) <= 0) { fprintf(stderr, "aa: the phone left before its session\n"); goto done; }
 		int sink = spawn_sink();
