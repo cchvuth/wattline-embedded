@@ -3,7 +3,7 @@
 # is in range (the first listed wins when several are) as a station, then DHCP. WPA2/WPA3 personal (WPA3 when this
 # wpa_supplicant has SAE: BR2_PACKAGE_WPA_SUPPLICANT_WPA3; WPA2 alone otherwise, as "SAE" would fail the whole file);
 # an empty passphrase = open. A network wpa_supplicant would refuse (SSID not 1-32 bytes, passphrase not 8-63, or one
-# with a ") is skipped, so it cannot take the others down with it.
+# with a " or a control character) is skipped, so it cannot take the others down with it.
 # F133: the card's /mnt/sd/wpa_supplicant.conf (the bench's network, development) is read too (-I), its networks below
 # these (no priority: 0); a card file that does not load is left out rather than leaving no Wi-Fi.
 # The config is written to /run (RAM) only, mode 600; no passphrase is printed.
@@ -39,6 +39,8 @@ umask 077
 		fi
 		case $K in *\"*)   # psk="..." with a " in it: the T113's rule, kept
 			echo "wifi-connect: network $N skipped: a passphrase with \" in it" >&2; continue ;; esac
+		case $K in *[[:cntrl:]]*)   # a control character: wpa_supplicant refuses the whole file for it
+			echo "wifi-connect: network $N skipped: a passphrase with a control character" >&2; continue ;; esac
 		echo "network={"
 		echo "	ssid=$(printf %s "$S" | xxd -p | tr -d '\n')"
 		echo "	priority=$P"

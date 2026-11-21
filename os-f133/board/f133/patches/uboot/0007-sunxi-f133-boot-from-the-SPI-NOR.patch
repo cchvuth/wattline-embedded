@@ -28,7 +28,7 @@
  }
  
  uint32_t sunxi_get_spl_size(void)
-@@ -629,8 +638,203 @@
+@@ -634,8 +643,203 @@
  		mdelay(half);
  		if (n % (5000 / half) == 0)
  			f133_mcu_hold();
@@ -232,7 +232,7 @@
  
  #define CSR_MXSTATUS		0x7c0
  #define CSR_MHCR		0x7c1
-@@ -645,9 +849,11 @@
+@@ -650,9 +854,11 @@
  	u32 starts = readl(F133_REG(0x07090118)) + 1;
  
  	f133_backlight_on();

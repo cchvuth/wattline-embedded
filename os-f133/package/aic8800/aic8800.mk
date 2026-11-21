@@ -6,8 +6,9 @@
 
 AIC8800_VERSION = 5562c254b0231be34588dc608ec28c4f1d613285
 AIC8800_SITE = $(call github,radxa-pkg,aic8800,$(AIC8800_VERSION))
-# the driver GPL-2.0; the chip's firmware is AICSemi's binaries, installed as radxa-pkg/aic8800 distributes them
-AIC8800_LICENSE = GPL-2.0 (driver), AICSemi firmware binaries (see debian/copyright)
+# the driver GPL-2.0; the chip's firmware is AICSemi's binaries, redistributed as radxa-pkg/aic8800 does (upstream
+# ships no licence text of their own for them)
+AIC8800_LICENSE = GPL-2.0 (driver), GPL-3.0 (packaging), AICSemi firmware binaries (no licence text upstream)
 AIC8800_LICENSE_FILES = LICENSE debian/copyright
 AIC8800_MODULE_SUBDIRS = src/SDIO/driver_fw/driver/aic8800
 # Bluetooth over SDIO: the bsp loads fmacfwbt_8800d80_h_u02.bin and sets the BT port to the mailbox (no UART), fdrv

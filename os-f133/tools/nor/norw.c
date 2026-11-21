@@ -24,6 +24,7 @@
 #include <sys/mount.h>
 #include <sys/reboot.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <unistd.h>
 
 static void power_cycle(void)
@@ -155,6 +156,17 @@ int main(int argc, char **argv)
 	int fd = open(dev, O_RDWR | O_SYNC);
 	if (fd < 0 || ioctl(fd, MEMGETINFO, &mi)) {
 		perror(dev);
+		return 1;
+	}
+	// and the device opened is that partition's own: not a link named like it to another (the whole chip's)
+	char nd[32];
+	unsigned pn, ma, mn;
+	struct stat ds;
+	const char *b = strrchr(dev, '/');
+	if (sscanf(b ? b + 1 : dev, "mtd%u", &pn) != 1 || mtd_attr(nd, sizeof(nd), pn, "dev") || fstat(fd, &ds) ||
+	    sscanf(nd, "%u:%u", &ma, &mn) != 2 || !S_ISCHR(ds.st_mode) || major(ds.st_rdev) != ma ||
+	    minor(ds.st_rdev) != mn) {
+		fprintf(stderr, "norw: %s is not mtd%u's own device\n", dev, pn);
 		return 1;
 	}
 	if ((unsigned long long)st.st_size > mi.size) {

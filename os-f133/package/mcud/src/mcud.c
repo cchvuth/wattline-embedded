@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <termios.h>
@@ -211,6 +212,8 @@ static void mcu_bytes(void)
 	rxn -= i;
 }
 
+static int ctl_bytes(const char *s) { for (; *s; s++) if ((unsigned char)*s < 0x20 || *s == 0x7f) return 1; return 0; }
+
 static void client_in(struct client *c)
 {
 	uint8_t b[4096];
@@ -235,8 +238,8 @@ static void client_in(struct client *c)
 			else if (!strcmp(c->in, "ctl")) c->kind = 3;
 			else { drop(c); return; }
 			if (c->kind == chan) open_waiting();
-		} else if (!strncmp(c->in, "AT#CB", 5)) {   // never to the MCU, whichever client asks
-			fprintf(stderr, "mcud: AT#CB refused\n");
+		} else if (!strncasecmp(c->in, "AT#CB", 5) || ctl_bytes(c->in)) {   // never to the MCU, whichever client asks;
+			fprintf(stderr, "mcud: refused a ctl line\n");             // nor a control byte (a CR would start another)
 		} else if (!strncmp(c->in, "AT#", 3)) {   // ctl: a command for the MCU (KA/KB go without CR LF, as stock)
 			char a[260];
 			int raw = !strcmp(c->in, "AT#KA") || !strcmp(c->in, "AT#KB");
@@ -310,6 +313,9 @@ int main(int argc, char **argv)
 	sigaction(SIGINT, &sa, NULL);
 	sigaction(SIGUSR1, &sa, NULL);
 	signal(SIGPIPE, SIG_IGN);
+	sigset_t block, wake;   // the signals held off except inside ppoll: one between the loop's check and the wait
+	sigemptyset(&block), sigaddset(&block, SIGTERM), sigaddset(&block, SIGINT), sigaddset(&block, SIGUSR1);
+	sigprocmask(SIG_BLOCK, &block, &wake);   // ends the wait at once instead of after the next minute's hold
 	for (int i = 0; i < MAXC; i++) cl[i].fd = -1;
 
 	hold();
@@ -324,7 +330,8 @@ int main(int argc, char **argv)
 		int64_t now = ms(), wait = next_hold - now;
 		if (oq_len && next_data - now < wait) wait = next_data - now;
 		if (wait < 0) wait = 0;
-		if (poll(pf, (nfds_t)n, (int)wait) < 0 && errno != EINTR) break;
+		struct timespec ts = { wait / 1000, (wait % 1000) * 1000000 };
+		if (ppoll(pf, (nfds_t)n, &ts, &wake) < 0 && errno != EINTR) break;
 		now = ms();
 		if (now >= next_hold) { hold(); next_hold = now + 60000; }
 		if (pf[0].revents & POLLIN) {

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """mcud against a pty that plays the MCU (no device needed): the hold at start, ctl lines and AT# commands, the AA and
-Data channels opened by SW/SV and closed by IA, 240-byte paced frames towards the phone, clients that stop reading
+data channels opened by SW/SV and closed by IA, 240-byte paced frames towards the phone, clients that stop reading
 dropped while the others are served, the release on SIGUSR1, and that a phone's address never reaches the log.
   cc -O2 -Wall -o /tmp/mcud mcud.c && python3 -I test_mcud.py /tmp/mcud
 """
@@ -99,8 +99,8 @@ def run(p, m, sock, log):
     aa = socket.socket(socket.AF_UNIX); aa.connect(sock); aa.sendall(b'aa\n')
     mcu.pump(0.3)
     assert frame(0xD4, b'AT#MZ\r\n', 0x80) in [x for _, x in mcu.got], mcu.got
-    ctl.sendall(b'AT#CB\n'); mcu.pump(0.3)   # refused, whoever asks
-    assert not any(b'AT#CB' in x for _, x in mcu.got), 'AT#CB reached the MCU'
+    ctl.sendall(b'AT#CB\nAT#cb\nAT#MMx\rAT#CB\n'); mcu.pump(0.3)   # refused, whoever asks, however it is spelled
+    assert not any(b'AT#CB' in x.upper() for _, x in mcu.got), 'AT#CB reached the MCU'
     aa.setblocking(False)
     try:
         assert aa.recv(10) == b'', 'open before SW'
