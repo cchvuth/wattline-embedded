@@ -6,6 +6,7 @@
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/pwm/pwm.h>
 #include <dt-bindings/power/allwinner,sun20i-d1-ppu.h>
+#include <dt-bindings/thermal/thermal.h>
 
 /dts-v1/;
 
@@ -100,6 +101,63 @@
 
 &cpu0 {
 	cpu-supply = <&reg_vcc_core>;
+};
+
+/*
+ * Heat: the SoC's temperature sensor (the D1's THS: the driver's entry is patches/linux/0009, its node and thermal
+ * zone as upstream has them since 6.8), calibrated from the efuse. At 85 C the CPU is held at 408 MHz (its other
+ * operating point: cpufreq stays at 1008 MHz otherwise); at 110 C the system powers off, and the MCU, no longer
+ * held, cuts the power.
+ */
+&sid {
+	ths_calibration: thermal-sensor-calibration@14 {
+		reg = <0x14 0x4>;
+	};
+};
+
+/ {
+	soc {
+		ths: thermal-sensor@2009400 {
+			compatible = "allwinner,sun20i-d1-ths";
+			reg = <0x2009400 0x400>;
+			interrupts = <SOC_PERIPHERAL_IRQ(58) IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ccu CLK_BUS_THS>;
+			clock-names = "bus";
+			resets = <&ccu RST_BUS_THS>;
+			nvmem-cells = <&ths_calibration>;
+			nvmem-cell-names = "calibration";
+			#thermal-sensor-cells = <0>;
+		};
+	};
+
+	thermal-zones {
+		cpu-thermal {
+			polling-delay = <0>;
+			polling-delay-passive = <0>;
+			thermal-sensors = <&ths>;
+
+			cooling-maps {
+				map0 {
+					trip = <&cpu_target>;
+					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+				};
+			};
+
+			trips {
+				cpu_target: cpu-target {
+					temperature = <85000>;
+					hysteresis = <2000>;
+					type = "passive";
+				};
+
+				cpu-crit {
+					temperature = <110000>;
+					hysteresis = <0>;
+					type = "critical";
+				};
+			};
+		};
+	};
 };
 
 &dcxo {

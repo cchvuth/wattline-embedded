@@ -52,7 +52,7 @@ start)
 	(
 		while :; do
 			dmesg > $L/dmesg.txt
-			{ cat /proc/uptime; free; ip addr; ip route; iw dev; ps; } > $L/state.txt 2>&1
+			{ cat /proc/uptime; cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null; free; ip addr; ip route; iw dev; ps; } > $L/state.txt 2>&1
 			for f in $L/dash.out $L/wpa.txt $L/wifi.txt $L/mcu.txt; do   # appended to (O_APPEND): emptied in place, the writer goes on
 				[ "$(sz $f)" -gt 1048576 ] && cp $f $f.1 && : > $f
 			done

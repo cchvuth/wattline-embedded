@@ -125,5 +125,7 @@ free memory (`MemAvailable` at least the image's size plus 8 MB) before staging 
   the MCU cycle the power, at most three times in a row.
 - **Display.** The dash draws in strips and the 2D engine's rotation unit turns them into the portrait framebuffer
   (`package/g2drot`). Without the module, the CPU rotates them.
+- **Heat.** The SoC's temperature sensor is read by the kernel (`/sys/class/thermal/thermal_zone0/temp`, logged with
+  the boot's state): at 85 °C the CPU is held at 408 MHz instead of 1008, and at 110 °C the system powers off.
 - **Memory.** Android Auto's video decoder uses 16 MiB of CMA for its pictures and the framebuffer. The decoder keeps
   only as many pictures as the stream's references need, plus one.
