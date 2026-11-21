@@ -322,6 +322,7 @@ static void dial(cmdr_t *c, int64_t now) {
 static void lost(cmdr_t *c, const char *why, int64_t now) {
   if (!ready(c) && c->state != CS_APPROVING) return;
   teardown(c);
+  c->asked = 0;   // an approval cut short ends the ask (its one retry is asks'): no prompt at every later dial
   schedule_retry(c, why, CS_RETRYING, now);
 }
 
@@ -427,6 +428,7 @@ void cmdr_adapter(cmdr_t *c, int on, int64_t now) {
   } else if (c->on) {
     teardown(c);
     c->retry_at = -1;
+    c->asked = 0;   // the controller back later: no prompt on its own (the tap's one retry stands for its 5 minutes)
     set(c, CS_OFF, "bluetooth is off");
   }
 }

@@ -341,7 +341,9 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
     if (now >= next_frame) {
       static bool aa_parked;
       bool aa = access(PJ_AA_RADIO, F_OK) == 0;
-      if (aa && !aa_parked && d->link.state == LINK_RETRYING) link_disconnect(&d->link, now), aa_parked = true;
+      // (parked in the middle of Bluetooth's step-aside: that ask is spent, the next attempt asks again, where an ask
+      // left standing let its hello out with Bluetooth still linked)
+      if (aa && !aa_parked && d->link.state == LINK_RETRYING) link_disconnect(&d->link, now), aa_parked = true, d->aside_asked = false;
       else if (!aa && aa_parked) link_connect(&d->link, now), aa_parked = false;
     }
     link_poll(&d->link, now);

@@ -377,6 +377,10 @@ int main(void) {
   CHECK(c.state == CS_RETRYING);
   run(&c, 2000);
   CHECK(c.state == CS_APPROVING);
+  // ... that one only: lost again, the next dial asks nothing (no prompt at every dial after one tap)
+  cmdr_link_lost(&c, now);
+  for (int i = 0; i < 30 && c.state == CS_RETRYING; i++) run(&c, 1000);
+  CHECK(c.state == CS_REFUSED);
   cmdr_forget(&c, now);
   CHECK(file_is(PIN_PATH, NULL));
 
