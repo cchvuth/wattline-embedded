@@ -20,9 +20,9 @@ start)
 	grep -q "root=mtd:" /proc/cmdline && nor=1 t=0
 	for i in $(seq 1 $t); do [ -b /dev/mmcblk0p4 ] && break; sleep 1; done
 	# the initramfs mounted it already (the root filesystem is rootfs.sqfs on it). Here only on a NOR boot, with files
-	# on the card (logs, a swapfile, an addition's): written synchronously, as the power just goes (the car, the MCU)
-	# and nothing ever unmounts it, so a write a power cut catches leaves no FAT half updated
-	if ! grep -q " /mnt/sd " /proc/mounts && ! mount -t vfat -o noatime,sync /dev/mmcblk0p4 /mnt/sd 2>/dev/null; then
+	# on the card (logs, a swapfile, an addition's). Not synchronous: that cost the boot 1.6 s (the dash's and the
+	# scripts' log lines each waited for the card); the loop below syncs it every 5 s, as the power just goes
+	if ! grep -q " /mnt/sd " /proc/mounts && ! mount -t vfat -o noatime /dev/mmcblk0p4 /mnt/sd 2>/dev/null; then
 		if [ -n "$nor" ]; then
 			mkdir -p /tmp/log && ln -sfn /tmp/log /var/log/sd
 			exit 0
