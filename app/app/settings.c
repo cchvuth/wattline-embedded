@@ -126,7 +126,7 @@ void settings_load(dash_settings_t *st, const conf_t *cf) {
         int v = atoi(val);
         if (!strcmp(k, "minor_figures")) st->minor_figures = v;
         else if (!strcmp(k, "clock_24h")) st->hour12 = !v;
-        else if (!strcmp(k, "brightness_pct")) st->brightness_pct = v < 5 ? 5 : v > 100 ? 100 : v;
+        else if (!strcmp(k, "brightness_pct")) st->brightness_pct = v < 0 ? 0 : v > 100 ? 100 : v;
         else if (!strcmp(k, "follow_car")) st->follow_car = v;
         else if (!strcmp(k, "follow_offset")) st->follow_offset = v < -50 ? -50 : v > 50 ? 50 : v;
         else if (!strcmp(k, "ssh")) st->dev_ssh = v;

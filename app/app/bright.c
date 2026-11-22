@@ -1,11 +1,24 @@
 // The backlight's level: the car's own screen brightness while it is known (0x273, or the Commander's field 24),
-// scaled into bright_min..bright_max; else day or night from the car's lamps; bright_idle without car data; off
-// when away. Every change eases (smoothstep over bright_ease_ms) so the panel never steps visibly.
+// scaled into bright_min..bright_max; else day or night from the car's lamps; without car data the lowest (0 %) while
+// following the car, as the car's own screen is then, else bright_idle; off when away. 0 % is not off: it is the
+// lowest level at which the panel still shows its picture (bright_floor, bright_raw). Every change eases (smoothstep over bright_ease_ms) so the panel never steps visibly.
 #include "app.h"
 #include <math.h>
 #include <string.h>
 
-static const char *const kSrc[] = {"follows the car's screen", "day/night from the lamps", "idle: no car data", "away: off", "set by hand"};
+static const char *const kSrc[] = {"follows the car's screen", "day/night from the lamps", "idle: no car data", "away: off", "set by hand",
+                                   "no car data: the lowest, as the car's screen"};
+
+// What to write to the backlight for a level in %, of [max] steps: 0 % the lowest that still shows a picture
+// (bright_floor, % of the full duty), 100 % all of it. From 10 % up the duty is the level itself; below, the steps
+// grow with the square from the floor: fine at the dark end, where the eye tells small steps apart (linear, 1 % was
+// ten times the floor). Never 0: that is off, the away rule's.
+int bright_raw(const conf_t *cf, int pct, int max) {
+  double f = cf->bright_floor < 0 ? 0 : cf->bright_floor > 10 ? 10 : cf->bright_floor;
+  double d = pct >= 10 ? pct : f + (10 - f) * pct * pct / 100.0;
+  long v = lround(d * max / 100);
+  return v < 1 ? 1 : v > max ? max : (int)v;
+}
 
 void bright_init(bright_t *b, const conf_t *cf, int64_t now) {
   memset(b, 0, sizeof *b);
@@ -42,6 +55,7 @@ int bright_step(bright_t *b, const conf_t *cf, const car_t *c, int64_t now, int6
   if ((live || held) && b->follow && !isnan(car)) t = car * cf->bright_follow_scale + cf->bright_follow_offset + b->offset, src = BRIGHT_CAR;
   else if (b->manual >= 0) t = b->manual, src = BRIGHT_MANUAL;   // a level set by hand: held with or without car data
   else if (live || held) t = b->night ? cf->bright_night : cf->bright_day, src = BRIGHT_LAMPS;
+  else if (b->follow) t = 0, src = BRIGHT_NO_CAR;   // following the car, no car data: the lowest, as its own screen then
   else t = cf->bright_idle, src = BRIGHT_IDLE;
   t = t < cf->bright_min ? cf->bright_min : t > cf->bright_max ? cf->bright_max : t;
   int64_t away = (int64_t)cf->away_min * 60000;

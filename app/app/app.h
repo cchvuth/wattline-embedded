@@ -23,6 +23,7 @@ typedef struct {
   int set_clock;                // set the system clock from CAN 0x318, once per link
   char backlight[128];          // sysfs dir with brightness and max_brightness; "" none
   int bright_day, bright_night, bright_idle, bright_min, bright_max, away_min;   // % (away_min 0: never off)
+  double bright_floor;          // 0 %'s share of the full duty, %: the lowest that still shows a picture (0.1)
   int bright_follow_car;        // follow the car's own screen brightness when it is known (1)
   double bright_follow_scale, bright_follow_offset;   // backlight % = car % * scale + offset, then min..max
   int bright_ease_ms;           // a change eases over this long, never a visible step (300)
@@ -102,7 +103,7 @@ typedef struct {
   void (*frame_ms)(void *ctx, int ms);             // the screen's refresh period (LVGL's), as the dash's frame; may be NULL
 } ui_hooks_t;
 // ---- the backlight's level (bright.c): the car's screen brightness, else its lamps, else idle; eased ----
-enum { BRIGHT_CAR, BRIGHT_LAMPS, BRIGHT_IDLE, BRIGHT_AWAY, BRIGHT_MANUAL };
+enum { BRIGHT_CAR, BRIGHT_LAMPS, BRIGHT_IDLE, BRIGHT_AWAY, BRIGHT_MANUAL, BRIGHT_NO_CAR };
 typedef struct {
   int follow, manual;           // follow the car (bright_follow_car); manual: settings' %, -1 none
   int offset;                   // follow-car bias (% points added), from the settings' "Follow offset"
@@ -115,9 +116,11 @@ typedef struct {
 } bright_t;
 void bright_init(bright_t *b, const conf_t *cf, int64_t now);
 int bright_step(bright_t *b, const conf_t *cf, const car_t *c, int64_t now, int64_t idle);   // the % to set now
+int bright_raw(const conf_t *cf, int pct, int max);   // that % as the backlight's own level, of max (0 %: the lowest lit)
 void bright_manual(bright_t *b, int pct);   // a brightness set by hand: stops following the car until bright_follow
 void bright_follow(bright_t *b);
-extern int dash_bl_pct;         // the backlight as last set, % (-1 not yet)
+extern int dash_bl_pct;         // the backlight as last set, % (-1 not yet); 0 % is its lowest lit level
+extern bool dash_bl_dark;       // the backlight off (the away rule): a touch then only wakes it
 int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms);   // run_ms 0: until SIGTERM/SIGINT
 int64_t mono_ms(void);
 void dash_press(int action, int64_t at);   // a chip's tap at `at` (its id) -> the Commander (cmdr_action; CMDR=1)

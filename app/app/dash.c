@@ -30,6 +30,7 @@
 #endif
 
 int dash_bl_pct = -1;
+bool dash_bl_dark;
 static volatile sig_atomic_t stop;
 static void on_sig(int s) { (void)s; stop = 1; }
 
@@ -207,7 +208,8 @@ static void backlight(dash_t *d, int64_t now, int64_t idle) {
     FILE *f = fopen(PJ_NIGHT, "w");
     if (f) fputs(d->bright.night ? "1\n" : "0\n", f), fclose(f), night = d->bright.night;
   }
-  if (pct == dash_bl_pct || !cf->backlight[0]) return;
+  bool dark = pct == 0 && d->bright.src == BRIGHT_AWAY;   // off is the away rule's alone: 0 % is the lowest lit level
+  if ((pct == dash_bl_pct && dark == dash_bl_dark) || !cf->backlight[0]) return;
   char p[160];
   if (!d->bl_max) {
     snprintf(p, sizeof p, "%s/max_brightness", cf->backlight);
@@ -217,14 +219,14 @@ static void backlight(dash_t *d, int64_t now, int64_t idle) {
   }
   snprintf(p, sizeof p, "%s/brightness", cf->backlight);
   FILE *f = fopen(p, "w");
-  if (!f || fprintf(f, "%d\n", (pct * d->bl_max + 50) / 100) < 0) {
+  if (!f || fprintf(f, "%d\n", dark ? 0 : bright_raw(cf, pct, d->bl_max)) < 0) {
     if (!d->bl_err) log_msg("backlight %s: %s", p, strerror(errno));
     d->bl_err = true;
   } else {
     d->bl_err = false;   // the level's changes are logged by bright.c, not each eased step
   }
   if (f) fclose(f);
-  dash_bl_pct = pct;
+  dash_bl_pct = pct, dash_bl_dark = dark;
 }
 
 // The settings screen's brightness: following the car, or the slider's level (until the switch is on again).

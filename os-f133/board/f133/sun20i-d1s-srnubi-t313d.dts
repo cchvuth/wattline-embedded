@@ -65,9 +65,11 @@
 		compatible = "pwm-backlight";
 		pwms = <&pwm 7 20000 PWM_POLARITY_INVERTED>;
 		enable-gpios = <&pio 6 15 GPIO_ACTIVE_HIGH>;
-		brightness-levels = <0 100>;	/* 0..100 = percent duty */
-		num-interpolated-steps = <100>;
-		default-brightness-level = <15>;	/* until the dash sets its own */
+		/* 0..2000: every step of the PWM's 50 kHz period (2000 of its 100 MHz clock), a twentieth of a percent of
+		 * duty each: the dash's lowest level is 2 of them, far below one percent (a night's dark cabin) */
+		brightness-levels = <0 2000>;
+		num-interpolated-steps = <2000>;
+		default-brightness-level = <300>;	/* 15 %, until the dash sets its own */
 	};
 
 	soc {

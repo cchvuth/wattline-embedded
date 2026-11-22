@@ -181,7 +181,7 @@ void app_on_settings(int what, const dash_settings_t *st, void *ctx) {
 //   -Ithird_party/lvgl-9.6.0 -Ithird_party/lvgl-9.6.0/src -Ibuild -o build/actions_check app/actions.c app/pair.c core/cmdr_msg.c
 //   core/pb.c && build/actions_check
 #include <assert.h>
-static int64_t T; static int presses; int dash_bl_pct = -1;
+static int64_t T; static int presses; int dash_bl_pct = -1; bool dash_bl_dark;
 int64_t mono_ms(void) { return T; }
 void log_msg(const char *f, ...) { (void)f; }
 void dash_press(int a, int64_t at) { (void)a, (void)at; presses++; }

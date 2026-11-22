@@ -23,11 +23,11 @@ int main(void) {
   CHECK(cf.bright_follow_car == 1 && cf.bright_follow_scale == 1.0 && cf.bright_follow_offset == 0);
   car_init(&C);
   bright_init(&B, &cf, now);
-  CHECK(step(0) == cf.bright_idle);              // no car data: idle, at once (the first level has no ramp)
+  CHECK(step(0) == 0 && B.src == BRIGHT_NO_CAR);  // no car data, following the car: the lowest, at once (no ramp)
 
   C.wifi_live = true;                             // frames, but no 0x273 yet: the lamps' rule, day
   lamps(2);
-  CHECK(step(0) == 10);                           // a change starts from where it is...
+  CHECK(step(0) == 0);                            // a change starts from where it is...
   int mid = step(150);
   CHECK(mid > 40 && mid < 70);                    // ...eases through the middle...
   CHECK(step(150) == 100);                        // ...and lands at 300 ms
@@ -49,9 +49,11 @@ int main(void) {
   step(0);
   CHECK(step(300) == 40);                         // 60 * 0.5 + 10
   cf.bright_follow_scale = 1, cf.bright_follow_offset = 0;
+  cf.bright_min = 5;
   brightness(4);
   step(0);
   CHECK(step(300) == cf.bright_min);              // 2 %: kept at bright_min
+  cf.bright_min = 0;
   brightness(255);                                // SNA: back to the lamps (still night)
   step(0);
   CHECK(step(300) == 30);
@@ -82,7 +84,7 @@ int main(void) {
   C.wifi_live = false, car_from_bt(&C, NULL, now);
   CHECK(step(2000) == 30 && B.src == BRIGHT_LAMPS);
   step(cf.bright_stale_ms);
-  CHECK(B.src == BRIGHT_IDLE);                    // a loss that lasts: idle
+  CHECK(B.src == BRIGHT_NO_CAR);                  // a loss that lasts: the lowest
   C.wifi_live = true;
   lamps(4);
   step(0), step(300);
@@ -105,9 +107,35 @@ int main(void) {
   cf.bright_follow_car = 1;
   bright_init(&B, &cf, now);
 
-  C.wifi_live = false;                            // the link gone: idle
+  C.wifi_live = false;                            // the link gone: the lowest
   step(0);
-  CHECK(step(300) == cf.bright_idle && B.src == BRIGHT_IDLE);
+  CHECK(step(300) == 0 && B.src == BRIGHT_NO_CAR);
+  cf.bright_follow_car = 0;                       // not following: the idle level
+  bright_init(&B, &cf, now);
+  CHECK(step(0) == cf.bright_idle && B.src == BRIGHT_IDLE);
+  cf.bright_follow_car = 1;
+  bright_init(&B, &cf, now);
+  step(0);
+
+  // Following the car with no car data: 0 %, the lowest lit level, touched or not; a level set by hand, or following
+  // switched off in dash.conf, stays as it was (above).
+  now += 300;
+  CHECK(bright_step(&B, &cf, &C, now, 0) == 0 && B.src == BRIGHT_NO_CAR);
+  CHECK(bright_step(&B, &cf, &C, now, 600000) == 0 && B.src == BRIGHT_NO_CAR);
+  C.wifi_live = true, brightness(160);            // car data back: its level
+  step(0);
+  CHECK(step(300) == 80 && B.src == BRIGHT_CAR);
+  C.wifi_live = false, car_from_bt(&C, NULL, now); // and gone again: held for the settle, then the lowest
+  CHECK(step(1000) == 80);
+  step(cf.bright_stale_ms + cf.bt_settle_ms + 3000);
+  CHECK(step(300) == 0 && B.src == BRIGHT_NO_CAR);
+
+  // The level as the backlight's own: 0 % the floor (never 0, which is off), fine steps below 10 %, the duty itself
+  // from there up; a coarse backlight (100 steps) still gets its lowest step.
+  CHECK(bright_raw(&cf, 0, 2000) == 2 && bright_raw(&cf, 1, 2000) == 4 && bright_raw(&cf, 5, 2000) == 52);
+  CHECK(bright_raw(&cf, 10, 2000) == 200 && bright_raw(&cf, 30, 2000) == 600 && bright_raw(&cf, 100, 2000) == 2000);
+  for (int p = 1; p <= 100; p++) CHECK(bright_raw(&cf, p, 2000) > bright_raw(&cf, p - 1, 2000));
+  CHECK(bright_raw(&cf, 0, 100) == 1 && bright_raw(&cf, 3, 100) == 1 && bright_raw(&cf, 10, 100) == 10 && bright_raw(&cf, 100, 100) == 100);
 
   // Over Bluetooth (no WiFi): field 24 as %; out of range is ignored and logged once.
   car_init(&C);

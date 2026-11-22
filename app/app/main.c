@@ -31,8 +31,8 @@ static uint32_t frame(void *ctx) {
   (void)ctx;
   static bool shown;
   if (wd >= 0) ioctl(wd, WDIOC_KEEPALIVE, 0);
-  // a dark screen (the car away): the touch that wakes it presses nothing, whatever lies under the finger
-  if (dash_bl_pct == 0) for (lv_indev_t *i = lv_indev_get_next(NULL); i; i = lv_indev_get_next(i)) lv_indev_wait_release(i);
+  // a dark screen (the car away, the backlight off): the touch that wakes it presses nothing, whatever lies under the finger
+  if (dash_bl_dark) for (lv_indev_t *i = lv_indev_get_next(NULL); i; i = lv_indev_get_next(i)) lv_indev_wait_release(i);
   uint32_t r = lv_timer_handler();
   if (!shown) {
     shown = true;
