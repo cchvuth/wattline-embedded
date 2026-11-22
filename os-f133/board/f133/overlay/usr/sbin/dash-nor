@@ -57,13 +57,10 @@ copy)
 		fi
 	fi
 	status copying "writing the built-in flash"
-	# (nor.sh's mark stays until the settings are over too: only a copy that was cut leaves it behind)
-	NOR_KEEP_MARK=1 ROOTFS="$SD/rootfs.sqfs" STOCK="$SD/stock.bin" "$NOR" flash "$SD/nor" >> "$LOG" 2>&1 ||
+	ROOTFS="$SD/rootfs.sqfs" STOCK="$SD/stock.bin" "$NOR" flash "$SD/nor" >> "$LOG" 2>&1 ||
 		fail "the built-in flash could not be written: the card still starts the screen"
 	status copying "copying the settings"
-	"$NOR" seed >> "$LOG" 2>&1; r=$?
-	rm -f "$SD/nor-flashing"; sync
-	[ $r = 0 ] || fail "the settings could not be copied: the system is on the built-in flash"
+	"$NOR" seed >> "$LOG" 2>&1 || fail "the settings could not be copied: the system is on the built-in flash"
 	log "copy: done"
 	status done
 	;;

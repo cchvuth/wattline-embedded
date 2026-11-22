@@ -81,8 +81,11 @@ flash)
 	# the NOR's /data saved before it is erased (settings, Wi-Fi networks, Bluetooth bonds made while running from
 	# it), read twice; not the stock firmware's (stock.bin holds it) and not an erased one (a retry's)
 	P=$(part data) B=$(dirname "$S")/nor-data.bin
-	# (nor one half erased or half seeded by a flash that was cut: the copy taken before it stays)
-	if ! stock_on_chip && ! blank "$P" && ! { [ -e "$FL" ] && [ -f "$B" ]; }; then
+	# The first such copy stays as it is: a later one goes beside it (nor-data.last.bin), so that neither a flash done
+	# again after a cut (the partition half erased, or half filled by seed) nor a second copy to the flash replaces
+	# the settings the NOR had before the first.
+	[ -f "$B" ] && B=${B%.bin}.last.bin
+	if ! stock_on_chip && ! blank "$P"; then
 		dd if="$P" of="$B.new" bs=64k 2>/dev/null && [ "$(sha < "$B.new")" = "$(sha < "$P")" ] && mv -f "$B.new" "$B" ||
 			die "the NOR's data partition could not be saved to $B"
 		sync
@@ -104,9 +107,7 @@ flash)
 	else
 		put "$U" "$CHIP"
 	fi
-	# (kept for a caller that goes on to seed, and takes it away after: a seed that was cut left /data half made, and
-	# the flash done again saved that over the copy)
-	[ -n "${NOR_KEEP_MARK:-}" ] || rm -f "$FL"
+	rm -f "$FL"
 	sync
 	echo "the NOR is ready: it boots when no card with a boot loader is in"
 	;;
@@ -132,9 +133,13 @@ seed)
 	done
 	[ -f /mnt/sd/wpa_supplicant.conf ] && cp /mnt/sd/wpa_supplicant.conf $M/
 	mkdir -p $M/ssh && chmod 700 $M/ssh
-	cat /mnt/sd/authorized_keys $M/ssh/authorized_keys 2>/dev/null | tr -d '\r' | sort -u > $M/ssh/ak.new
-	mv $M/ssh/ak.new $M/ssh/authorized_keys && chmod 600 $M/ssh/authorized_keys
-	[ -s $M/ssh/authorized_keys ] && touch $M/ssh/enabled
+	# (not where the owner turned SSH off, dash-ssh-disable's flag come over with the card's /data: it stays off, and
+	# the card's key out)
+	if [ ! -e $M/ssh/disabled ]; then
+		cat /mnt/sd/authorized_keys $M/ssh/authorized_keys 2>/dev/null | tr -d '\r' | sort -u > $M/ssh/ak.new
+		mv $M/ssh/ak.new $M/ssh/authorized_keys && chmod 600 $M/ssh/authorized_keys
+		[ -s $M/ssh/authorized_keys ] && touch $M/ssh/enabled
+	fi
 	[ -f /mnt/sd/dropbear/dropbear_ed25519_host_key ] &&
 		cp /mnt/sd/dropbear/dropbear_ed25519_host_key $M/ssh/ && chmod 600 $M/ssh/dropbear_ed25519_host_key
 	sync

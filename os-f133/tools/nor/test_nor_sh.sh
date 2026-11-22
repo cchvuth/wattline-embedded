@@ -91,15 +91,11 @@ sh $N/nor.sh flash $T/img > $T/out 2>&1 && cmp -s $T/img/nor-data.bin $T/data.be
 	ok "flash saves the NOR's /data as nor-data.bin, then erases it" || { no "data backup"; cat $T/out; }
 sh $N/nor.sh flash $T/img > $T/out 2>&1 && cmp -s $T/img/nor-data.bin $T/data.before &&
 	ok "flash again (its /data erased): the saved copy kept" || { no "backup kept"; cat $T/out; }
-# a flash cut in its erase of /data, done again: the half-erased partition is not saved over the copy taken before
-head -c 300000 /dev/urandom > /dev/mtd4; echo - > $T/img/nor-flashing
-sh $N/nor.sh flash $T/img > $T/out 2>&1 && cmp -s $T/img/nor-data.bin $T/data.before && [ ! -e $T/img/nor-flashing ] &&
-	ok "a flash done again after a cut: the copy of /data taken before it kept" || { no "backup after a cut"; cat $T/out; }
-# asked to keep its mark (dash-nor, which seeds after it): a seed cut half-way, the flash done again: the same
-NOR_KEEP_MARK=1 sh $N/nor.sh flash $T/img > $T/out 2>&1 && [ -e $T/img/nor-flashing ] || no "mark kept for the seed"
-head -c 200000 /dev/urandom > /dev/mtd4
-sh $N/nor.sh flash $T/img > $T/out 2>&1 && cmp -s $T/img/nor-data.bin $T/data.before && [ ! -e $T/img/nor-flashing ] &&
-	ok "a flash done again after a seed that was cut: the copy of /data still the one taken before" || { no "backup after a cut seed"; cat $T/out; }
+# a flash cut in its erase of /data, or a seed after it, and done again; a second copy later: what is there then goes
+# beside the first copy, which stays
+head -c 524288 /dev/urandom > /dev/mtd4; cp /dev/mtd4 $T/data.second
+sh $N/nor.sh flash $T/img > $T/out 2>&1 && cmp -s $T/img/nor-data.bin $T/data.before && cmp -s $T/img/nor-data.last.bin $T/data.second &&
+	ok "a later flash with /data in use again: saved beside the first copy, which stays" || { no "second backup"; cat $T/out; }
 cp $T/data.before /dev/mtd4; cp /dev/mtd3 $T/rootfs.before
 STOCK=$T/nodir/stock.bin sh $N/nor.sh flash $T/img > $T/out 2>&1 && no "flash went on without saving /data" ||
 	{ grep -q "could not be saved" $T/out && cmp -s /dev/mtd4 $T/data.before && cmp -s /dev/mtd3 $T/rootfs.before &&
@@ -134,6 +130,11 @@ rm /mnt/sd/data/big
 rm $T/bin/cp; : > $T/calls
 sh $N/nor.sh seed > $T/out 2>&1 && [ "$(grep -c '^umount' $T/calls)" = 1 ] && [ -f /tmp/nordata/settings ] &&
 	ok "a seed that completes: the card's /data copied, unmounted once" || { no seed; cat $T/out $T/calls; }
+# SSH turned off on the card's system (dash-ssh-disable's flag in its /data): off on the NOR's too, the card's key out
+mkdir -p /mnt/sd/data/ssh && touch /mnt/sd/data/ssh/disabled && echo "ssh-ed25519 AAAA card" > /mnt/sd/authorized_keys; : > $T/calls
+sh $N/nor.sh seed > $T/out 2>&1 && [ -e /tmp/nordata/ssh/disabled ] && [ ! -e /tmp/nordata/ssh/enabled ] &&
+	! grep -qs card /tmp/nordata/ssh/authorized_keys && ok "a seed with SSH turned off: it stays off" || { no "seed ssh off"; cat $T/out; }
+rm -rf /mnt/sd/data/ssh /mnt/sd/authorized_keys
 echo "console=tty0 root=mtd:rootfs" > $T/cmdline
 sh $N/nor.sh read $T/x.bin > $T/out 2>&1 && no "ran while booted from the NOR" ||
 	{ grep -q "running from the NOR" $T/out && ok "refuses while running from the NOR"; } || no nor-boot

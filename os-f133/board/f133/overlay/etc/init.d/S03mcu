@@ -29,6 +29,9 @@ let_go() {
 	fi
 	release
 }
+# the MCU did not cut the power (it can miss the release): a reboot all the same, rather than a screen left up with
+# nothing holding its power or its Bluetooth (the next start then sees no Wi-Fi chip and asks again, 3 times at most)
+or_reboot() { ( sleep 120; echo "<3>S03mcu: the power was not cut: rebooting" > /dev/kmsg; reboot ) > /dev/null 2>&1 & }
 case "$1" in
 start)
 	stty -F /dev/ttyS1 115200 raw -echo 2>/dev/null || exit 0
@@ -41,6 +44,7 @@ start)
 		[ "$(cat $C 2>/dev/null)" = "$((n + 1))" ] || return 1   # not kept (no storage for it): no cycle, or one at every boot
 		echo "<4>S03mcu: $1: the MCU's power cycle, $((n + 1)) of 3" > /dev/kmsg
 		let_go
+		or_reboot
 	}
 	sdio() { ls /sys/bus/sdio/devices/ 2>/dev/null | grep -q .; }
 	for i in 1 2 3 4 5; do sdio && break; sleep 1; done
@@ -77,8 +81,6 @@ power-cycle)
 	sync
 	echo "<5>S03mcu: power cycle asked: the MCU cuts the power in ~40 s" > /dev/kmsg
 	let_go
-	# the MCU did not: a reboot all the same, rather than a screen left up with nothing holding its power or its
-	# Bluetooth (the next start then sees no Wi-Fi chip and asks again)
-	( sleep 120; echo "<3>S03mcu: the power was not cut: rebooting" > /dev/kmsg; reboot ) > /dev/null 2>&1 &
+	or_reboot
 	;;
 esac
