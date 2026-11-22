@@ -33,7 +33,7 @@ make O=/work/out BR2_EXTERNAL=/ext f133_defconfig >/dev/null
 # board/f133/initramfs.list names: compiled before the kernel takes it in, so the toolchain comes first
 CC=/work/out/host/bin/riscv64-buildroot-linux-gnu-gcc
 [ -x $CC ] || make O=/work/out toolchain
-mkdir -p /work/out/f133-init && $CC -static -Os -s -Wall -o /work/out/f133-init/init /ext/board/f133/init/init.c
+mkdir -p /work/out/f133-init && $CC -static -Os -s -Wall -o /work/out/f133-init/init /ext/board/f133/init/init.c /ext/board/f133/init/puff.c
 # A whole build (no arguments) makes again what comes from this checkout. Buildroot keeps a "local" package as it was
 # first built, and its kernel as first configured: an image then had old programs, or an old device tree, under a new
 # version. The programs (the dash, the receiver, the decoder, mcud, the update check) every time; the kernel and its
@@ -41,7 +41,7 @@ mkdir -p /work/out/f133-init && $CC -static -Os -s -Wall -o /work/out/f133-init/
 if [ -z "'"$*"'" ]; then
 	rm -rf /work/out/build/dashapp-local /work/out/build/wattline-aa-local /work/out/build/spike-vdec-local \
 		/work/out/build/mcud-local /work/out/build/dash-ota-local
-	k=$(cat /ext/board/f133/*.dts /ext/board/f133/linux.fragment /ext/board/f133/kernel.its /ext/board/f133/init/init.c \
+	k=$(cat /ext/board/f133/*.dts /ext/board/f133/linux.fragment /ext/board/f133/kernel.its /ext/board/f133/init/* \
 		/ext/board/f133/initramfs.list \
 		/ext/board/f133/patches/linux/* /ext/board/f133/patches-local/linux/* /ext/package/aic8800/* \
 		/ext/package/g2drot/* /ext/package/g2drot/src/* 2>/dev/null | sha256sum | cut -c1-16)

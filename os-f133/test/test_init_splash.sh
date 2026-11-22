@@ -1,7 +1,7 @@
 #!/bin/sh
 # The initramfs' boot picture (board/f133/init/init.c: splash()), run for real in a throwaway container: init.c built
-# with a stand-in framebuffer (a file at /dev/fb0, its geometry from a fake ioctl) and no chroot, the pictures where
-# it looks for them, the container's busybox as the root's zcat. Root, with gcc and busybox installed:
+# with a stand-in framebuffer (a file at /dev/fb0, its geometry from a fake ioctl), the pictures where it looks for
+# them. Root, with gcc and busybox installed:
 #   docker run --rm -v "$PWD":/r:ro debian:stable sh -c 'apt-get -qq update && apt-get -qq install -y gcc libc6-dev busybox >/dev/null && sh /r/os-f133/test/test_init_splash.sh'
 I=$(cd "$(dirname "$0")/.." && pwd)/board/f133/init/init.c
 T=$(mktemp -d)
@@ -33,7 +33,7 @@ static int test_ioctl(int fd, unsigned long req, ...)   /* a 4x3 panel, 16 bytes
 #undef main
 int main(int argc, char **argv) { splash(argc > 1 && argv[1][0] == 'n'); return 0; }
 C
-gcc -Wall -o $T/t $T/t.c 2> $T/cc.log || { cat $T/cc.log; echo "FAIL  the harness does not build"; exit 1; }
+gcc -Wall -o $T/t $T/t.c "$(dirname "$I")/puff.c" 2> $T/cc.log || { cat $T/cc.log; echo "FAIL  the harness does not build"; exit 1; }
 pic() { head -c "$2" /dev/urandom > $T/$1.raw; busybox gzip -c $T/$1.raw > $T/$1.gz; }
 pic own 48; pic built 48; pic small 40
 fresh() { rm -rf /newroot; mkdir -p /newroot/data /newroot/mnt/sd/data /newroot/usr/share/splash; : > /dev/fb0; }
@@ -50,6 +50,10 @@ fresh
 $T/t nor; [ ! -s /dev/fb0 ] && [ ! -e /newroot/.splash-shown ] && ok "no picture at all: nothing drawn, no mark" || no "none"
 fresh; head -c 44 /dev/urandom > /newroot/data/splash.bgra.gz; printf '\060\000\000\000' >> /newroot/data/splash.bgra.gz
 $T/t nor; [ ! -e /newroot/.splash-shown ] && ok "a picture that does not unpack: no mark (S00splash tries)" || no "corrupt"
+cp $T/built.gz /newroot/usr/share/splash/splash.bgra.gz
+$T/t nor; cmp -s /dev/fb0 $T/built.raw && [ -e /newroot/.splash-shown ] && ok "one that does not unpack, the image's beside it: the image's drawn" || no "corrupt, then built-in"
+fresh; { busybox gzip -c $T/own.raw | head -c -8; printf '\001\002\003\004\060\000\000\000'; } > /newroot/data/splash.bgra.gz
+$T/t nor; [ ! -s /dev/fb0 ] && [ ! -e /newroot/.splash-shown ] && ok "a picture whose CRC does not match: not drawn" || no "bad crc"
 fresh; mkfifo /newroot/data/splash.bgra.gz; cp $T/built.gz /newroot/usr/share/splash/splash.bgra.gz
 timeout 5 $T/t nor; [ $? = 0 ] && cmp -s /dev/fb0 $T/built.raw && ok "a FIFO of the picture's name: not waited on, the image's drawn" || no "fifo"
 rm -rf $T /newroot /dev/fb0

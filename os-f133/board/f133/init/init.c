@@ -23,14 +23,16 @@
 #include <linux/fb.h>
 #include <linux/loop.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/klog.h>
 #include <sys/mount.h>
 #include <sys/reboot.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
 #include <unistd.h>
+
+#include "puff.h"
 
 static void say(const char *what, int err)
 {
@@ -104,12 +106,60 @@ static void fail(const char *what)
 }
 
 /*
+ * A gzip file's contents, want bytes of them, in memory (the caller's to free), or NULL: not gzip, another length, or
+ * a CRC that does not match. Its deflate stream goes through zlib's puff (puff.c): a picture is long runs, which
+ * puff copies as fast as anything, and the root's zcat took 0.2 s for one (and a process of the cold root).
+ */
+static unsigned char *unpack(int fd, unsigned long want)
+{
+	static unsigned long crc_of[256];
+	unsigned long n, p = 10, inl, outl = want, c = 0xffffffff, i, k;
+	unsigned char *in = NULL, *out = NULL;
+	struct stat sb;
+
+	if (fstat(fd, &sb) || sb.st_size < 18 || sb.st_size > (8 << 20) || lseek(fd, 0, SEEK_SET))
+		return NULL;
+	n = sb.st_size;
+	in = malloc(n);
+	if (!in || read(fd, in, n) != (ssize_t)n || in[0] != 0x1f || in[1] != 0x8b || in[2] != 8 || in[3] & 0xe0)
+		goto out;
+	if (in[3] & 4)			/* the header's optional parts: an extra field, a name, a comment, its CRC */
+		p += 2 + (in[10] | in[11] << 8);
+	for (i = 0; i < 2; i++)
+		if (in[3] & (8 << i))
+			while (p < n && in[p++])
+				;
+	if (in[3] & 2)
+		p += 2;
+	if (p + 8 > n)
+		goto out;
+	inl = n - p - 8;
+	out = malloc(want);
+	if (out && !puff(out, &outl, in + p, &inl) && outl == want) {
+		for (i = 0; i < 256; i++) {
+			for (crc_of[i] = i, k = 0; k < 8; k++)
+				crc_of[i] = crc_of[i] & 1 ? 0xedb88320 ^ crc_of[i] >> 1 : crc_of[i] >> 1;
+		}
+		for (i = 0; i < want; i++)
+			c = crc_of[(c ^ out[i]) & 0xff] ^ c >> 8;
+		p += inl;		/* the trailer: the contents' CRC, then their length */
+		if ((c ^ 0xffffffff) == (in[p] | in[p + 1] << 8 | in[p + 2] << 16 | (unsigned long)in[p + 3] << 24)) {
+			free(in);
+			return out;
+		}
+	}
+	free(out);
+out:
+	free(in);
+	return NULL;
+}
+
+/*
  * The boot picture, then the backlight: the owner's own (/data/splash.bgra.gz: the NOR's data partition, or the
  * card's /data) if there is one, else the image's. Each is the panel's framebuffer, gzipped; one of another size (its
- * last 4 bytes say it) is passed over. Unpacked by the new root's own zcat, as S00splash did 1.5 s later (the root's
- * init and its scripts read from the flash first); the text console lets go of the framebuffer first, so no cursor
- * lands on the picture. /.splash-shown tells S00splash. Whatever fails here, the boot goes on and the backlight comes
- * on: nothing of this is needed to start.
+ * last 4 bytes say it) or that does not unpack is passed over. The text console lets go of the framebuffer first, so
+ * no cursor lands on the picture. /.splash-shown tells S00splash. Whatever fails here, the boot goes on and the
+ * backlight comes on: nothing of this is needed to start.
  */
 static void splash(int nor)
 {
@@ -118,31 +168,26 @@ static void splash(int nor)
 	struct fb_var_screeninfo v;
 	struct fb_fix_screeninfo f;
 	struct stat sb;
-	unsigned char t[4];
-	int i, fd, st, s = -1, fb = open("/dev/fb0", O_WRONLY);
-	pid_t pid;
+	unsigned char t[4], *px = NULL;
+	unsigned long len;
+	int i, fd, s, fb = open("/dev/fb0", O_WRONLY);
 
 	if (fb < 0 || ioctl(fb, FBIOGET_VSCREENINFO, &v) || ioctl(fb, FBIOGET_FSCREENINFO, &f))
 		goto out;
-	for (i = 0; i < 2 && s < 0; i++) {
+	len = (unsigned long)f.line_length * v.yres;
+	for (i = 0; i < 2 && !px; i++) {
 		s = open(pic[i], O_RDONLY | O_NONBLOCK);	/* (a FIFO of that name on /data would hold the boot for good) */
-		if (s >= 0 && (fstat(s, &sb) || !S_ISREG(sb.st_mode) || lseek(s, -4, SEEK_END) < 0 || read(s, t, 4) != 4 ||
-			       (t[0] | t[1] << 8 | t[2] << 16 | (unsigned)t[3] << 24) != f.line_length * v.yres)) {
-			close(s);
-			s = -1;
-		}
+		if (s < 0)
+			continue;
+		if (!fstat(s, &sb) && S_ISREG(sb.st_mode) && lseek(s, -4, SEEK_END) >= 0 && read(s, t, 4) == 4 &&
+		    (t[0] | t[1] << 8 | t[2] << 16 | (unsigned long)t[3] << 24) == len)
+			px = unpack(s, len);
+		close(s);
 	}
-	if (s < 0)
+	if (!px)
 		goto out;
 	fbcon(0);
-	pid = fork();
-	if (pid == 0) {
-		if (lseek(s, 0, SEEK_SET) || dup2(s, 0) < 0 || dup2(fb, 1) < 0 || chroot("/newroot") || chdir("/"))
-			_exit(1);
-		execl("/bin/busybox", "zcat", (char *)NULL);
-		_exit(1);
-	}
-	if (pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st) && !WEXITSTATUS(st)) {
+	if (write(fb, px, len) == (ssize_t)len) {
 		fd = open("/newroot/.splash-shown", O_CREAT | O_WRONLY | O_TRUNC, 0644);
 		if (fd >= 0)
 			close(fd);
@@ -150,9 +195,8 @@ static void splash(int nor)
 	} else {
 		say("the boot picture was not drawn", 0);
 	}
+	free(px);
 out:
-	if (s >= 0)
-		close(s);
 	if (fb >= 0)
 		close(fb);
 	light();
