@@ -3124,6 +3124,19 @@ static void aa_forget_tap(lv_event_t *e)
 	(void)e;
 	if (forget_second(&fg_aa)) save(DASH_AA_FORGET);
 }
+/* A part of a settings page shown or hidden (a row's button, a row): the page it is on is laid out and scrolled back
+ * within its content, and redrawn whole. LVGL left a page that had been scrolled to its end past it when a row grew
+ * shorter, and its scroll bar's old end stayed drawn. */
+static void show_in_page(lv_obj_t *o, bool on)
+{
+	if (on != lv_obj_is_hidden(o)) return;
+	show(o, on);
+	for (lv_obj_t *p = lv_obj_get_parent(o); p; p = lv_obj_get_parent(p))
+		if (lv_obj_is_scrollable(p)) { /* the page: its rows' boxes do not scroll */
+			lv_obj_update_layout(p), lv_obj_readjust_scroll(p, LV_ANIM_OFF), lv_obj_invalidate(p);
+			break;
+		}
+}
 static int ota_next = DASH_OTA_CHECK; /* what the button does now */
 static uint32_t ota_tapped; /* when the button was tapped (and hidden): back after a minute with no news */
 static void ota_tap(lv_event_t *e)
@@ -3131,7 +3144,7 @@ static void ota_tap(lv_event_t *e)
 	(void)e;
 	save(ota_next);
 	set_text(set_ota_l, "%s", ota_next == DASH_OTA_RESTART ? "Restarting..." : ota_next == DASH_OTA_INSTALL ? "Installing..." : "Checking...");
-	show(set_ota_btn, false); /* back when dash-update reports */
+	show_in_page(set_ota_btn, false); /* back when dash-update reports */
 	ota_tapped = lv_tick_get();
 }
 static void ota_field(const char *txt, const char *key, char *out, size_t n)
@@ -3153,7 +3166,7 @@ static void nor_tap(lv_event_t *e)
 	save(DASH_NOR_COPY);
 	nor_tapped = lv_tick_get() | 1;
 	set_text(set_nor_l, "Copying: starting...");
-	show(fg_nor.btn, false); /* back if dash-nor reports an error */
+	show_in_page(fg_nor.btn, false); /* back if dash-nor reports an error */
 }
 static void nor_refresh(bool force)
 {
@@ -3176,7 +3189,7 @@ static void nor_refresh(bool force)
 	snprintf(prev, sizeof prev, "%s", txt);
 	prev_ino = ino;
 	lv_obj_t *row = lv_obj_get_parent(set_nor_l);
-	show(set_nor_title, on), show(row, on);
+	show_in_page(set_nor_title, on), show_in_page(row, on);
 	if (!on) return;
 	ota_field(txt, "state=", st, sizeof st), ota_field(txt, "note=", note, sizeof note);
 	bool btn = true;
@@ -3188,7 +3201,7 @@ static void nor_refresh(bool force)
 	else if (!strcmp(st, "error")) set_text(set_nor_l, "Copy failed: %s", note);
 	else set_text(set_nor_l, "Copy this card's system to the screen's built-in flash, to start without the card");
 	if (btn) forget_reset(&fg_nor, true);
-	show(fg_nor.btn, btn);
+	show_in_page(fg_nor.btn, btn);
 	lv_obj_update_layout(fg_nor.btn);
 	lv_obj_set_width(set_nor_l, ri(lv_obj_get_width(row) - (btn ? lv_obj_get_width(fg_nor.btn) + PB(12) : 0)));
 }
@@ -3239,7 +3252,7 @@ static void ota_refresh(bool force)
 	else if (!strcmp(st, "error")) set_text(set_ota_l, "Update failed: %s", note);
 	else set_text(set_ota_l, "%s", vs);
 	set_text(lv_obj_get_child(set_ota_btn, 0), "%s", btn);
-	show(set_ota_btn, !busy);
+	show_in_page(set_ota_btn, !busy);
 	/* the words take what the button leaves (all of the row while it is hidden), two lines at most: a long error's rest
 	 * is in the log */
 	lv_obj_update_layout(set_ota_btn);
@@ -3653,7 +3666,7 @@ static void settings_build(void)
 	lv_obj_set_size(set_slider, ri(cw - PB(16)), ri(PB(6)));
 	lv_obj_set_style_margin_left(set_slider, ri(PB(8)), 0);
 	lv_obj_set_style_margin_top(set_slider, ri(PB(10)), 0); /* the knob (7 dp past the track) clear of the label */
-	lv_slider_set_range(set_slider, 5, 100);
+	lv_slider_set_range(set_slider, 0, 100); /* 0: the lowest the panel still shows a picture at, not off */
 	lv_obj_set_style_bg_color(set_slider, rgb(M3_KEY), LV_PART_MAIN);
 	lv_obj_set_style_bg_color(set_slider, rgb(M3_PRIMARY), LV_PART_INDICATOR);
 	lv_obj_set_style_bg_color(set_slider, rgb(M3_PRIMARY), LV_PART_KNOB);
@@ -4636,9 +4649,18 @@ static void pdial_set(const dash_state_t *s, float cx, float w)
 	put_text(pdial_range, 1, side / 2, side / 2 + r * 0.86f - lv_font_get_line_height(fr) + ascent(fr), side);
 	float p = isnan(kw) ? NAN : roundf(fmaxf(-1, fminf(1, kw / PD_ENDS)) * PD_REACH * 2) / (PD_REACH * 2);
 	int soc = s->live && !isnan(s->soc_pct) ? (int)lroundf(fmaxf(0, fminf(100, s->soc_pct))) : -1;
-	if (isnan(p) ? !isnan(pd_p) : p != pd_p) { /* the power's track, fill and dash: down to 30° under the level */
-		pd_p = p;
+	if (isnan(p) ? !isnan(pd_p) : p != pd_p) {
 		lv_area_t a = {ri(x0) - 2, ri(top) - 2, ri(x0 + side) + 2, ri(top + side / 2 + r * 0.62f) + 2};
+		/* The power moved: only the degrees between where its end was and is (the fill's end, the dash with its
+		 * shadow and tip), as the ring's and the battery dial's; a step is 1.25 kW, so most driving frames, and the
+		 * whole upper dial was redrawn for each. Known from unknown, or back: all of it (the track's box, down to 30°
+		 * under the level). */
+		if (!isnan(p) && !isnan(pd_p)) {
+			float a0 = 270 + PD_REACH * fminf(p, pd_p), a1 = 270 + PD_REACH * fmaxf(p, pd_p);
+			float m = px(9) / (r * 0.74f) * 57.3f + 1; /* the dash's half width and its shadow, as an angle at its inner end */
+			arc_box(ri(x0 + side / 2), ri(top + side / 2), r * 0.74f - px(4), r * 1.02f + px(6), (int)floorf(a0 - m), (int)ceilf(a1 + m), &a);
+		}
+		pd_p = p;
 		lv_obj_invalidate_area(pdial, &a);
 	}
 	if (soc != pd_soc) { /* the battery's, from 40° under the level */
