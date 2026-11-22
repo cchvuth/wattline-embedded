@@ -94,8 +94,11 @@ sh $N/nor.sh flash $T/img > $T/out 2>&1 && cmp -s $T/img/nor-data.bin $T/data.be
 # a flash cut in its erase of /data, or a seed after it, and done again; a second copy later: what is there then goes
 # beside the first copy, which stays
 head -c 524288 /dev/urandom > /dev/mtd4; cp /dev/mtd4 $T/data.second
-sh $N/nor.sh flash $T/img > $T/out 2>&1 && cmp -s $T/img/nor-data.bin $T/data.before && cmp -s $T/img/nor-data.last.bin $T/data.second &&
+sh $N/nor.sh flash $T/img > $T/out 2>&1 && cmp -s $T/img/nor-data.bin $T/data.before && cmp -s $T/img/nor-data.2.bin $T/data.second &&
 	ok "a later flash with /data in use again: saved beside the first copy, which stays" || { no "second backup"; cat $T/out; }
+head -c 200000 /dev/urandom > /dev/mtd4   # that flash cut in its erase, and done again: a third file, the two before as they were
+sh $N/nor.sh flash $T/img > $T/out 2>&1 && cmp -s $T/img/nor-data.bin $T/data.before && cmp -s $T/img/nor-data.2.bin $T/data.second &&
+	[ -f $T/img/nor-data.3.bin ] && ok "a flash done again after a cut: no copy written over" || { no "third backup"; cat $T/out; }
 cp $T/data.before /dev/mtd4; cp /dev/mtd3 $T/rootfs.before
 STOCK=$T/nodir/stock.bin sh $N/nor.sh flash $T/img > $T/out 2>&1 && no "flash went on without saving /data" ||
 	{ grep -q "could not be saved" $T/out && cmp -s /dev/mtd4 $T/data.before && cmp -s /dev/mtd3 $T/rootfs.before &&

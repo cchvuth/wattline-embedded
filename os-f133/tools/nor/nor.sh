@@ -8,7 +8,8 @@
 #                        changed), the data partition erased; each read back and compared. While the stock firmware is
 #                        still on the chip, only with DIR/stock.bin byte for byte the chip (nor.sh read DIR/stock.bin,
 #                        kept off the screen, and compared with a second read before the first write). A data
-#                        partition of this system's (not erased) is saved first, beside stock.bin: nor-data.bin.
+#                        partition of this system's (not erased) is saved first, beside stock.bin: nor-data.bin
+#                        (a later flash's as nor-data.2.bin, .3...: none is written over).
 #   nor.sh seed          the card's /data (no logs), Wi-Fi settings and SSH keys into the NOR's data partition
 #   nor.sh restore FILE  a whole-chip image (the stock backup) or the data partition (nor-data.bin) back onto the NOR,
 #                        read back and compared
@@ -81,10 +82,10 @@ flash)
 	# the NOR's /data saved before it is erased (settings, Wi-Fi networks, Bluetooth bonds made while running from
 	# it), read twice; not the stock firmware's (stock.bin holds it) and not an erased one (a retry's)
 	P=$(part data) B=$(dirname "$S")/nor-data.bin
-	# The first such copy stays as it is: a later one goes beside it (nor-data.last.bin), so that neither a flash done
-	# again after a cut (the partition half erased, or half filled by seed) nor a second copy to the flash replaces
-	# the settings the NOR had before the first.
-	[ -f "$B" ] && B=${B%.bin}.last.bin
+	# No copy is ever written over: the first is nor-data.bin, each later one a new file beside it (nor-data.2.bin,
+	# .3...), so that neither a flash done again after a cut (the partition half erased, or half filled by seed) nor a
+	# later copy to the flash replaces what was saved before. 512 KiB each, on a card.
+	n=2; while [ -f "$B" ]; do B=$(dirname "$S")/nor-data.$n.bin; n=$((n + 1)); done
 	if ! stock_on_chip && ! blank "$P"; then
 		dd if="$P" of="$B.new" bs=64k 2>/dev/null && [ "$(sha < "$B.new")" = "$(sha < "$P")" ] && mv -f "$B.new" "$B" ||
 			die "the NOR's data partition could not be saved to $B"

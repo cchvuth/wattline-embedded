@@ -68,7 +68,7 @@ The boot ROM tries the SD card first, so a card boots Linux with the screen's ow
 `nor.sh restore stock.bin` from a card boot puts the stock firmware back.
 
 `nor.sh flash` erases the NOR's `/data`. If that holds this system's settings (a screen that ran from its NOR), it is
-saved first to `nor-data.bin` beside `stock.bin` (a later copy's to `nor-data.last.bin`: the first stays), and `nor.sh restore nor-data.bin` puts it back, e.g. after a copy
+saved first to `nor-data.bin` beside `stock.bin` (a later copy's to `nor-data.2.bin`, `.3`...: none is written over), and `nor.sh restore nor-data.bin` puts it back, e.g. after a copy
 that should keep the settings, Wi-Fi networks and Bluetooth bonds made while running from the NOR.
 
 **From the dash instead:** a card install can copy itself to the built-in flash from **Settings → Advanced →
