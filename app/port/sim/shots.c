@@ -614,6 +614,15 @@ int main(int argc, char **argv)
 			lv_indev_read(finger);
 			bad |= expect(saved.ring_page == DASH_RING_POWER, "a slow start on the bar, then a flick over the ring: its face stays");
 		}
+		{ /* from the ring out to slot 2's card, every place is the ring's or the slot's: no strip between that is neither */
+			bool dead = false;
+			for (int x = W / 2 + H / 3; x < W / 2 + H / 2; x += 3) {
+				int r = saved.ring_page, c = saved.cards[2];
+				swipe(x, H * 2 / 3, x, H / 4);
+				dead |= saved.ring_page == r && saved.cards[2] == c;
+			}
+			bad |= expect(!dead, "a swipe up anywhere from the ring to the slot beside it flips one of them");
+		}
 		bad |= expect(!presses, "no press from any swipe");
 		st.basic = false; /* last, the split again: a hold on a button names it, in the bar (its tooltip stays: no timers here) */
 		dash_ui_settings(&st);

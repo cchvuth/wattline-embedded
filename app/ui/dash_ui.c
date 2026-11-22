@@ -4329,7 +4329,7 @@ static bool steer_dots(const dash_state_t *s)
 {
 	typeof(steer_m.key) k;
 	memset(&k, 0, sizeof k); /* its padding too: compared whole */
-	k.on = s->live && s->wifi_live && s->steer_lines && !isnan(s->steer_deg);
+	k.on = s->live && s->wifi_live && s->steer_lines && !isnan(s->steer_deg) && cab.h > 0; /* (a car drawn at least once) */
 	k.gear = s->gear, k.car = s->car, k.deg = s->steer_deg, k.x = cab.x, k.y = cab.y, k.w = cab.w, k.h = cab.h;
 	for (int i = 0; i <= 10; i++) {
 		lv_obj_t *b = i < 10 ? chips[i].box : dest_card;
@@ -4473,7 +4473,8 @@ static void swipe(lv_event_t *e)
 	} else { /* a slot of basic's: passing over the cards the other slots show */
 		int i = 0;
 		while (i < 4 && !(p.x >= slot_x[i] && p.x < slot_x[i + 1])) i++;
-		if (i == 4 || (i == 1 && p.x > G.cx - G.D / 2) || (i == 2 && p.x < G.cx + G.D / 2)) return;
+		if (i == 1 && p.x >= G.cx) i = 2; /* slot 1 runs on under the ring to slot 2's card: right of the ring is slot 2's */
+		if (i == 4) return;
 		int c = ST.cards[i];
 		for (int k = 0; k < DASH_CARDS; k++) {
 			c = (c + step + DASH_CARDS) % DASH_CARDS;
@@ -4926,18 +4927,22 @@ void dash_ui_set(const dash_state_t *s)
 	/* Under the settings' dialog the dash's middle (the ring, the car, the figures, the route, the g-meter) is left as
 	 * it was drawn: each part of it that changed had the dialog over it drawn again, the same pixels, three quarters
 	 * of a dash frame's work at every frame on the move. What shows beside and under the dialog goes on (the glows
-	 * and the Android Auto button above, the chips, the links), and so does the touch layer (the settings' own lines,
+	 * and the Android Auto button above, the chips, the links, the F133's pedal line), and so does the touch layer (the settings' own lines,
 	 * the snackbar); the first frame after the dialog sets the dash all again. */
 	static bool held;
 	if (view == DASH_VIEW_SETTINGS && !first) {
 		set_chips(s);
 		set_links(s);
+		if (G.phone) { /* the pedal's line along the top is above the dialog (Bluetooth's bar is under it: not kept) */
+			if (s->wifi_live) pedal_brakes(s, G.cx, 0, 0, false, 0);
+			else show(pedal, false);
+		}
 		set_touch(s);
 		P = *s;
 		held = true;
 		return;
 	}
-	if (held) first = true, held = false;
+	if (held) first = true, held = false, trail_n = 0; /* (no streak from the g reading the dialog opened on) */
 	/* The blocks: the car and the route (only with one) left of the ring, the energy figures and the g-meter right of
 	 * it. Widths are fixed per block (the widest it gets), so nothing moves as the figures change. A route coming or
 	 * going re-spreads the left side only; losing WiFi drops the g-meter's place (with WiFi it is kept, in P too, even
