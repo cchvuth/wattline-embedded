@@ -25,9 +25,10 @@ int main(void) {
   bright_init(&B, &cf, now);
   CHECK(step(0) == 0 && B.src == BRIGHT_NO_CAR);  // no car data, following the car: the lowest, at once (no ramp)
 
-  C.wifi_live = true;                             // frames, but no 0x273 yet: the lamps' rule, day
-  lamps(2);
-  CHECK(step(0) == 0);                            // a change starts from where it is...
+  C.wifi_live = true;                             // frames, but no 0x273 yet: where it is for a moment (the car's own
+  lamps(2);                                       // level comes within its 500 ms), then the lamps' rule, day
+  CHECK(step(0) == 0 && step(1400) == 0 && B.src == BRIGHT_NO_CAR);
+  CHECK(step(100) == 0);                          // a change starts from where it is...
   int mid = step(150);
   CHECK(mid > 40 && mid < 70);                    // ...eases through the middle...
   CHECK(step(150) == 100);                        // ...and lands at 300 ms

@@ -11,6 +11,8 @@
 static const char *const kSrc[] = {"follows the car's screen", "day/night from the lamps", "idle: no car data", "away: off", "set by hand",
                                    "no car data: the lowest, as the car's screen"};
 
+enum { JUST_LIVE_MS = 1500 };   // car data this new: its own brightness is waited for before the lamps' rule
+
 // What to write to the backlight for a level in %, of [max] steps: 0 % the lowest that still shows a picture
 // (bright_floor, % of the full duty), 100 % all of it. From 10 % up the duty is the level itself; below, the steps
 // grow with the square from the floor: fine at the dark end, where the eye tells small steps apart (linear, 1 % was
@@ -39,6 +41,8 @@ void bright_follow(bright_t *b) { b->follow = 1; b->manual = -1; }
 
 int bright_step(bright_t *b, const conf_t *cf, const car_t *c, int64_t now, int64_t idle) {
   bool live = car_live(c);
+  if (live && !b->was_live) b->live_since = now;
+  b->was_live = live;
   if (live) {
     b->live_at = now, b->seen_live = true;
     if (c->low_beam >= 0 || c->high_beam >= 0) b->night = c->low_beam == 1 || c->high_beam == 1, b->lamps = true;
@@ -55,6 +59,13 @@ int bright_step(bright_t *b, const conf_t *cf, const car_t *c, int64_t now, int6
            now - b->car_at <= hold)
     car = b->car_level;
   if ((live || held) && b->follow && !isnan(car)) t = car * cf->bright_follow_scale + cf->bright_follow_offset + b->offset, src = BRIGHT_CAR;
+  // Car data just came, the car's own level not yet in it (0x273 comes every 500 ms): where it is for that moment,
+  // not up to the lamps' day level and down again (a flash in a dark cabin at every start and reconnect)
+  // (a dash started on live data has no level yet: the lowest for that moment)
+  else if (b->follow && live && now - b->live_since < JUST_LIVE_MS) {
+    if (b->src >= 0) t = b->target, src = b->src;
+    else t = 0, src = BRIGHT_NO_CAR;
+  }
   else if (b->manual >= 0) t = b->manual, src = BRIGHT_MANUAL;   // a level set by hand: held with or without car data
   else if (live || held) t = b->night ? cf->bright_night : cf->bright_day, src = BRIGHT_LAMPS;
   else if (b->follow) t = 0, src = BRIGHT_NO_CAR;   // following the car, no car data: the lowest, as its own screen then
