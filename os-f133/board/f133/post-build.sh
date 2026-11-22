@@ -57,6 +57,14 @@ grep -q '^BR2_PACKAGE_LIBCURL=y' "$BR2_CONFIG" || rm -f $T/usr/bin/curl $T/usr/l
 grep -q '^BR2_PACKAGE_CA_CERTIFICATES=y' "$BR2_CONFIG" || rm -rf $T/etc/ssl/certs $T/usr/share/ca-certificates
 # OpenSSL's module of retired ciphers (the CA certificates one by one: post-fakeroot.sh)
 rm -f $T/usr/lib/ossl-modules/legacy.so
+# D-Bus's and GLib's tools for desktops and debugging (the system bus needs dbus-daemon and dbus-uuidgen: S46dbus-
+# daemon), curl's wcurl wrapper, and the files only they or development tools read (D-Bus's activation helper:
+# post-fakeroot.sh, after its permissions are set)
+rm -f $T/usr/bin/dbus-send $T/usr/bin/dbus-monitor $T/usr/bin/dbus-launch $T/usr/bin/dbus-run-session \
+	$T/usr/bin/dbus-cleanup-sockets $T/usr/bin/dbus-test-tool $T/usr/bin/dbus-update-activation-environment \
+	$T/usr/bin/gio-querymodules $T/usr/libexec/gio-launch-desktop \
+	$T/usr/bin/wcurl
+rm -rf $T/usr/share/gettext $T/usr/share/glib-2.0 $T/usr/share/xml $T/usr/lib/gio
 # libnl's families nothing links (wpa_supplicant and iw use libnl-3 and libnl-genl-3)
 rm -f $T/usr/lib/libnl-route-3.so* $T/usr/lib/libnl-nf-3.so* $T/usr/lib/libnl-xfrm-3.so* \
 	$T/usr/lib/libnl-idiag-3.so* $T/usr/lib/libnl-cli-3.so*
