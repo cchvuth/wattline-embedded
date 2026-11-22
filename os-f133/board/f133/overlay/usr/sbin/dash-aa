@@ -53,6 +53,21 @@ hook() {
 	( sleep 10; kill $_hp; sleep 2; kill -9 $_hp ) >/dev/null 2>&1 & _hk=$!
 	wait $_hp; kill $_hk 2>/dev/null; return 0
 }
+# The station's link down for the session: its wpa_supplicant (the only one on wlan0's default control socket; the AP's is
+# /run/aa-ap) asked to disconnect until it reports so, 10 s at the most; none answering: no station to drop
+station_off() {
+	_i=0
+	while [ $_i -lt 10 ]; do
+		case $(wpa_cli -i wlan0 status 2>/dev/null | sed -n 's/^wpa_state=//p') in
+		'') pidof wpa_supplicant >/dev/null || return 0 ;;   # (one starting: asked again in a second)
+		DISCONNECTED|INACTIVE|INTERFACE_DISABLED) return 0 ;;
+		*) wpa_cli -i wlan0 disconnect >/dev/null 2>&1 ;;
+		esac
+		sleep 1; _i=$((_i + 1))
+	done
+	echo "dash-aa: the station did not let go of its network" >&2
+}
+
 # The AP on $IFACE: wpa_supplicant's AP mode (no hostapd in this image), an instance of its own (control: /run/aa-ap),
 # up once it says so (<= 10 s); then its address and DHCP (busybox udhcpd). The lease table starts empty each time: a
 # phone can show a new random MAC per join, and a full table means no offer (AA stuck at "connecting").
@@ -163,15 +178,18 @@ start|restore)
 	[ -f "$MARK" ] && exit 0   # up by the start that held the lock
 	# first: from here a settings save waits for stop (S45wifi-auto), never restarting wpa_supplicant under the AP. Under
 	# the Wi-Fi lock, so a join already past its check finishes first
-	i=0; got=; until mkdir /run/wifi-auto.lock 2>/dev/null && got=1; do [ $i -ge 30 ] && break; sleep 1; i=$((i+1)); done
+	# (90 s: a boot's S45wifi-auto holds it while the driver's wlan0 comes and wifi-connect runs, ~45 s at the most; gone
+	# ahead without it, that join could start the station, or kill every wpa_supplicant, under this start's AP)
+	i=0; got=; until mkdir /run/wifi-auto.lock 2>/dev/null && got=1; do [ $i -ge 90 ] && break; sleep 1; i=$((i+1)); done
 	: > /run/dash-aa-radio
 	[ -n "$got" ] && rmdir /run/wifi-auto.lock
 	for i in $(seq 1 40); do [ -e /sys/class/net/wlan0 ] && break; sleep 1; done   # a restore at boot: the driver's wlan0
 	# (the dash starts first, S05dash; the driver loads after it, in the background, ~5 s: S05wifi)
 	# as the T113: the station's link dropped for the session, so the radio serves the AP alone on its own channel (one
 	# radio hopping between the car's Wi-Fi and the AP's channel dropped the phone); during AA the car link rides the
-	# Commander's Bluetooth. wpa_cli disconnect holds until reconnect (stop): no auto-rejoin fighting the AP
-	wpa_cli -i wlan0 disconnect >/dev/null 2>&1 || true
+	# Commander's Bluetooth. wpa_cli disconnect holds until reconnect (stop): no auto-rejoin fighting the AP. Asked until
+	# the station says so (10 s): one whose wpa_supplicant was still starting (a restore at boot) did not hear a single ask
+	station_off
 	# the kernel's rules for the device's country (wireless-regdb; the boot's load came before the root was there)
 	CC=$(cat /data/wifi/country 2>/dev/null | tr -dc A-Za-z | tr a-z A-Z)
 	[ ${#CC} = 2 ] && { iw reg reload 2>/dev/null; iw reg set "$CC"; }

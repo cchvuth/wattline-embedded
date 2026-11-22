@@ -58,6 +58,10 @@ umask 077
 } > $C
 [ -n "$WIFI_DRY" ] && exit 0
 st() { echo "wifi-connect: $1 at $(cut -d' ' -f1 /proc/uptime) s" >&2; }   # the join's steps, timed (wifi.txt)
+# Android Auto holds the radio (dash-aa: /run/dash-aa-radio): nothing touched, the AP's wpa_supplicant among them (the
+# killall below would end it too); dash-aa's stop starts S45wifi-auto, which joins then. S45wifi-auto looks first; this
+# is for a join that got past its look while an AA start was waiting (a restore at boot)
+[ -e /run/dash-aa-radio ] && { st "Android Auto holds the radio: no join until it stops"; exit 0; }
 st "config written"
 WL=/run/wpa_cli.loop   # the loop below that keeps wpa_cli running: ended first, or it would start wpa_cli again
 [ -f $WL ] && kill "$(cat $WL)" 2>/dev/null; rm -f $WL

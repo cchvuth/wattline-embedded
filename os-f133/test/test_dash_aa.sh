@@ -68,7 +68,12 @@ cat > /stub/wpa_cli <<EOF
 echo "wpa_cli \$*" >> $T/calls
 case "\$*" in
 *" status") case "\$*" in *"-i ap0 "*) [ -e $T/ap0dead ] && { echo wpa_state=SCANNING; exit 0; } ;; esac
+	case "\$*" in "-i wlan0 status")   # the station: not answering while it starts (stalate: twice), down once asked
+		n=\$(cat $T/stalate 2>/dev/null); [ -n "\$n" ] && [ "\$n" -gt 0 ] && { echo \$((n - 1)) > $T/stalate; exit 1; }
+		[ -e $T/stadown ] && { echo wpa_state=DISCONNECTED; exit 0; } ;; esac
 	echo wpa_state=COMPLETED ;;
+*"-i wlan0 disconnect") : > $T/stadown; echo OK ;;
+*"-i wlan0 reconnect") rm -f $T/stadown; echo OK ;;
 *" all_sta") [ -e $T/nosta ] || printf '$STA1\nflags=[AUTH][ASSOC][AUTHORIZED]\n$STA2\nflags=[AUTH][ASSOC][AUTHORIZED]\n' ;;
 *) echo OK ;;
 esac
@@ -114,7 +119,7 @@ EOF
 fresh() {   # a booted screen: the station's wpa_supplicant running, nothing of AA
 	killall -q -9 wpa_supplicant aa spike-vdec udhcpd mcud
 	while pidof wpa_supplicant aa spike-vdec udhcpd mcud >/dev/null; do /bb/usleep 50000; done
-	rm -rf /run/aa-* /run/dash-* /run/wifi-auto.* /data /sys/class/net/ap0 $T/cap $T/ap0dead $T/noap0 $T/nosta
+	rm -rf /run/aa-* /run/dash-* /run/wifi-auto.* /data /sys/class/net/ap0 $T/cap $T/ap0dead $T/noap0 $T/nosta $T/stalate $T/stadown
 	mkdir -p /data/log /data/hooks /data/wifi $T/cap; hooks
 	/stub/wpa_supplicant --run sta & STA=$!
 	: > $T/calls; : > $T/out; shown=
@@ -213,6 +218,19 @@ fresh; : > /data/wifi/aa-solo
 run start && up && ! grep -q 'interface add' $T/calls && [ "$(cat /run/aa-ap.iface)" = wlan0 ] && ok "start" || no "aa-solo"
 run stop && down && has 'S45wifi-auto start' && ok "stop" || no "stop"
 nocb
+
+echo "-- a restore at boot: the station's wpa_supplicant still starting when the start drops its link"
+fresh; echo 2 > $T/stalate
+run restore && up && [ "$(grep -c '^wpa_cli -i wlan0 disconnect$' $T/calls)" = 1 ] && [ -e $T/stadown ] &&
+	ok "the station asked again until it answered, once dropped" || no "late station: $(grep -c 'wlan0 disconnect' $T/calls) asks"
+run stop && down && ok "stop" || no "stop"
+nocb
+echo "-- wifi-connect while Android Auto holds the radio: nothing touched"
+fresh; : > /run/dash-aa-radio; : > $T/calls
+printf 'Home\nsecret123\n' | WIFI_CONF=/tmp/wc.conf WIFI_CARD_CONF=/nonexistent /bb/sh "${D%/dash-aa}/wifi-connect" - >> $T/out 2>&1
+! grep -q "killall\|wpa_supplicant -B\|ip link" $T/calls && kill -0 $STA && grep -q "Android Auto holds the radio" $T/out &&
+	ok "no wpa_supplicant ended or started, the join left for AA's stop" || no "wifi-connect under AA: $(cat $T/calls | tr '\n' '|')"
+rm -f /run/dash-aa-radio
 
 echo "-- a passphrase kept on the unit is the AP's; one that is not 8 to 63 letters and digits is passed over"
 fresh; mkdir -p /data/wattline; printf '0123456789abcde\n' > /data/wattline/ap-psk
