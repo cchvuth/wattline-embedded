@@ -12,7 +12,7 @@ ok() { echo "ok    $*"; }
 no() { echo "FAIL  $*"; bad=$((bad + 1)); }
 mkdir -p $T/sd/nor $T/run $T/log
 : > $T/sd/rootfs.sqfs; : > $T/sd/nor/kernel.itb; : > $T/sd/nor/u-boot-sunxi-with-spl.bin
-printf 'dev:    size   erasesize  name\nmtd0: 01000000 00010000 "spi0.0"\nmtd3: 00a40000 00010000 "rootfs"\n' > $T/mtd
+printf 'dev:    size   erasesize  name\nmtd0: 01000000 00010000 "spi0.0"\nmtd3: 00a80000 00010000 "rootfs"\n' > $T/mtd
 head -c 4096 /dev/urandom > $T/chip   # the "chip" the stub reads
 # the stub: stock while $T/stock exists; read copies the chip; flash and seed fail when $T/fail-<cmd> exists
 cat > $T/nor.sh <<EOF

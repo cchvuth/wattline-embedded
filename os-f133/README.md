@@ -49,8 +49,8 @@ stops working.
 |---|---|---|---|
 | boot | 0 | 0xf0000 | SPL, OpenSBI, U-Boot |
 | try | 0xf0000 | 0x10000 | `TRY1` while an update for the screen is on the card (U-Boot then looks there first) |
-| kernel | 0x100000 | 0x440000 | `kernel.itb` |
-| rootfs | 0x540000 | 0xa40000 | `rootfs.sqfs` (squashfs: zstd when it fits, else xz) |
+| kernel | 0x100000 | 0x400000 | `kernel.itb` |
+| rootfs | 0x500000 | 0xa80000 | `rootfs.sqfs` (squashfs: zstd when it fits, else xz) |
 | data | 0xf80000 | 0x80000 | `/data` (JFFS2): settings, Wi-Fi networks, SSH keys, the AA certificate |
 
 ## First install: from an SD card

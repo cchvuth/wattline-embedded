@@ -432,8 +432,11 @@
  * clock the stock backup was read at). The screen runs from it without a card: U-Boot's SPL and
  * U-Boot, a kernel FIT, the root squashfs, and /data. CONFIG_MTD_PARTITIONED_MASTER also gives the whole chip as mtd0
  * (backup reads, a restore, U-Boot's writes: its own partition is read only). nor.sh writes them from a card boot.
- * Sized for the first images (U-Boot 0.81 MiB, the kernel FIT 3.9, the root 9.92 in xz): the boundaries are
- * only here, U-Boot's norkernel (0x100000) and nor.sh (/proc/mtd).
+ * Sized for the first images (U-Boot 0.81 MiB, the kernel FIT 3.9, the root 9.92 in xz), then the root given
+ * 256 KiB of the kernel's room (0.1.2: the root with the update's tools, 10.5 MiB in zstd's 128 KiB blocks; the
+ * kernel FIT 3.82): the boundaries are only here, U-Boot's norkernel (0x100000) and nor.sh (/proc/mtd), so a version
+ * with another boundary than the one before it is written whole by that version's own system (nor.sh, on the card's
+ * start), never by the old one.
  */
 &spi0 {
 	pinctrl-names = "default";
@@ -464,16 +467,16 @@
 				read-only;
 			};
 
-			/* a FIT: the LZMA kernel and this device tree, sha256 each (bootm checks them) */
+			/* a FIT (kernel.its): the gzipped kernel and this device tree, a crc32 each (bootm checks them) */
 			partition@100000 {
 				label = "kernel";
-				reg = <0x100000 0x440000>;
+				reg = <0x100000 0x400000>;
 			};
 
-			/* squashfs (xz, 128 KiB blocks): the root, root=mtd:rootfs */
-			partition@540000 {
+			/* squashfs (zstd while it fits, else xz: post-image.sh): the root, root=mtd:rootfs */
+			partition@500000 {
 				label = "rootfs";
-				reg = <0x540000 0xa40000>;
+				reg = <0x500000 0xa80000>;
 			};
 
 			/* JFFS2: /data (settings, Wi-Fi, SSH keys, the AA certificate, Bluetooth bonds); logs stay in RAM */

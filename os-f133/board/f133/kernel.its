@@ -1,7 +1,7 @@
 /*
  * The NOR's "kernel" partition: the kernel, gzipped, and its device tree, a crc32 each; U-Boot's bootm checks them,
  * unpacks the kernel to its run address and boots it with that device tree. post-image.sh makes it (gzip -9, then
- * U-Boot's mkimage -f kernel.its kernel.itb) and checks that it fits the partition (0x440000).
+ * U-Boot's mkimage -f kernel.its kernel.itb) and checks that it fits the partition (0x400000).
  * gzip, not LZMA: 0.7 MB more to read, but the one core unpacks it in 0.8 s where LZMA took 2.3 (over half of the
  * 4.3 s from power-on to the kernel's start); crc32, not sha256 (0.35 s): it is there for a bad read, not an attacker.
  * Not zstd either: smaller than gzip's, but this U-Boot takes 0.94 s to unpack it where gzip takes 0.37.

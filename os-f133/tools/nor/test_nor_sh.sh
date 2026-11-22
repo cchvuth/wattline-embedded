@@ -11,8 +11,8 @@ cat > $T/mtd <<'EOF'
 dev:    size   erasesize  name
 mtd0: 01000000 00010000 "spi0.0"
 mtd1: 000f0000 00010000 "boot"
-mtd2: 00440000 00010000 "kernel"
-mtd3: 00a40000 00010000 "rootfs"
+mtd2: 00400000 00010000 "kernel"
+mtd3: 00a80000 00010000 "rootfs"
 mtd4: 00080000 00010000 "data"
 mtd5: 00010000 00010000 "try"
 EOF
@@ -21,7 +21,7 @@ ff() { tr '\000' '\377' < /dev/zero | head -c "$1"; }
 # the stock chip: random, its GPT signature at 0xc200
 head -c 16777216 /dev/urandom > /dev/mtd0
 printf 'EFI PART' | dd of=/dev/mtd0 bs=1 seek=49664 conv=notrunc 2>/dev/null
-for p in 1:983040 2:4456448 3:10747904 4:524288 5:65536; do head -c ${p#*:} /dev/urandom > /dev/mtd${p%%:*}; done
+for p in 1:983040 2:4194304 3:11010048 4:524288 5:65536; do head -c ${p#*:} /dev/urandom > /dev/mtd${p%%:*}; done
 head -c 885489 /dev/urandom > $T/img/u-boot-sunxi-with-spl.bin
 head -c 4030000 /dev/urandom > $T/img/kernel.itb
 head -c 5955584 /dev/urandom > $T/img/rootfs.sqfs
@@ -57,7 +57,7 @@ cp /dev/mtd3 $T/rootfs.before
 sh $N/nor.sh flash $T/img > $T/out 2>&1 && no "flash without stock.bin went on" ||
 	{ grep -q "stock firmware is on the NOR" $T/out && cmp -s /dev/mtd3 $T/rootfs.before && ok "flash refused, nothing written: no copy of the stock chip"; } || no "guard"
 head -c 100 /dev/urandom >> $T/img/rootfs.sqfs; cp /dev/mtd0 $T/img/stock.bin
-truncate -s 10747905 $T/img/rootfs.sqfs
+truncate -s 11010049 $T/img/rootfs.sqfs
 sh $N/nor.sh flash $T/img > $T/out 2>&1 && no "an oversized rootfs went on" ||
 	{ grep -q "bigger than the rootfs" $T/out && cmp -s /dev/mtd3 $T/rootfs.before && ok "oversized rootfs refused, nothing written"; } || no size
 head -c 5955584 /dev/urandom > $T/img/rootfs.sqfs
@@ -164,7 +164,7 @@ sh $N/nor.sh update $T/new > $T/out 2>&1 && no "an update whose write fails went
 printf '#!/bin/sh\n[ "$1" = -v ] && shift\ndd if="$1" of="$2" conv=notrunc 2>/dev/null\n' > $T/bin/flashcp
 sh $N/nor.sh update $T/new > $T/out 2>&1 && same $T/new/kernel.itb /dev/mtd2 && same $T/new/rootfs.sqfs /dev/mtd3 &&
 	ok "the update done again: the kernel written" || { no "update resumed"; cat $T/out; }
-truncate -s 10747905 $T/new/rootfs.sqfs; cp /dev/mtd2 $T/kernel.before
+truncate -s 11010049 $T/new/rootfs.sqfs; cp /dev/mtd2 $T/kernel.before
 sh $N/nor.sh update $T/new > $T/out 2>&1 && no "an oversized root went on" ||
 	{ cmp -s /dev/mtd2 $T/kernel.before && ok "update: an oversized root refused, nothing erased"; } || no "update size"
 head -c 6000000 /dev/urandom > $T/new/rootfs.sqfs

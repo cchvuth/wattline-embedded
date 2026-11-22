@@ -202,8 +202,9 @@ cmd_fetch() {
 	# above); rootfs.sqfs is never loaded whole (loop-mounted from the card), only kept sane
 	[ "$(sz "$W/b.new/Image")" -le 33554432 ] && [ "$(sz "$W/b.new/f133.dtb")" -le 1048576 ] &&
 		[ "$(sz "$W/b.new/rootfs.sqfs")" -le 268435456 ] || { rm -rf "$W/b.new"; fail "bundle $LATEST: a file too big to boot"; }
-	# and what the built-in flash's partitions hold (nor.sh checks it again before writing)
-	[ "$(sz "$W/b.new/rootfs.sqfs")" -le 10747904 ] && [ "$(sz "$W/b.new/nor/kernel.itb")" -le 4456448 ] &&
+	# and what the built-in flash holds between its boot area and /data, wherever that version's kernel puts the
+	# boundary between the two (mk-ota.sh checked each against its own; nor.sh does again before writing)
+	[ $(($(sz "$W/b.new/rootfs.sqfs") + $(sz "$W/b.new/nor/kernel.itb"))) -le 15204352 ] &&
 		[ "$(sz "$W/b.new/nor/u-boot-sunxi-with-spl.bin")" -le 983040 ] ||
 		{ rm -rf "$W/b.new"; fail "bundle $LATEST: a file too big for the built-in flash"; }
 	# what goes to the built-in flash, for the day it does (flash: the card's files are read again then)
