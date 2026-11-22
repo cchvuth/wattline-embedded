@@ -3114,19 +3114,36 @@ static void fps_temp_cb(lv_timer_t *t)
 	fps_mc = f && fscanf(f, "%ld", &mc) == 1 ? mc : LONG_MIN;
 	if (f) fclose(f);
 }
+/* v right-aligned in w places, the empty ones figure spaces (U+2007: a digit's width in Roboto, whose digits are all
+ * one width), onto o: the counter's numbers change in place, nothing beside them moves */
+static void fps_num(char *o, size_t n, long v, int w)
+{
+	char t[16];
+	int pad = w - snprintf(t, sizeof t, "%ld", v);
+	size_t k = strlen(o);
+	while (pad-- > 0 && k + 3 < n) memcpy(o + k, "\xe2\x80\x87", 3), k += 3;
+	snprintf(o + k, n - k, "%s", t);
+}
 /* after LVGL's own observer (observers run in the order they were added), so this text is the one shown */
 static void fps_text_cb(lv_observer_t *o, lv_subject_t *subject)
 {
 	const lv_sysmon_perf_info_t *p = lv_subject_get_pointer(subject);
-	lv_obj_t *l = lv_observer_get_target(o);
-	char cpu[40];
-	if (fps_mc != LONG_MIN)
-		snprintf(cpu, sizeof cpu, "CPU %d \xc2\xb0%c, %u%%", (int)lroundf(shown_deg(fps_mc / 1000.0f)),
-			 S.fahrenheit ? 'F' : 'C', (unsigned)p->calculated.cpu);
-	else snprintf(cpu, sizeof cpu, "CPU %u%%", (unsigned)p->calculated.cpu);
-	lv_label_set_text_fmt(l, "%s\n%u FPS, %u ms (%u | %u)", cpu, (unsigned)p->calculated.fps,
-			      (unsigned)(p->calculated.render_avg_time + p->calculated.flush_avg_time),
-			      (unsigned)p->calculated.render_avg_time, (unsigned)p->calculated.flush_avg_time);
+	char t[160] = "CPU ";
+	if (fps_mc != LONG_MIN) {
+		fps_num(t, sizeof t, lroundf(shown_deg(fps_mc / 1000.0f)), S.fahrenheit ? 3 : 2); /* (up to 99 C, 199 F) */
+		snprintf(t + strlen(t), sizeof t - strlen(t), " \xc2\xb0%c, ", S.fahrenheit ? 'F' : 'C');
+	}
+	fps_num(t, sizeof t, p->calculated.cpu, 3);
+	snprintf(t + strlen(t), sizeof t - strlen(t), "%%\n");
+	fps_num(t, sizeof t, p->calculated.fps, 2);
+	snprintf(t + strlen(t), sizeof t - strlen(t), " FPS, ");
+	fps_num(t, sizeof t, p->calculated.render_avg_time + p->calculated.flush_avg_time, 3);
+	snprintf(t + strlen(t), sizeof t - strlen(t), " ms (");
+	fps_num(t, sizeof t, p->calculated.render_avg_time, 2); /* (a rarer one of 100 ms or more pushes the rest along) */
+	snprintf(t + strlen(t), sizeof t - strlen(t), " | ");
+	fps_num(t, sizeof t, p->calculated.flush_avg_time, 2);
+	snprintf(t + strlen(t), sizeof t - strlen(t), ")");
+	lv_label_set_text(lv_observer_get_target(o), t);
 }
 #endif
 static void fps_show(void)
@@ -3140,6 +3157,15 @@ static void fps_show(void)
 	if (on && !fps_temp_timer && d->perf_label && d->perf_sysmon_backend.subject) {
 		lv_subject_add_observer_obj(d->perf_sysmon_backend.subject, fps_text_cb, d->perf_label, NULL);
 		fps_temp_timer = lv_timer_create(fps_temp_cb, 2000, NULL);
+		/* in Roboto (its digits one width: fps_num), as wide as its text with every place filled, the text left in
+		 * it: right-aligned in the corner, the box would otherwise move as its text changes */
+		lv_obj_t *l = d->perf_label;
+		lv_point_t sz;
+		lv_obj_set_style_text_font(l, font_px(REGULAR, 15), 0);
+		lv_text_get_size(&sz, "CPU 888 \xc2\xb0" "F, 100%\n88 FPS, 888 ms (88 | 88)", lv_obj_get_style_text_font(l, 0),
+				 lv_obj_get_style_text_letter_space(l, 0), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+		lv_obj_set_width(l, sz.x + lv_obj_get_style_pad_left(l, 0) + lv_obj_get_style_pad_right(l, 0));
+		lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_LEFT, 0);
 	}
 	if (!fps_temp_timer) return;
 	if (on) lv_timer_resume(fps_temp_timer), fps_temp_cb(NULL);
