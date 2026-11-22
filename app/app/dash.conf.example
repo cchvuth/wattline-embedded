@@ -51,7 +51,7 @@ bright_night = 30
 bright_idle = 10          # no car data (the bench, a parked car's silent Commander) when not following the car's screen
                           # (below); following it, no car data is 0 %: the lowest, as the car's own screen then
 bright_min = 0            # 0 % is not off: the lowest level that still shows a picture (bright_floor)
-bright_floor = 0.05       # that level, in % of the backlight's full duty: one step of the F133's 2000 (below 10 % the
+bright_floor = 0.05       # that level, in % of the backlight's full duty: one step of its 2000 (below 10 % the
                           # steps grow with the square from it)
 bright_max = 100
 away_min = 0              # no car data and no touch this long: backlight off; 0 never (10 is a sensible value)

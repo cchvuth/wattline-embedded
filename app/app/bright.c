@@ -1,8 +1,9 @@
 // The backlight's level: the car's own screen brightness while it is known (0x273, or the Commander's field 24),
 // scaled into bright_min..bright_max; else day or night from the car's lamps; without car data the lowest (0 %) while
 // following the car, as the car's own screen is then, else bright_idle; off when away. 0 % is not off: it is the
-// lowest level at which the panel still shows its picture (bright_floor, bright_raw): the F133's backlight is lit, and
-// its picture read, down to its last step while it is on (its driver keeps a minimum of its own), and dark only off. Every change eases (smoothstep over bright_ease_ms) so the panel never steps visibly.
+// lowest level at which the panel still shows its picture (bright_floor, bright_raw): one step of the backlights' 2000
+// (both screens'). The F133's is lit, and its picture read, down to that last step while it is on (its driver keeps a
+// minimum of its own), and dark only off. Every change eases (smoothstep over bright_ease_ms) so the panel never steps visibly.
 #include "app.h"
 #include <math.h>
 #include <string.h>
