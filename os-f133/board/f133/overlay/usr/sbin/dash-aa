@@ -212,10 +212,18 @@ start|restore)
 	# A stop that came meanwhile (the split's Exit, a phone already on it; the sync above is the slow step) took it all
 	# down and its marks away: not left marked up after it, nor on at the next start, nor with its pairing window open.
 	# (Looked at after the marks are made: stop removes aa-keep before it removes them.)
-	[ -e /run/aa-keep ] || { rm -f "$MARK" /data/aa-on; sync; pair_off; exit 0; }
+	# The mark itself goes only when that stop has ended (it removes dash-aa-radio last, with the mark): until then the
+	# button stays "stopping" and this start keeps its lock, so no second start runs into the stop's teardown.
+	if [ ! -e /run/aa-keep ]; then
+		rm -f /data/aa-on; sync; pair_off
+		i=0; while [ -e /run/dash-aa-radio ] && [ $i -lt 90 ]; do usleep 500000; i=$((i + 1)); done
+		rm -f "$MARK"; exit 0
+	fi
 	;;
 stop)   # the user's stop (the button, the split's Exit): off, and off at the next start too (first: a power cut
 	# during the seconds stop takes must not bring it back)
+	# (aa-keep before it: a start in its last moments then sees this stop, where it wrote aa-on back during this sync)
+	rm -f /run/aa-keep
 	rm -f /data/aa-on 2>/dev/null && sync || echo "dash-aa: /data/aa-on not removed: AA comes back at the next start" >&2
 	stop ;;
 forget)   # the T113's "forget the paired phones": here the pairings are the MCU's own, with no list it gives out

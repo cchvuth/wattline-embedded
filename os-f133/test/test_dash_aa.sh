@@ -214,4 +214,28 @@ run start && up && ! grep -q 'interface add' $T/calls && [ "$(cat /run/aa-ap.ifa
 run stop && down && has 'S45wifi-auto start' && ok "stop" || no "stop"
 nocb
 
+echo "-- a stop in a start's last moments (the split's Exit): all of it down, and not on at the next start"
+# the start held just before it writes /data/aa-on; the stop's first sync made slow, so the start goes on inside it
+cat > /stub/touch <<EOT
+#!/bin/sh
+[ "\$1" = /data/aa-on ] && [ -e $T/hold ] && { : > $T/touchwait; while ! [ -e $T/go ]; do /bb/usleep 50000; done; }
+exec /bb/touch "\$@"
+EOT
+cat > /stub/sync <<EOT
+#!/bin/sh
+[ -e $T/slow ] && { rm -f $T/slow; /bb/sleep 1.5; }
+exec /bb/sync
+EOT
+chmod +x /stub/touch /stub/sync
+fresh; : > $T/hold; rm -f $T/go $T/touchwait
+/bb/sh "$D" start >> $T/out 2>&1 & SP=$!
+i=0; while ! [ -e $T/touchwait ] && [ $i -lt 200 ]; do /bb/usleep 50000; i=$((i + 1)); done
+: > $T/slow
+/bb/sh "$D" stop >> $T/out 2>&1 & TP=$!
+/bb/usleep 500000; : > $T/go
+wait $SP; wait $TP; /bb/usleep 300000
+down && ! [ -e /run/aa-keep ] && ok "the start's marks taken back: nothing left up, nor on at the next start" || no "a stop during a start"
+rm -f /stub/touch /stub/sync $T/hold $T/go $T/touchwait
+kill $STA 2>/dev/null   # (the station this case kept: left running, it holds a pipe this test's output goes through)
+
 [ $bad -eq 0 ] && echo "dash-aa: ok" || { echo "dash-aa: $bad failed"; exit 1; }

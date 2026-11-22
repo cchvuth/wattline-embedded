@@ -160,15 +160,20 @@ start|restore)
 	# A stop that came meanwhile (the split's Exit, a phone already on it; the pairing calls and the sync above are the
 	# slow steps) took it all down and its marks away: not left marked up after it, nor on at the next start, nor with
 	# its pairing window open. (Looked at after the marks are made: stop removes aa-keep before it removes them.)
+	# The mark itself goes only when that stop has ended (it removes dash-aa-radio last, with the mark): until then the
+	# button stays "stopping" and this start keeps its lock, so no second start runs into the stop's teardown.
 	if [ ! -e /run/aa-keep ]; then
-		rm -f "$MARK" /data/aa-on; sync
+		rm -f /data/aa-on; sync
 		[ -f /run/aa-pair-timer ] && kill "$(cat /run/aa-pair-timer)" 2>/dev/null; rm -f /run/aa-pair-timer
 		btc pairable off >/dev/null 2>&1; btc discoverable off >/dev/null 2>&1
-		exit 0
+		i=0; while [ -e /run/dash-aa-radio ] && [ $i -lt 90 ]; do sleep 0.5; i=$((i + 1)); done
+		rm -f "$MARK"; exit 0
 	fi
 	;;
 stop)   # the owner's stop (the button, the split's Exit): off, and off at the next start too (first: a power cut
 	# during the seconds stop takes must not bring it back)
+	# (aa-keep before it: a start in its last moments then sees this stop, where it wrote aa-on back during this sync)
+	rm -f /run/aa-keep
 	rm -f /data/aa-on 2>/dev/null && sync || echo "dash-aa: /data/aa-on not removed: AA comes back at the next start" >&2
 	stop ;;
 forget)   # every phone paired with the Dash (each gets the AP's passphrase whenever AA is on): removed
