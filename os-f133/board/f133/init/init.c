@@ -146,6 +146,7 @@ static void splash(int nor)
 		fd = open("/newroot/.splash-shown", O_CREAT | O_WRONLY | O_TRUNC, 0644);
 		if (fd >= 0)
 			close(fd);
+		say("the boot picture is up", 0);	/* (with the kernel's time: where a boot's seconds go) */
 	} else {
 		say("the boot picture was not drawn", 0);
 	}
@@ -342,6 +343,7 @@ overlay:
 	unlink("/init");
 	if (chdir("/newroot") || mount(".", "/", NULL, MS_MOVE, NULL) || chroot(".") || chdir("/"))
 		fail("switching to the new root");
+	say("starting /sbin/init", 0);
 	execl("/sbin/init", "/sbin/init", (char *)NULL);
 	fail("starting /sbin/init");
 	return 1;

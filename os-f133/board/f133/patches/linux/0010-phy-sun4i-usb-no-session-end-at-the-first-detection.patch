@@ -1,0 +1,23 @@
+--- a/drivers/phy/allwinner/phy-sun4i-usb.c
++++ b/drivers/phy/allwinner/phy-sun4i-usb.c
+@@ -607,9 +607,18 @@
+ 	data->force_session_end = false;
+ 
+ 	if (id_det != data->id_det) {
+-		/* id-change, force session end if we've no vbus detection */
++		/*
++		 * id-change, force session end if we've no vbus detection.
++		 * Not at the first detection after the PHY's init (id_det
++		 * -1): no session is there to end, and the second it takes
++		 * to end one is slept with the PHY's mutex held. EHCI0 and
++		 * OHCI0 wait for it in their probes, and the kernel for them
++		 * before it starts init: 0.86 s of every boot on the T313D
++		 * (dr_mode "otg", no VBUS detection). A mode set later (the
++		 * host controllers' or the musb's) still asks for the end.
++		 */
+ 		if (data->dr_mode == USB_DR_MODE_OTG &&
+-		    !sun4i_usb_phy0_have_vbus_det(data))
++		    !sun4i_usb_phy0_have_vbus_det(data) && data->id_det != -1)
+ 			force_session_end = true;
+ 
+ 		/* When entering host mode (id = 0) force end the session now */
