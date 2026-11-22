@@ -72,8 +72,11 @@ start)
 		sleep 60
 		if [ -e /sys/class/net/wlan0 ]; then
 			[ "$n" = 0 ] || { echo 0 > $C; sync; }
-		elif ! grep -q "try=kernel" /proc/cmdline; then   # (a tried boot's verdict is S98try's, with its own power cycle:
-			cycle "no wlan0 a minute in"                    # this one came before it, and the try was made again)
+		# A tried boot's verdict is S98try's, with its own power cycle (this one came before it, and the try was made
+		# again): left to it on the first start since the power came on (the SPL counts its starts in the RTC's
+		# register 6: 1 then). After a warm reset the chip can be dead for that alone: cycled as ever, not judged.
+		elif ! grep -q "try=kernel" /proc/cmdline || [ "$(devmem 0x07090118 32 2>/dev/null)" != 0x00000001 ]; then
+			cycle "no wlan0 a minute in"
 		fi
 	) &
 	;;

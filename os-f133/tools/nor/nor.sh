@@ -48,6 +48,7 @@ stock_on_chip() { [ "$(dd if="$CHIP" bs=512 skip=97 count=1 2>/dev/null | head -
 case "$1" in
 read)
 	F=${2:?FILE}
+	[ ! -e "$F" ] || die "$F is there already: read to another name (a copy of the chip is not written over)"
 	dd if="$CHIP" of="$F" bs=64k
 	a=$(sha < "$F")
 	b=$(sha < "$CHIP")
@@ -77,7 +78,7 @@ flash)
 	}
 	if stock_on_chip && ! under_way; then
 		[ -f "$S" ] && [ "$(sha < "$S")" = "$(sha < "$CHIP")" ] ||
-			die "the stock firmware is on the NOR and $S is not an exact copy of it (nor.sh read)"
+			die "the stock firmware is on the NOR and $S is not an exact copy of it (nor.sh read, to a new file; after a restore that was cut: the restore again)"
 	fi
 	# the NOR's /data saved before it is erased (settings, Wi-Fi networks, Bluetooth bonds made while running from
 	# it), read twice; not the stock firmware's (stock.bin holds it) and not an erased one (a retry's)
@@ -155,7 +156,14 @@ stock)
 restore)
 	F=${2:?FILE}
 	case $(($(wc -c < "$F"))) in
-	16777216) put "$F" "$CHIP"; rm -f "$(dirname "$F")/nor-flashing" ;;   # (the chip is that image again: no flash under way)
+	16777216)
+		# marked as a flash is, with the image's checksum: cut short, the chip has the stock firmware's mark over a
+		# part of it only, and a copy to the flash would then have read that over the stock copy (dash-nor looks at
+		# the mark). The restore done again ends it.
+		FL=$(dirname "$F")/nor-flashing
+		sha < "$F" > "$FL.new" && mv -f "$FL.new" "$FL" && sync || die "$FL could not be written"
+		put "$F" "$CHIP"
+		rm -f "$FL" ;;
 	$(psize data)) put "$F" "$(part data)" ;;
 	*) die "$F is neither a 16 MiB image nor a data partition (nor-data.bin)" ;;
 	esac

@@ -108,6 +108,13 @@ sh $N/nor.sh restore $T/r.bin > $T/out 2>&1 && no "a bad write passed" ||
 	{ grep -q "reads back wrong" $T/out && ok "a write that reads back wrong stops it"; } || no readback
 printf '#!/bin/sh\n[ "$1" = -v ] && shift\ndd if="$1" of="$2" conv=notrunc 2>/dev/null\n' > $T/bin/flashcp
 sh $N/nor.sh restore $T/r.bin > /dev/null && cmp -s $T/r.bin /dev/mtd0 && ok "restore: the chip is the stock image again" || no restore
+# a restore marks itself as a flash does (dash-nor then leaves the stock copy alone if it is cut), and ends it
+printf '#!/bin/sh\nexit 1\n' > $T/bin/flashcp
+sh $N/nor.sh restore $T/r.bin > $T/out 2>&1 && no "a restore whose write fails went on" ||
+	{ [ "$(cat $T/nor-flashing 2>/dev/null)" = "$(sha256sum < $T/r.bin | cut -d' ' -f1)" ] && ok "a restore cut short: marked with its image's checksum"; } || { no "restore mark"; cat $T/out; }
+printf '#!/bin/sh\n[ "$1" = -v ] && shift\ndd if="$1" of="$2" conv=notrunc 2>/dev/null\n' > $T/bin/flashcp
+sh $N/nor.sh restore $T/r.bin > /dev/null && [ ! -e $T/nor-flashing ] && ok "the restore done again: the mark gone" || no "restore again"
+sh $N/nor.sh read $T/r.bin > $T/out 2>&1 && no "read wrote over a file" || { grep -q "there already" $T/out && ok "read does not write over a file"; } || no "read over"
 ff 524288 > /dev/mtd4
 sh $N/nor.sh restore $T/img/nor-data.bin > /dev/null && cmp -s /dev/mtd4 $T/data.before &&
 	ok "restore nor-data.bin: the data partition back" || no "restore data"

@@ -55,10 +55,12 @@ if [ -w /dev ] && cp $T/chip $CHIPDEV 2>/dev/null; then
 	sha256sum < $T/sd/stock.bin | cut -d' ' -f1 > $T/sd/nor-flashing   # (nor.sh's mark: that copy's checksum)
 	run copy; ! grep -q "^read" $T/calls && cmp -s $T/sd/stock.bin $T/stock.keep && [ "$(st)" = done ] &&
 		ok "a copy done again after a cut: the stock copy on the card left as it was" || { no "copy (after a cut)"; cat $T/calls; }
-	# a mark that is not this copy's (left by another flash): the chip's firmware is saved as ever
+	# a mark that is not this copy's (left by another flash): the chip's firmware is saved as ever, and the copy that
+	# was there (another chip's) kept under a number, not written over
 	echo 0123 > $T/sd/nor-flashing; : > $T/calls
-	run copy; grep -q "^read" $T/calls && cmp -s $T/sd/stock.bin $T/chip && ok "a stale mark: the stock firmware saved all the same" ||
-		{ no "copy (stale mark)"; cat $T/calls; }
+	run copy; grep -q "^read" $T/calls && cmp -s $T/sd/stock.bin $T/chip && cmp -s $T/sd/stock.2.bin $T/stock.keep &&
+		ok "a stale mark: the stock firmware saved all the same, the copy before it kept as stock.2.bin" ||
+		{ no "copy (stale mark)"; cat $T/calls; ls $T/sd; }
 	rm -f $T/sd/nor-flashing
 	rm -f $T/stock $CHIPDEV
 else

@@ -21,7 +21,8 @@ case "$V" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "mk-ota: rootfs.sqfs's image-id ha
 # a screen that installs it must be able to take the release after it, and to judge a tried boot: an image from a
 # stale build folder without the updater's parts would strand it on this version
 unsquashfs -l "$I/rootfs.sqfs" > "$T/files"
-for f in usr/sbin/dash-update usr/bin/sig-verify usr/bin/curl etc/wattline-ota.pub.raw etc/init.d/S01try etc/init.d/S98try; do
+for f in usr/sbin/dash-update usr/bin/sig-verify usr/bin/curl usr/lib/libcurl.so.4 etc/ssl/certs/ca-certificates.crt \
+		etc/wattline-ota.pub.raw etc/init.d/S01try etc/init.d/S98try; do
 	grep -qx "squashfs-root/$f" "$T/files" || { echo "mk-ota: rootfs.sqfs has no /$f" >&2; exit 1; }
 done
 unsquashfs -cat "$I/rootfs.sqfs" etc/wattline-ota.pub.raw | cmp -s - "$(dirname "$0")/wattline-ota.pub.raw" ||

@@ -52,7 +52,14 @@ copy)
 		CHIP=$(awk '$2 == "01000000" { sub(":", "", $1); print "/dev/" $1; exit }' "$MTD")
 		if [ ! -f "$SD/stock.bin" ] || [ "$(sha < "$SD/stock.bin")" != "$(sha < "$CHIP")" ]; then
 			status copying "saving the stock firmware to the card"
+			rm -f "$SD/stock.bin.new"
 			"$NOR" read "$SD/stock.bin.new" >> "$LOG" 2>&1 || { rm -f "$SD/stock.bin.new"; fail "the stock firmware could not be saved (is the card full?)"; }
+			# a copy already there that is not this chip's (another screen's, or this one's from before a restore) is
+			# kept under a number, never written over
+			if [ -f "$SD/stock.bin" ]; then
+				n=2; while [ -e "$SD/stock.$n.bin" ]; do n=$((n + 1)); done
+				mv "$SD/stock.bin" "$SD/stock.$n.bin"
+			fi
 			mv -f "$SD/stock.bin.new" "$SD/stock.bin" && sync
 		fi
 	fi

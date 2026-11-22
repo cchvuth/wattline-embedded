@@ -42,10 +42,17 @@ if [ -z "'"$*"'" ]; then
 	rm -rf /work/out/build/dashapp-local /work/out/build/wattline-aa-local /work/out/build/spike-vdec-local \
 		/work/out/build/mcud-local /work/out/build/dash-ota-local
 	k=$(cat /ext/board/f133/*.dts /ext/board/f133/linux.fragment /ext/board/f133/kernel.its /ext/board/f133/init/init.c \
-		/ext/board/f133/patches/linux/* /ext/board/f133/patches-local/linux/* 2>/dev/null | sha256sum | cut -c1-16)
+		/ext/board/f133/patches/linux/* /ext/board/f133/patches-local/linux/* /ext/package/aic8800/* \
+		/ext/package/g2drot/* /ext/package/g2drot/src/* 2>/dev/null | sha256sum | cut -c1-16)
 	if [ "$k" != "$(cat /work/out/.f133-kernel-inputs 2>/dev/null)" ]; then
 		rm -rf /work/out/build/linux-[0-9]* /work/out/build/aic8800-* /work/out/build/g2drot-*
 		echo "$k" > /work/out/.f133-kernel-inputs
+	fi
+	# and the boot loader with its firmware when their patches changed (the update bundle carries U-Boot)
+	k=$(cat /ext/board/f133/patches/uboot/* /ext/board/f133/patches/opensbi/* 2>/dev/null | sha256sum | cut -c1-16)
+	if [ "$k" != "$(cat /work/out/.f133-boot-inputs 2>/dev/null)" ]; then
+		rm -rf /work/out/build/uboot-* /work/out/build/opensbi-*
+		echo "$k" > /work/out/.f133-boot-inputs
 	fi
 fi
 make O=/work/out '"$*"'
