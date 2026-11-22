@@ -7,7 +7,8 @@
  * rootfs.sqfs.try is mounted instead only with its kernel: on the one boot U-Boot tries Image.try ("try=kernel" in
  * the command line). The new root gets /.rootfs-tried, and rootfs.try on the card marks the try for an older
  * initramfs, which a fallback boot may run: it never tries the root on its own then. S98try renames it over
- * rootfs.sqfs once the screen works. The card stays mounted, at /mnt/sd. Messages go to the screen.
+ * rootfs.sqfs once the screen works. The card stays mounted, at /mnt/sd. Messages go to the kernel log;
+ * a failure that ends the boot goes on the screen too.
  *
  * Booted from the SPI NOR, U-Boot passes root=mtd:rootfs: the root is the squashfs in the NOR's "rootfs" partition
  * (/dev/mtdblock<n>) under the same overlay, /data is the NOR's JFFS2 "data" partition, and the card is not needed
@@ -24,6 +25,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/klog.h>
 #include <sys/mount.h>
 #include <sys/reboot.h>
 #include <sys/stat.h>
@@ -54,10 +56,44 @@ static void light(void)
 	}
 }
 
+/* The text console on the framebuffer (1), or off it (0: nothing of it lands on a picture drawn there). */
+static void fbcon(int on)
+{
+	char p[64], name[32];
+	int i, n, fd;
+
+	for (i = 0; i < 8; i++) {
+		snprintf(p, sizeof(p), "/sys/class/vtconsole/vtcon%d/name", i);
+		fd = open(p, O_RDONLY);
+		if (fd < 0)
+			break;
+		n = read(fd, name, sizeof(name) - 1);
+		close(fd);
+		name[n > 0 ? n : 0] = 0;
+		if (!strstr(name, "frame buffer"))
+			continue;
+		snprintf(p, sizeof(p), "/sys/class/vtconsole/vtcon%d/bind", i);
+		fd = open(p, O_WRONLY);
+		if (fd >= 0) {
+			write(fd, on ? "1" : "0", 1);
+			close(fd);
+		}
+	}
+}
+
+/*
+ * A step the boot cannot go on without: said on the screen, then a restart. The boot is quiet (loglevel=1 in the
+ * command line keeps these lines off the console) and the text console may have let go of the framebuffer for the
+ * boot picture: both undone first.
+ */
 static void fail(const char *what)
 {
-	light();	/* the messages are on the screen */
-	say(what, errno);
+	int e = errno;
+
+	klogctl(8, NULL, 8);	/* SYSLOG_ACTION_CONSOLE_LEVEL: everything */
+	fbcon(1);
+	light();
+	say(what, e);
 	say("rebooting in 10 s", 0);
 	sleep(10);
 	reboot(RB_AUTOBOOT);
@@ -81,8 +117,7 @@ static void splash(int nor)
 	struct fb_fix_screeninfo f;
 	struct stat sb;
 	unsigned char t[4];
-	char p[64], name[32];
-	int i, n, fd, st, s = -1, fb = open("/dev/fb0", O_WRONLY);
+	int i, fd, st, s = -1, fb = open("/dev/fb0", O_WRONLY);
 	pid_t pid;
 
 	if (fb < 0 || ioctl(fb, FBIOGET_VSCREENINFO, &v) || ioctl(fb, FBIOGET_FSCREENINFO, &f))
@@ -97,23 +132,7 @@ static void splash(int nor)
 	}
 	if (s < 0)
 		goto out;
-	for (i = 0; i < 8; i++) {
-		snprintf(p, sizeof(p), "/sys/class/vtconsole/vtcon%d/name", i);
-		fd = open(p, O_RDONLY);
-		if (fd < 0)
-			break;
-		n = read(fd, name, sizeof(name) - 1);
-		close(fd);
-		name[n > 0 ? n : 0] = 0;
-		if (!strstr(name, "frame buffer"))
-			continue;
-		snprintf(p, sizeof(p), "/sys/class/vtconsole/vtcon%d/bind", i);
-		fd = open(p, O_WRONLY);
-		if (fd >= 0) {
-			write(fd, "0", 1);
-			close(fd);
-		}
-	}
+	fbcon(0);
 	pid = fork();
 	if (pid == 0) {
 		if (lseek(s, 0, SEEK_SET) || dup2(s, 0) < 0 || dup2(fb, 1) < 0 || chroot("/newroot") || chdir("/"))
