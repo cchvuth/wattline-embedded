@@ -206,11 +206,13 @@ start|restore)
 		[ -e /run/aa-keep ] && sleep 2; n=$((n + 1))
 	done ) &
 	[ "$1" = start ] && pair_on   # someone at the screen tapped it (not a restore at boot)
-	# a stop that came meanwhile (the split's Exit, a phone already on it) took it all down: not marked up after it
-	[ -e /run/aa-keep ] || exit 0
 	touch /data/aa-on 2>/dev/null && sync   # up: on again at the next start (the dash restores it), until stopped
 	# (touch, not `: >`: a failed redirect on a special builtin would end the script before the marker)
 	touch "$MARK"
+	# A stop that came meanwhile (the split's Exit, a phone already on it; the sync above is the slow step) took it all
+	# down and its marks away: not left marked up after it, nor on at the next start, nor with its pairing window open.
+	# (Looked at after the marks are made: stop removes aa-keep before it removes them.)
+	[ -e /run/aa-keep ] || { rm -f "$MARK" /data/aa-on; sync; pair_off; exit 0; }
 	;;
 stop)   # the user's stop (the button, the split's Exit): off, and off at the next start too (first: a power cut
 	# during the seconds stop takes must not bring it back)

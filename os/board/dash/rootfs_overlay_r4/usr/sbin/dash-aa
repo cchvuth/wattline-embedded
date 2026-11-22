@@ -154,11 +154,18 @@ start|restore)
 		( sleep 120; btc pairable off; btc discoverable off; rm -f /run/aa-pair-timer ) >/dev/null 2>&1 &
 		echo $! > /run/aa-pair-timer
 	fi
-	# a stop that came meanwhile (the split's Exit, a phone already on it) took it all down: not marked up after it
-	[ -e /run/aa-keep ] || exit 0
 	touch /data/aa-on 2>/dev/null && sync   # up: on again at the next start (the dash restores it), until stopped
 	# (touch, not `: >`: a failed redirect on a special builtin would end the script before the marker)
 	touch "$MARK"
+	# A stop that came meanwhile (the split's Exit, a phone already on it; the pairing calls and the sync above are the
+	# slow steps) took it all down and its marks away: not left marked up after it, nor on at the next start, nor with
+	# its pairing window open. (Looked at after the marks are made: stop removes aa-keep before it removes them.)
+	if [ ! -e /run/aa-keep ]; then
+		rm -f "$MARK" /data/aa-on; sync
+		[ -f /run/aa-pair-timer ] && kill "$(cat /run/aa-pair-timer)" 2>/dev/null; rm -f /run/aa-pair-timer
+		btc pairable off >/dev/null 2>&1; btc discoverable off >/dev/null 2>&1
+		exit 0
+	fi
 	;;
 stop)   # the owner's stop (the button, the split's Exit): off, and off at the next start too (first: a power cut
 	# during the seconds stop takes must not bring it back)
