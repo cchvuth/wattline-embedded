@@ -22,7 +22,7 @@ void conf_defaults(conf_t *c) {
   c->set_clock = 1;
   snprintf(c->backlight, sizeof c->backlight, "/sys/class/backlight/backlight");
   c->bright_day = 100, c->bright_night = 30, c->bright_idle = 10, c->bright_min = 0, c->bright_max = 100;
-  c->bright_floor = 0.1;
+  c->bright_floor = 0.05;
   c->bright_follow_car = 1, c->bright_follow_scale = 1.0, c->bright_follow_offset = 0;
   c->bright_ease_ms = 300, c->bright_stale_ms = 5000;
   c->away_min = 0;

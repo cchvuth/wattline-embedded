@@ -132,7 +132,7 @@ int main(void) {
 
   // The level as the backlight's own: 0 % the floor (never 0, which is off), fine steps below 10 %, the duty itself
   // from there up; a coarse backlight (100 steps) still gets its lowest step.
-  CHECK(bright_raw(&cf, 0, 2000) == 2 && bright_raw(&cf, 1, 2000) == 4 && bright_raw(&cf, 5, 2000) == 52);
+  CHECK(bright_raw(&cf, 0, 2000) == 1 && bright_raw(&cf, 1, 2000) == 3 && bright_raw(&cf, 5, 2000) == 51);
   CHECK(bright_raw(&cf, 10, 2000) == 200 && bright_raw(&cf, 30, 2000) == 600 && bright_raw(&cf, 100, 2000) == 2000);
   for (int p = 1; p <= 100; p++) CHECK(bright_raw(&cf, p, 2000) > bright_raw(&cf, p - 1, 2000));
   CHECK(bright_raw(&cf, 0, 100) == 1 && bright_raw(&cf, 3, 100) == 1 && bright_raw(&cf, 10, 100) == 10 && bright_raw(&cf, 100, 100) == 100);
