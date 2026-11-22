@@ -30,20 +30,26 @@ fits "$K/kernel.itb" 0x440000 kernel
 # container): unpacked by anyone else, the files would lose their owners and device nodes.
 if [ "$(id -u)" = 0 ]; then
 	"$HOST_DIR/bin/unsquashfs" -q -d "$K/r" "$B/rootfs.squashfs" >/dev/null
-	"$HOST_DIR/bin/mksquashfs" "$K/r" "$K/zstd.sqfs" -comp zstd -Xcompression-level 22 -b 131072 -noappend \
-		-no-progress >/dev/null
-	if [ "$(wc -c < "$K/zstd.sqfs")" -le $((0xa40000)) ]; then
+	# in the smallest blocks that fit (bigger ones pack tighter, and unpack more for each read)
+	z=
+	for b in 131072 262144 524288; do
+		"$HOST_DIR/bin/mksquashfs" "$K/r" "$K/zstd.sqfs" -comp zstd -Xcompression-level 22 -b $b -noappend \
+			-no-progress >/dev/null
+		z=$(wc -c < "$K/zstd.sqfs")
+		[ "$z" -le $((0xa40000)) ] && break
+	done
+	if [ "$z" -le $((0xa40000)) ]; then
 		cp "$K/zstd.sqfs" "$B/rootfs.squashfs"
-		echo "post-image: the root in zstd ($(wc -c < "$B/rootfs.squashfs") bytes)"
+		echo "post-image: the root in zstd ($z bytes, $((b / 1024)) KiB blocks)"
 	else
-		echo "post-image: the root stays in xz (in zstd $(wc -c < "$K/zstd.sqfs") bytes: more than its partition)"
+		echo "post-image: the root stays in xz (in zstd $z bytes: more than its partition)"
 	fi
 	rm -rf "$K/r" "$K/zstd.sqfs"
 fi
 fits "$B/rootfs.squashfs" 0xa40000 rootfs
 # U-Boot: the NOR's boot partition is 1 MiB, but the same file goes 8 KiB into a card whose first partition may start
 # at 1 MiB, so the card's room is the limit
-fits "$B/u-boot-sunxi-with-spl.bin" 0x100000-0x2000 boot
+fits "$B/u-boot-sunxi-with-spl.bin" 0xf0000 boot
 cp "$K/kernel.itb" "$B/kernel.itb"
 [ -d /out ] || exit 0
 cp "$B/Image" /out/Image

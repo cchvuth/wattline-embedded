@@ -55,6 +55,8 @@ grep -q '^BR2_PACKAGE_NCURSES=y' "$BR2_CONFIG" || rm -f $T/usr/lib/libncurses.so
 # curl and the CA bundle once nothing selects them
 grep -q '^BR2_PACKAGE_LIBCURL=y' "$BR2_CONFIG" || rm -f $T/usr/bin/curl $T/usr/lib/libcurl.so*
 grep -q '^BR2_PACKAGE_CA_CERTIFICATES=y' "$BR2_CONFIG" || rm -rf $T/etc/ssl/certs $T/usr/share/ca-certificates
+# OpenSSL's module of retired ciphers (the CA certificates one by one: post-fakeroot.sh)
+rm -f $T/usr/lib/ossl-modules/legacy.so
 # libnl's families nothing links (wpa_supplicant and iw use libnl-3 and libnl-genl-3)
 rm -f $T/usr/lib/libnl-route-3.so* $T/usr/lib/libnl-nf-3.so* $T/usr/lib/libnl-xfrm-3.so* \
 	$T/usr/lib/libnl-idiag-3.so* $T/usr/lib/libnl-cli-3.so*

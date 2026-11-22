@@ -70,6 +70,7 @@ BR2_PACKAGE_BLUEZ5_UTILS=y
 
 # /etc/image-id (the version the dash's settings show, and dash-update compares) and the OTA public key
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_F133_PATH)/board/f133/post-build.sh"
+BR2_ROOTFS_POST_FAKEROOT_SCRIPT="$(BR2_EXTERNAL_F133_PATH)/board/f133/post-fakeroot.sh"
 # busybox ntpd + timeout (udhcpc's ntp hook)
 BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_F133_PATH)/board/f133/busybox.fragment"
 # WPA3-Personal (SAE). The AIC8800 does SAE with the AUTHENTICATE command (iw list on the screen); wifi-connect offers
