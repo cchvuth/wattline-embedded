@@ -21,8 +21,15 @@
 # dash hides the button).
 SSID=${SSID:-WattlineAA}
 # A fresh random passphrase each session: a fixed one would be in this public repo. The phone needs no setup for it:
-# it gets the passphrase over Bluetooth (the paired AA channel) every time it connects.
-PSK=${PSK:-$(od -An -tx1 -N10 /dev/urandom 2>/dev/null | tr -d ' \n')}   # 20 hex digits
+# it gets the passphrase over Bluetooth (the paired AA channel) every time it connects. Or this unit's own, the same
+# every session, where one is kept on it (/data/wattline/ap-psk, root only: 8 to 63 letters and digits on its first
+# line, put there by whoever wants the network to stay the one a device was given; never in this repo, never printed).
+ap_psk() {
+	p=$(head -n 1 /data/wattline/ap-psk 2>/dev/null | tr -d '\r')
+	case "$p" in *[!0-9A-Za-z]*) p= ;; esac
+	if [ ${#p} -ge 8 ] && [ ${#p} -le 63 ]; then printf %s "$p"; else od -An -tx1 -N10 /dev/urandom 2>/dev/null | tr -d ' \n'; fi   # 20 hex digits
+}
+PSK=${PSK:-}
 IP=${IP:-192.168.53.1}   # the AP's /24: not the car's 192.168.4.x, nor a phone hotspot's 192.168.43.x
 CERT=/etc/wattline/aa.crt
 MARK=/run/dash-aa
@@ -140,6 +147,7 @@ case "$1" in
 start|restore)
 	[ -f "$CERT" ] || { echo "dash-aa: no head-unit certificate at $CERT" >&2; exit 1; }
 	aa certcheck "$CERT" "${CERT%.crt}.key" || exit 1   # self-signed, or its key missing/another's: no session (it says why)
+	[ -n "$PSK" ] || PSK=$(ap_psk)
 	[ ${#PSK} -ge 8 ] || { echo "dash-aa: could not make the AP passphrase" >&2; exit 1; }
 	[ -f "$MARK" ] && exit 0   # already up
 	# one start at a time (a boot restore, or a tap once the UI stops waiting on this one at 90 s): the lock

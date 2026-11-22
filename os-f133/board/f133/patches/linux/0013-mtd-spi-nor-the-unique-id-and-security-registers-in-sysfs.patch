@@ -1,0 +1,95 @@
+--- a/drivers/mtd/spi-nor/sysfs.c
++++ b/drivers/mtd/spi-nor/sysfs.c
+@@ -64,8 +64,83 @@
+ }
+ static BIN_ATTR_RO(sfdp, 0);
+ 
++/*
++ * Read only, for root: the unique ID (0x4B, then 4 dummy bytes, the Winbond and XMC way) and security registers 1 to 3
++ * (0x48 at 0x1000, 0x2000, 0x3000, 256 bytes each), one after the other in "secr": what tells one chip from another,
++ * and what its maker or the board's left there. Nothing here writes or locks them.
++ */
++#define SNOR_UID_LEN	16
++#define SNOR_SECR_LEN	256
++#define SNOR_SECR_N	3
++
++static ssize_t unique_id_read(struct file *filp, struct kobject *kobj,
++			      struct bin_attribute *bin_attr, char *buf,
++			      loff_t off, size_t count)
++{
++	struct spi_device *spi = to_spi_device(kobj_to_dev(kobj));
++	struct spi_mem *spimem = spi_get_drvdata(spi);
++	struct spi_nor *nor = spi_mem_get_drvdata(spimem);
++	struct spi_mem_op op = SPI_MEM_OP(SPI_MEM_OP_CMD(0x4b, 0),
++					  SPI_MEM_OP_NO_ADDR,
++					  SPI_MEM_OP_DUMMY(4, 0),
++					  SPI_MEM_OP_DATA_IN(SNOR_UID_LEN, nor->bouncebuf, 0));
++	u8 id[SNOR_UID_LEN];
++	int ret;
++
++	ret = spi_nor_prep_and_lock(nor);
++	if (ret)
++		return ret;
++	ret = spi_nor_read_any_reg(nor, &op, SNOR_PROTO_1_1_1);
++	if (!ret)
++		memcpy(id, nor->bouncebuf, sizeof(id));
++	spi_nor_unlock_and_unprep(nor);
++	if (ret)
++		return ret;
++
++	return memory_read_from_buffer(buf, count, &off, id, sizeof(id));
++}
++static BIN_ATTR_ADMIN_RO(unique_id, SNOR_UID_LEN);
++
++static ssize_t secr_read(struct file *filp, struct kobject *kobj,
++			 struct bin_attribute *bin_attr, char *buf,
++			 loff_t off, size_t count)
++{
++	struct spi_device *spi = to_spi_device(kobj_to_dev(kobj));
++	struct spi_mem *spimem = spi_get_drvdata(spi);
++	struct spi_nor *nor = spi_mem_get_drvdata(spimem);
++	size_t done = 0;
++	int ret;
++
++	if (off >= SNOR_SECR_N * SNOR_SECR_LEN)
++		return 0;
++	count = min_t(size_t, count, SNOR_SECR_N * SNOR_SECR_LEN - off);
++
++	ret = spi_nor_prep_and_lock(nor);
++	if (ret)
++		return ret;
++	while (done < count) {
++		loff_t o = off + done;
++		/* one register at a time: they are not contiguous */
++		size_t n = min_t(size_t, count - done, SNOR_SECR_LEN - o % SNOR_SECR_LEN);
++
++		ret = spi_nor_otp_read_secr(nor, 0x1000 * (o / SNOR_SECR_LEN + 1) + o % SNOR_SECR_LEN,
++					    n, buf + done);
++		if (ret <= 0)
++			break;
++		done += ret;
++	}
++	spi_nor_unlock_and_unprep(nor);
++	if (done)
++		return done;
++
++	return ret < 0 ? ret : -EIO;
++}
++static BIN_ATTR_ADMIN_RO(secr, SNOR_SECR_N * SNOR_SECR_LEN);
++
+ static struct bin_attribute *spi_nor_sysfs_bin_entries[] = {
+ 	&bin_attr_sfdp,
++	&bin_attr_unique_id,
++	&bin_attr_secr,
+ 	NULL
+ };
+ 
+@@ -93,6 +168,8 @@
+ 
+ 	if (attr == &bin_attr_sfdp && nor->sfdp)
+ 		return 0444;
++	if ((attr == &bin_attr_unique_id || attr == &bin_attr_secr) && nor->spimem)
++		return 0400;
+ 
+ 	return 0;
+ }

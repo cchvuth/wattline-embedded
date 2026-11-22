@@ -214,6 +214,19 @@ run start && up && ! grep -q 'interface add' $T/calls && [ "$(cat /run/aa-ap.ifa
 run stop && down && has 'S45wifi-auto start' && ok "stop" || no "stop"
 nocb
 
+echo "-- a passphrase kept on the unit is the AP's; one that is not 8 to 63 letters and digits is passed over"
+fresh; mkdir -p /data/wattline; printf '0123456789abcde\n' > /data/wattline/ap-psk
+run start && up && [ "$(psk)" = 0123456789abcde ] && [ "$(cat $T/cap/mcu-stdin 2>/dev/null)" = 0123456789abcde ] &&
+	ok "the kept passphrase, to the AP and to aa mcu" || no "the kept passphrase: '$(psk)'"
+run stop && down && ok "stop" || no "stop"
+fresh; mkdir -p /data/wattline; printf 'a"b c\\d\n' > /data/wattline/ap-psk
+run start && up && psk | grep -qxE '[0-9a-f]{20}' && ok "other characters: a fresh one" || no "a kept one of other characters: '$(psk)'"
+run stop && down && ok "stop" || no "stop"
+fresh; mkdir -p /data/wattline; printf 'short\n' > /data/wattline/ap-psk
+run start && up && psk | grep -qxE '[0-9a-f]{20}' && ok "too short: a fresh one" || no "a short kept one: '$(psk)'"
+run stop && down && ok "stop" || no "stop"
+nocb
+
 echo "-- a stop in a start's last moments (the split's Exit): all of it down, and not on at the next start"
 # the start held just before it writes /data/aa-on; the stop's first sync made slow, so the start goes on inside it
 cat > /stub/touch <<EOT
