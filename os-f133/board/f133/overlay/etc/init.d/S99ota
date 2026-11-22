@@ -8,6 +8,9 @@
 # can be copied to the built-in flash (dash-nor status: nothing on a screen running from its NOR).
 case "$1" in start|"") ;; *) exit 0;; esac
 dash-nor status </dev/null >/dev/null 2>&1
+# a card start for the flash (data=nor) that got this far: U-Boot's once-mark goes, so the next start may be the card's
+# again (its kept version still to be written to the flash, or a write the power cut)
+if grep -q 'data=nor' /proc/cmdline; then rm -f /mnt/sd/nor.once; sync; fi
 (
 	sleep 15
 	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24; do dash-update confirm && break; sleep 10; done

@@ -113,7 +113,9 @@ card's files checked against the download's checksums first) are written to the 
 flash`, `nor.sh update`: about a minute, the dash running), the mark is cleared, and the next start is the NOR's
 again, on the new version. Until the mark is cleared the card starts the
 screen, so a write the power cuts goes on at the next start. A version given up never reaches the NOR: the screen
-power-cycles into the system there. Without the card nothing changes: the NOR's system starts. An update never
+power-cycles into the system there. A kept version that no longer starts from the card before it is on the NOR
+(its root damaged on the card since) is started once (`nor.once` on the card, removed by the last start script), then
+the NOR's system starts and gives it up. Without the card nothing changes: the NOR's system starts. An update never
 writes the boot loader, and this needs one that looks at the mark (`ota=flash` in a NOR boot's arguments: since
 0.1.2; an older one is replaced by copying a card install to the flash again, or with `flashcp` from a card boot):
 with an older one, or without a card, the settings page says that updates need the card install.

@@ -87,7 +87,7 @@ for_flash() { grep -q 'data=nor' $CMDLINE; }
 TRYDEV=${DASH_UPDATE_TRYDEV:-$(awk '$4 == "\"try\"" { sub(":", "", $1); print "/dev/" $1 }' $MTD 2>/dev/null)}
 mark_on() { [ -n "$TRYDEV" ] && [ "$(head -c 4 "$TRYDEV" 2>/dev/null)" = TRY1 ]; }
 mark_clear() { [ -z "$TRYDEV" ] || { flash_eraseall "$TRYDEV" >/dev/null 2>&1 && ! mark_on; }; }
-mark_set() { mark_on || { flash_eraseall "$TRYDEV" >/dev/null 2>&1 && printf TRY1 | dd of="$TRYDEV" conv=notrunc 2>/dev/null && mark_on; }; }
+mark_set() { rm -f $SD/nor.once; mark_on || { flash_eraseall "$TRYDEV" >/dev/null 2>&1 && printf TRY1 | dd of="$TRYDEV" conv=notrunc 2>/dev/null && mark_on; }; }
 
 # ARMED: this start put a try in place or armed one again, so U-Boot has not had its look at it yet.
 ARMED=$RUN/dash-update.armed
@@ -100,7 +100,7 @@ unmade() {   # unmade VERSION LEFT...
 	v=$1; shift
 	card_rw || { status error "the card is not writable"; return 1; }
 	mark_clear || { status error "the flash's try mark could not be cleared"; return 1; }
-	rm -f $SD/Image.try; for f in "$@"; do rm -f "$SD/$f"; done
+	rm -f $SD/Image.try $SD/nor.once; for f in "$@"; do rm -f "$SD/$f"; done
 	if for_flash; then grep -qx "$v" $OTA/failed 2>/dev/null || echo "$v" >> $OTA/failed; fi
 	rm -f $SD/rootfs.try $OTA/tries $OTA/trying $OTA/sums; sync
 	log "version $v could not be tried: the card took no mark for it (full?)"
@@ -219,7 +219,7 @@ cmd_apply() {
 	[ -n "$LATEST" ] || fail "nothing unpacked (fetch first)"
 	# an older try's marks would have the new files skipped or given up (a kernel.itb at the card's root stays until
 	# S98try keeps the try: a card U-Boot from before boots it in place of Image, so a try given up goes back to it)
-	rm -f $SD/try.boot $SD/rootfs.try $SD/try.failed $OTA/tries
+	rm -f $SD/try.boot $SD/rootfs.try $SD/try.failed $SD/nor.once $OTA/tries
 	rm -f $OTA/sums $OTA/to-flash; [ ! -f "$W/sums" ] || cp "$W/sums" $OTA/sums || fail "cannot write $OTA/sums"
 	echo "$LATEST" > $OTA/trying && sync || fail "cannot write $OTA/trying"   # first: a cut apply is still noticed
 	mkdir -p $SD/nor || fail "cannot make $SD/nor"
@@ -256,14 +256,14 @@ cmd_confirm() {
 					# U-Boot looked, and the card did not start the screen (its kept files gone, or not read):
 					# given up here, or it would be so at every start; the version can be installed again
 					mark_clear || { status error "the flash's try mark could not be cleared"; return 1; }
-					rm -f $OTA/to-flash $OTA/sums; sync
+					rm -f $OTA/to-flash $OTA/sums $SD/nor.once; sync
 					log "version $tf, kept on the card, did not start from it: not written to the built-in flash"
 					status error "the card could not start version $tf for the built-in flash: install it again"; return 0
 				fi
 				mark_set && : > $ARMED || { status error "the flash's try mark could not be set"; return 1; }
 				status armed "goes to the built-in flash at the next power-up"; return 0
 			fi
-			rm -f $OTA/to-flash
+			rm -f $OTA/to-flash $SD/nor.once
 			if [ -z "$(try_left)" ] && mark_on; then mark_clear; fi
 		elif on_flash && ! grep -q " $SD " $MOUNTS && mark_on; then
 			mark_clear   # no card in the screen: U-Boot need not look for one at every start
@@ -316,7 +316,7 @@ cmd_confirm() {
 	if [ -n "$gave" ]; then mkdir -p $OTA; grep -qx "$V" $OTA/failed 2>/dev/null || echo "$V" >> $OTA/failed; fi
 	rm -f $SD/Image.try; for f in $left; do rm -f "$SD/$f"; done   # Image.try first: the rest is never booted
 	W=$(ls -d $OTA/*/b 2>/dev/null | head -n 1); [ -n "$W" ] && rm -rf "${W%/b}"   # a cut apply's download, part moved
-	rm -f $SD/try.boot $SD/rootfs.try $SD/try.failed $OTA/tries $OTA/trying $OTA/sums $OTA/to-flash; sync
+	rm -f $SD/try.boot $SD/rootfs.try $SD/try.failed $SD/nor.once $OTA/tries $OTA/trying $OTA/sums $OTA/to-flash; sync
 	if [ -n "$gave" ]; then
 		log "version $V did not start: back on $(current_version), not installed automatically again"
 		status rolled-back "version $V did not start"
@@ -324,6 +324,12 @@ cmd_confirm() {
 		log "the update to $V was cut short: cleared"; status error "the update to $V was cut short: install it again"
 	fi
 	return 0
+}
+
+# fits PARTITION FILE: FILE is no bigger than that partition of the built-in flash (/proc/mtd: this kernel's layout)
+fits() {
+	n=$(awk -v n="\"$1\"" '$4 == n { print $2 }' $MTD 2>/dev/null)
+	[ -n "$n" ] && [ "$(sz "$2")" -le $((0x$n)) ]
 }
 
 # A card boot made for the flash's update, the version kept (confirm first): its root and kernel onto the flash, each
@@ -335,6 +341,7 @@ cmd_flash() {
 	[ -z "$(cat $OTA/trying 2>/dev/null)" ] && [ -z "$(try_left)" ] || { log "not to the flash yet: a version is on trial"; return 1; }
 	[ -n "$TRYDEV" ] || fail "no try partition on the flash: the card starts the screen"
 	if ! mark_on; then   # written before, its last step cut; or nothing to write (confirm said what)
+		rm -f $SD/nor.once
 		if [ -e $OTA/to-flash ]; then rm -f $OTA/to-flash $OTA/sums; status ok "updated to $(current_version)"; fi
 		return 0
 	fi
@@ -344,6 +351,14 @@ cmd_flash() {
 	if [ -f $OTA/sums ] && ! ( cd $SD && sha256sum -c $OTA/sums ) >> "$NORLOG" 2>&1; then
 		rm -f $OTA/to-flash; mark_clear
 		fail "the card's files no longer match the download: the built-in flash keeps its version"
+	fi
+	# (U-Boot's once-mark, should S99ota not have taken it: the card's files start the screen)
+	rm -f $SD/nor.once; sync
+	# what this version's own partitions hold (this kernel's: the bundle's): one that nor.sh would refuse at every
+	# start goes now, the flash keeping its version
+	if ! fits rootfs $SD/rootfs.sqfs || ! fits kernel $SD/nor/kernel.itb; then
+		rm -f $OTA/to-flash; mark_clear
+		fail "this version does not fit its own partitions on the built-in flash: the flash keeps its version"
 	fi
 	status trial "being written to the built-in flash: leave the card in"
 	log "version $(current_version) to the built-in flash"
