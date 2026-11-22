@@ -604,6 +604,16 @@ int main(int argc, char **argv)
 		bad |= expect(saved.ring_page == DASH_RING_POWER && saved.cards[2] == DASH_CARD_ROUTE, "sideways on the ring: nothing");
 		swipe(W / 2 + W / 40, H - 20, W / 2 + W / 40, H / 2); /* up from the bar under the ring: not the ring's */
 		bad |= expect(saved.ring_page == DASH_RING_POWER, "a swipe that begins on the bar under the ring: the ring's face stays");
+		{ /* and one that begins there slowly (2 px a read, where LVGL starts its gesture's sum again), then flicks */
+			int x = W / 2 + W / 40, y = H - 20;
+			finger_at = (lv_point_t){x, y}, finger_down = true;
+			lv_indev_read(finger);
+			for (int k = 0; k < 60; k++) clock_ms += 16, finger_at.y -= 2, lv_indev_read(finger);
+			for (int k = 0; k < 8; k++) clock_ms += 16, finger_at.y -= 25, lv_indev_read(finger);
+			clock_ms += 16, finger_down = false;
+			lv_indev_read(finger);
+			bad |= expect(saved.ring_page == DASH_RING_POWER, "a slow start on the bar, then a flick over the ring: its face stays");
+		}
 		bad |= expect(!presses, "no press from any swipe");
 		st.basic = false; /* last, the split again: a hold on a button names it, in the bar (its tooltip stays: no timers here) */
 		dash_ui_settings(&st);

@@ -801,8 +801,9 @@ static void dial_dirty(const dash_state_t *s)
 	lv_area_t a, b;
 	lv_obj_get_coords(dial, &a);
 	float q = dial_q(), r2 = ri((52 - 4) * q + 3 * q), r1 = r2 - ri(6 * q), cx = ri(a.x1 + 52 * q), cy = ri(a.y1 + 52 * q);
-	for (int i = 0; i < 2; i++) {
-		dial_arc_t o = first ? (dial_arc_t){0} : shown[i], n = now[i];
+	if (first) lv_obj_invalidate(dial); /* all of it: nothing drawn yet, or (after the settings) arcs from before them */
+	for (int i = 0; i < 2 && !first; i++) {
+		dial_arc_t o = shown[i], n = now[i];
 		if (!memcmp(&o, &n, sizeof o)) continue;
 		if (o.c && o.c == n.c && o.a0 == n.a0) { /* its end moved */
 			arc_box(cx, cy, r1, r2, LV_MIN(o.a1, n.a1), LV_MAX(o.a1, n.a1), &b);
@@ -4419,6 +4420,28 @@ static void gear_tap(lv_event_t *e)
  * split's cover stop it (the picture's own box keeps those that start on it: the phone's). Where the finger is decides
  * (a vertical swipe keeps its column). Any swipe lets go of the press it began with: a swipe that starts on a chip (a
  * card's, the split's bar's) and ends on it never presses it, nor one from the gear the layout. */
+/* Where the finger went down. LVGL's own sum of a gesture starts again whenever a read moves under 3 px, so a swipe
+ * that begins slowly was taken to begin where it sped up: one from basic's bar, drifting up onto the ring, turned
+ * the ring's face. Kept from the panel's press itself (every pointer device gets the handler, whenever it appears). */
+static lv_point_t press_at;
+static bool press_known;
+static void press_cb(lv_event_t *e)
+{
+	(void)e;
+	lv_indev_t *in = lv_indev_active();
+	if (in) lv_indev_get_point(in, &press_at), press_known = true;
+}
+static void press_hook(void)
+{
+	static lv_indev_t *hooked[4];
+	for (lv_indev_t *i = lv_indev_get_next(NULL); i; i = lv_indev_get_next(i)) {
+		int k = 0;
+		while (k < 4 && hooked[k] && hooked[k] != i) k++;
+		if (k == 4 || hooked[k] || lv_indev_get_type(i) != LV_INDEV_TYPE_POINTER) continue;
+		hooked[k] = i;
+		lv_indev_add_event_cb(i, press_cb, LV_EVENT_PRESSED, NULL);
+	}
+}
 static int split_card(void);
 static void swipe(lv_event_t *e)
 {
@@ -4431,11 +4454,12 @@ static void swipe(lv_event_t *e)
 	lv_indev_get_point(in, &p);
 	lv_indev_wait_release(in);
 	bool across = d == LV_DIR_LEFT || d == LV_DIR_RIGHT; /* basic's cards only: the slot it began on, not where it has got to */
-	if (across) p.x -= in->pointer.gesture_sum.x;
+	lv_point_t from = press_known ? press_at : (lv_point_t){p.x - in->pointer.gesture_sum.x, p.y - in->pointer.gesture_sum.y};
+	if (across) p.x = from.x;
 	bool ring = pj ? p.x < split_x : p.x >= G.cx - G.D / 2 && p.x < G.cx + G.D / 2;
 	/* basic's bar under the ring (the links, the car panel's button) is no part of the ring's pages (main.dart): a swipe
 	 * that began there flips nothing (the cards either side run the screen's whole height) */
-	if (ring && !pj && p.y - in->pointer.gesture_sum.y >= G.row_b) return;
+	if (ring && !pj && from.y >= G.row_b) return;
 	if (across ? pj || ring : d != LV_DIR_TOP && d != LV_DIR_BOTTOM) return;
 	if (pj && p.x < pj_vw()) return; /* not on the bar over the picture */
 	int step = d == LV_DIR_TOP || d == LV_DIR_LEFT ? 1 : -1;
@@ -4841,6 +4865,7 @@ static void phone_layout(const dash_state_t *s)
 void dash_ui_set(const dash_state_t *s)
 {
 	S = *s;
+	press_hook();
 	/* The AA/projection layer raises /run/dash-project when a phone's video is ready and drops it to leave. Toggle
 	 * only between the dash and the strip, so it never yanks the user out of settings/pairing. */
 	bool want_pj = projecting = access(dash_ui_pj_marker, F_OK) == 0;
@@ -4881,17 +4906,6 @@ void dash_ui_set(const dash_state_t *s)
 		first = false;
 		return;
 	}
-	/* Under the settings' dialog the dash is left as it was drawn: each part of it that changed had the dialog over it
-	 * drawn again, the same pixels, three quarters of a dash frame's work at every frame on the move. The touch layer
-	 * goes on (the settings' own lines, the snackbar); the first frame after the dialog sets the dash all again. */
-	static bool held;
-	if (view == DASH_VIEW_SETTINGS && !first) {
-		set_touch(s);
-		P = *s;
-		held = true;
-		return;
-	}
-	if (held) first = true, held = false;
 	show(glow_b, s->live && s->braking); /* not in the split: it would run under the picture */
 
 	/* Android Auto button: only with a head-unit cert in place (else the phone rejects the handshake); green while the
@@ -4909,6 +4923,21 @@ void dash_ui_set(const dash_state_t *s)
 		icon_color(aa_btn, !aa_stopping && (projecting || up || aa_pending) ? AA_BLUE : WHITE);
 	}
 
+	/* Under the settings' dialog the dash's middle (the ring, the car, the figures, the route, the g-meter) is left as
+	 * it was drawn: each part of it that changed had the dialog over it drawn again, the same pixels, three quarters
+	 * of a dash frame's work at every frame on the move. What shows beside and under the dialog goes on (the glows
+	 * and the Android Auto button above, the chips, the links), and so does the touch layer (the settings' own lines,
+	 * the snackbar); the first frame after the dialog sets the dash all again. */
+	static bool held;
+	if (view == DASH_VIEW_SETTINGS && !first) {
+		set_chips(s);
+		set_links(s);
+		set_touch(s);
+		P = *s;
+		held = true;
+		return;
+	}
+	if (held) first = true, held = false;
 	/* The blocks: the car and the route (only with one) left of the ring, the energy figures and the g-meter right of
 	 * it. Widths are fixed per block (the widest it gets), so nothing moves as the figures change. A route coming or
 	 * going re-spreads the left side only; losing WiFi drops the g-meter's place (with WiFi it is kept, in P too, even
