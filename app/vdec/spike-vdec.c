@@ -1079,7 +1079,7 @@ static int dec_one(dec_t *D, pic_t *p, nal_t *s)
 	p->dp.top_field_order_cnt = p->dp.bottom_field_order_cnt = poc;
 	fill_refs(p);
 	int ci = -1;	/* a capture buffer that holds no reference, no picture waiting to be shown and not the reshow's */
-	for (int pass = 0; ci < 0; pass++) {   /* ncap = refs + 1: when the waiting or reshow pictures are not references */
+	while (ci < 0) {   /* ncap = refs + 1: when the waiting or reshow pictures are not references */
 		for (int k = 0; k < D->ncap && ci < 0; k++) {   /* too and fill the rest, they go: first the reshow's, then */
 			int used = k == D->newest_ci;            /* the waiting ones, oldest first (the screen is behind) */
 			for (int r = 0; r < nrefs; r++) used |= refs[r].cap == k;
