@@ -35,10 +35,12 @@ Docker volume `wattline-f133`, and the images land in `out-f133/`:
 | `Image`, `f133.dtb` | a boot from the card |
 | `card/` | a card install's files, ready to copy (below) |
 
-To rebuild one package, run e.g. `os-f133/build.sh dashapp-rebuild`, then `os-f133/build.sh` for the images. After
-changing the kernel's configuration (`board/f133/linux.fragment`) or its patches, rebuild the out-of-tree modules
-as well (`aic8800-dirclean g2drot-dirclean linux-dirclean`): modules built for another kernel load, but Wi-Fi stops
-working.
+A whole build (`os-f133/build.sh` with no arguments) compiles the programs from this checkout again (the dash, the
+receiver, the decoder, `mcud`), and the kernel with its out-of-tree modules when its device tree, configuration
+(`board/f133/linux.fragment`), initramfs or patches changed: Buildroot would otherwise keep what it built first.
+To rebuild one package by hand, run e.g. `os-f133/build.sh dashapp-rebuild`; after a kernel change by hand, the
+modules too (`aic8800-dirclean g2drot-dirclean linux-dirclean`): modules built for another kernel load, but Wi-Fi
+stops working.
 
 ## NOR layout
 
