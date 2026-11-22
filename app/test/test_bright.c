@@ -131,6 +131,21 @@ int main(void) {
   step(cf.bright_stale_ms + cf.bt_settle_ms + 3000);
   CHECK(step(300) == 0 && B.src == BRIGHT_NO_CAR);
 
+  // Away (dark), then car data without its brightness yet: lit at once, at the lowest (not dark for that moment)
+  cf.away_min = 1;
+  bright_init(&B, &cf, now);
+  C.wifi_live = false, car_from_bt(&C, NULL, now);
+  bright_step(&B, &cf, &C, now, 0);
+  now += 61000;
+  bright_step(&B, &cf, &C, now, 61000), now += 300;
+  CHECK(bright_step(&B, &cf, &C, now, 61300) == 0 && B.src == BRIGHT_AWAY);
+  C.wifi_live = true, lamps(2);
+  now += 33;
+  CHECK(bright_step(&B, &cf, &C, now, 61333) == 0 && B.src == BRIGHT_NO_CAR);
+  cf.away_min = 0;
+  C.wifi_live = false, car_from_bt(&C, NULL, now);
+  bright_init(&B, &cf, now);
+
   // The level as the backlight's own: 0 % the floor (never 0, which is off), fine steps below 10 %, the duty itself
   // from there up; a coarse backlight (100 steps) still gets its lowest step.
   CHECK(bright_raw(&cf, 0, 2000) == 1 && bright_raw(&cf, 1, 2000) == 3 && bright_raw(&cf, 5, 2000) == 51);
