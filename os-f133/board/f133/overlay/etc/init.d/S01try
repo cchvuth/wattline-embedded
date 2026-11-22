@@ -6,7 +6,8 @@
 # good files (U-Boot marked the try before starting it); as after a power cut, the try is made again at a later
 # start, 3 in all. Without this such a try stayed up,
 # dark, until the power went, and was tried again at the next two starts.
-# Only on a tried boot: otherwise the hardware watchdog stays off (a reset loses the Wi-Fi chip: S03mcu).
+# Only on a tried boot: otherwise the hardware watchdog is the kernel's alone to feed (a reset loses the Wi-Fi chip:
+# S03mcu), which covers a kernel that hangs, not a boot that stalls.
 case "$1" in
 start)
 	grep -q "try=kernel" /proc/cmdline && [ -c /dev/watchdog ] || exit 0

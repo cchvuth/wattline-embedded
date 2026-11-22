@@ -40,8 +40,9 @@ CONFIG_USE_BOOTCOMMAND=y
 # before the boot picture (init.c), and the text console lets go of the framebuffer for it: a panic is not shown
 # (before the backlight is lit, nothing is; after, the last picture stays for the 5 s), nor are the boot's warnings.
 # The initramfs puts its own failures on the screen (init.c: fail()). The watchdog
-# U-Boot runs stays on into Linux: its
-# driver stops it at probe, and a kernel stuck before that is reset at 16 s, the SPL then saving its log. The MCU hold
+# U-Boot runs stays on into Linux, whose
+# driver keeps it and feeds it from the kernel (patches/linux 0011): a kernel that hangs, at its start or later, is
+# reset at 16 s, the SPL then saving its log. The MCU hold
 # (B0 [CE 01 00 00 00] into UART1's FIFO, as the SPL left it) again: the SPL's comes at ~0.4 s, which the MCU
 # seems to miss (the probe that kept the power on sent it ~1 s in); here at ~2 s and right before booti.
 # f133t= in the NOR boot's arguments: how long the kernel's read took (ms), when it ended (ms since the reset) and its

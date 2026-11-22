@@ -9,8 +9,8 @@
 # 10 s, so the Wi-Fi's driver and the daemons do not compete with its start for the one core and the slow flash. (It was
 # S99dash, last: the dash showed ~30 s after power-on.)
 # The watchdog policy: a reset of the board loses the Wi-Fi chip until power off and on (S03mcu then has the MCU cycle
-# the power: a second boot, the screen dark for a minute or two), so the hardware watchdog stays off (dash.conf
-# watchdog = 0) and a hung dash is caught here instead: its log (dash.conf's log, else /data/log/dash.log, a line at
+# the power: a second boot, the screen dark for a minute or two), so the dash does not take the hardware watchdog
+# (dash.conf watchdog = 0; the kernel feeds it, for a kernel that hangs) and a hung dash is caught here instead: its log (dash.conf's log, else /data/log/dash.log, a line at
 # least every 10 s) unchanged for over a minute while the card takes writes = hung: killed (TERM, then KILL) and so
 # restarted, the board and its Wi-Fi left as they are.
 D=/mnt/sd/dash O=/var/log/sd/dash.out S=/run/dash-supervise.pid
