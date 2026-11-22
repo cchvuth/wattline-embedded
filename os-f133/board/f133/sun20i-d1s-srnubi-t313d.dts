@@ -109,9 +109,29 @@
 };
 
 /*
+ * The CPU at 1296 MHz, not the 1008 of its data sheet: the core's rail is a fixed 0.9 V (nothing to raise or lower),
+ * and on this board a checked workload ran right from 1104 to 1392 MHz at 52 to 55 C, and hung the board at 1488.
+ * 1296 and not 1392: about one change to 1392 MHz in a thousand hung the board once it was up, and one start in
+ * eight when the kernel made the change during its own start, the panel and the rest coming up around it; 1296 MHz
+ * took 4000 changes without one. And no change at all while it starts: the SPL sets the 1296 MHz (U-Boot patch 0001),
+ * so the kernel finds its fastest operating point as the clock it runs on. Only while cool: from 80 C it runs at
+ * 1008 MHz again (the thermal zone below); cpufreq's scaling_max_freq lowers it by hand. The watchdog the boot loader
+ * starts stays on through the kernel (patches/linux 0011): a change that hangs the board resets it, and it comes up
+ * again by itself. No operating point at 1200 MHz: the clock framework makes that one from the peripherals' PLL,
+ * changing its 800 MHz output's divider.
+ */
+&opp_table_cpu {
+	opp-1296000000 {
+		opp-hz = /bits/ 64 <1296000000>;
+		opp-microvolt = <900000 900000 1100000>;
+	};
+};
+
+/*
  * Heat: the SoC's temperature sensor (the D1's THS: the driver's entry is patches/linux/0009, its node and thermal
- * zone as upstream has them since 6.8), calibrated from the efuse. At 85 C the CPU is held at 408 MHz (its other
- * operating point: cpufreq stays at 1008 MHz otherwise); at 110 C the system shuts down (forced after 10 s) and halts,
+ * zone as upstream has them since 6.8), calibrated from the efuse. From 80 C the CPU runs at its data sheet's 1008 MHz
+ * (to 75 C again before it goes back up), at 85 C it is held at 408 MHz (the cooling states: 0 is 1296 MHz, 1 is 1008,
+ * 2 is 408; the trips can be moved by hand in /sys/class/thermal); at 110 C the system shuts down (forced after 10 s) and halts,
  * the backlight off: nothing here can cut the power, and the MCU, no longer held, cycles it; a start still that hot
  * shuts down again.
  */
@@ -145,12 +165,22 @@
 
 			cooling-maps {
 				map0 {
+					trip = <&cpu_stock>;
+					cooling-device = <&cpu0 1 1>;
+				};
+				map1 {
 					trip = <&cpu_target>;
-					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+					cooling-device = <&cpu0 2 2>;
 				};
 			};
 
 			trips {
+				cpu_stock: cpu-stock {
+					temperature = <80000>;
+					hysteresis = <5000>;
+					type = "passive";
+				};
+
 				cpu_target: cpu-target {
 					temperature = <85000>;
 					hysteresis = <2000>;

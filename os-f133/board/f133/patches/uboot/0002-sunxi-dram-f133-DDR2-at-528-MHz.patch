@@ -6,7 +6,7 @@
  
 +/*
 + * DRAM_CLK and DRAM_ZQ are only in the ARM Kconfig; on RISC-V these are the values. SRNUBI T313D (F133): the stock
-+ * boot0's in-package DDR2, 528 MHz, ZQ 0x7b7bf9.
++ * boot0's in-package DDR2, 528 MHz, ZQ 0x7b7bf9 (the SPL's own set-up below runs it at 696 MHz).
 + */
 +
 +/* F133 diagnostics: the debug() lines go to the SPL's log, which the board code puts on the SD card */
@@ -183,7 +183,7 @@
  	.dram_mr2	= 0x18,
  	.dram_mr3	= 0,
  	.dram_tpr0	= 0x004a2195,
-@@ -1397,9 +1433,80 @@
+@@ -1397,9 +1433,96 @@
  	.dram_tpr12	= CONFIG_DRAM_SUNXI_TPR12,
  };
  
@@ -232,13 +232,23 @@
  {
 -	return init_DRAM(0, &para) * 1024UL * 1024;
 +#ifdef CONFIG_SPL_BUILD
-+	/* the stock sys_config [dram_para] (= xfel's f133 ddr_param); libdram writes what it finds back into it */
-+	u32 p[32] = {
++	/*
++	 * The stock sys_config [dram_para] (= xfel's f133 ddr_param), but its clock: 696 MHz, not 528 (a memory copy
++	 * 37 % faster; a scrolled frame of the dash 14 ms where it took 18). On this board a pattern test ran ten
++	 * minutes without a wrong word at 696, and at 720 the board did not start. The 528 again if the memory does
++	 * not come up at 696, and from the third start since the power came on (two resets in a row: the SPL's count
++	 * of its starts, the RTC's register 6). libdram writes what it finds back into p.
++	 */
++	static const u32 stock[32] = {
 +		528, 2, 0x007b7bf9, 0, 0x000000d2, 0, 0x00000e73, 0x02, 0, 0,
 +		0x00471992, 0x0131a10c, 0x00057041, 0xb4787896, 0, 0x48484848, 0x00000048, 0x1621121e,
 +		0, 0, 0, 0x00030010, 0x00000035, 0x34000000,
 +	};
++	u32 p[32], clk = readl(0x07090118) >= 3 ? 528 : 696;
 +	unsigned long mb;
++
++	memcpy(p, stock, sizeof(p));
++	p[0] = clk;
 +
 +	printf("F133: PSI %08x APB0 %08x DMA_BGR %08x MBUS %08x MBUS_GATES %08x before xfel's clocks\n",
 +	       readl(SUNXI_CCM_BASE + 0x510), readl(SUNXI_CCM_BASE + 0x520), readl(SUNXI_CCM_BASE + 0x70c),
@@ -250,6 +260,12 @@
 +	mb = aw_init_DRAM(0, p);
 +	printf("F133: libdram: %lu MiB at %lu ms, para1 %08x para2 %08x tpr13 %08x\n", mb, get_timer(0), p[4], p[5],
 +	       p[23]);
++	if (!mb && clk != 528) {
++		printf("F133: no DRAM at %u MHz: at 528\n", clk);
++		memcpy(p, stock, sizeof(p));
++		mb = aw_init_DRAM(0, p);
++		printf("F133: libdram: %lu MiB at %lu ms\n", mb, get_timer(0));
++	}
 +	if (!mb) {
 +		f133_log_save();
 +		/* the C port as well, after the same clocks (its scan fails fast; its fixed layout hung on DRAM) */

@@ -144,8 +144,13 @@ reset) and its clock.
   the MCU cycle the power, at most three times in a row.
 - **Display.** The dash draws in strips and the 2D engine's rotation unit turns them into the portrait framebuffer
   (`package/g2drot`). Without the module, the CPU rotates them.
+- **Clocks.** The SPL sets the CPU to 1296 MHz (the data sheet's rate is 1008) and the memory to 696 MHz (the stock
+  firmware's is 528): measured on this board, with the reasons and the limits found, in the device tree
+  (`board/f133/sun20i-d1s-srnubi-t313d.dts`) and U-Boot patches 0001 and 0002. The memory goes back to 528 MHz if it
+  does not come up, and from the third start in a row without a power cycle. A hang resets the board: the watchdog
+  U-Boot starts stays on, fed by the kernel.
 - **Heat.** The SoC's temperature sensor is read by the kernel (`/sys/class/thermal/thermal_zone0/temp`, logged with
-  the boot's state): at 85 °C the CPU is held at 408 MHz instead of 1008. At 110 °C the system shuts down and halts with
+  the boot's state): from 80 °C the CPU runs at 1008 MHz, at 85 °C it is held at 408. At 110 °C the system shuts down and halts with
   the backlight off; the MCU, no longer held, then cycles the power, and a start that is still that hot shuts down
   again.
 - **Memory.** Android Auto's video decoder uses 16 MiB of CMA for its pictures and the framebuffer. The decoder keeps

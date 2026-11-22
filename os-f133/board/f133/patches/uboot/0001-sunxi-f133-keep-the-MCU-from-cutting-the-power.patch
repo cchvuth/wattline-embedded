@@ -9,7 +9,7 @@
  
  #ifdef CONFIG_RISCV
  int board_init(void)
-@@ -178,6 +180,463 @@
+@@ -178,6 +180,483 @@
  	return sunxi_get_boot_device();
  }
  
@@ -92,6 +92,26 @@
 +	clrsetbits_le32(F133_REG(0x02000098), 0xf << 20, 0x1 << 20);	/* PD21 output */
 +	clrbits_le32(F133_REG(0x02000130), 1 << 15);			/* PG_DAT */
 +	clrsetbits_le32(F133_REG(0x02000124), 0xf << 28, 0x1 << 28);	/* PG15 output */
++}
++
++/*
++ * The CPU on 1296 MHz from the SPL's start, not the 1008 of its data sheet, which the BROM leaves (the measurements:
++ * the Linux device tree, os-f133's): so that Linux finds its fastest operating point set and changes nothing while
++ * it starts, when a change to a rate this high did not always go well. As the changes that never failed were made:
++ * the CPU on the 24 MHz crystal meanwhile, the PLL's output off for the new rate, and 2 ms for each step.
++ */
++static void f133_cpu_clock(void)
++{
++	u32 mux = readl(F133_REG(0x02001d00));
++
++	writel(mux & ~(7 << 24), F133_REG(0x02001d00));
++	udelay(100);
++	writel(0xf2000000 | (54 - 1) << 8, F133_REG(0x02001000));	/* 54 x 24 MHz */
++	udelay(2000);
++	setbits_le32(F133_REG(0x02001000), BIT(27));
++	udelay(2000);
++	writel(mux, F133_REG(0x02001d00));
++	udelay(100);
 +}
 +
 +/*
@@ -473,7 +493,7 @@
  #define CSR_MXSTATUS		0x7c0
  #define CSR_MHCR		0x7c1
  #define CSR_MCOR		0x7c2
-@@ -187,18 +646,41 @@
+@@ -187,18 +666,44 @@
  {
  	int ret;
  	struct udevice *dev;
@@ -500,6 +520,9 @@
 +	       readl(F133_REG(0x02001000)), readl(F133_REG(0x02001010)), readl(F133_REG(0x02001020)),
 +	       readl(F133_REG(0x02001540)), readl(F133_REG(0x02001800)), readl(F133_REG(0x0200180c)),
 +	       readl(F133_REG(0x02001d00)));
++	f133_cpu_clock();
++	printf("F133: the CPU at 1296 MHz: PLL_CPU %08x RISCV_CLK %08x at %lu ms\n", readl(F133_REG(0x02001000)),
++	       readl(F133_REG(0x02001d00)), get_timer(0));
 +	/* a first save before the DRAM init: proves the card takes the log, whatever happens next */
 +	f133_log_save();
 +
@@ -517,7 +540,7 @@
  
  	/* Initialize extension CSRs. */
  	printf("mxstatus=0x%08lx mhcr=0x%08lx mcor=0x%08lx mhint=0x%08lx\n",
-@@ -207,15 +689,40 @@
+@@ -207,15 +712,40 @@
  	       csr_read(CSR_MCOR),
  	       csr_read(CSR_MHINT));
  
