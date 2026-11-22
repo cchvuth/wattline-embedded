@@ -22,6 +22,7 @@ BLE_DL := 1
 # cycle (S03mcu: a warm reboot loses the Wi-Fi chip).
 DEVICE_DEFS := -DDASH_PHONE_LAYOUT=1 -DPJ_PANEL_H=720 -DPJ_RGN_X=0 -DPJ_RGN_Y=180 -DPJ_RGN_W=960 -DPJ_RGN_H=540 \
   -DDASH_VSYNC=1 -DDASH_FB_ROT=1 -DDASH_FB_ROWS=120 -DDASH_NO_RECORD=1 \
-  -DDASH_REBOOT='"/etc/init.d/S03mcu"' -DDASH_REBOOT_ARG='"power-cycle"'
+  -DDASH_REBOOT='"/etc/init.d/S03mcu"' -DDASH_REBOOT_ARG='"power-cycle"' \
+  -DDASH_RESTART_NOTE='"The screen goes dark for about a minute (its power cut and restored), then starts again; settings and pairings stay"'
 UI_GEN := ui/gen/f133
 BUILD := build/f133

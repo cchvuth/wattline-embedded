@@ -148,6 +148,10 @@ void app_on_settings(int what, const dash_settings_t *st, void *ctx) {
     log_msg("settings: restart for the update");
     settings_reboot();
     break;
+  case DASH_RESTART:       // Advanced, the Restart button (a second tap within 3 s)
+    log_msg("settings: restart");
+    settings_reboot();
+    break;
   case DASH_NOR_COPY:      // Advanced, built-in flash: the card install written there (status in /run/dash-nor.status)
     log_msg("settings: copy the card install to the built-in flash");
     settings_nor("copy");

@@ -3027,7 +3027,8 @@ typedef struct {
 	const char *again, *done; /* the second tap's asking and its answer (NULL: forgetting's) */
 } forget_t;
 static forget_t fg_cmdr = {NULL, "Forget Commander", 0, NULL, NULL}, fg_aa = {NULL, "Forget phones", 0, NULL, NULL},
-		fg_nor = {NULL, "Copy to flash", 0, "Tap again to copy", "Copying"};
+		fg_nor = {NULL, "Copy to flash", 0, "Tap again to copy", "Copying"},
+		fg_restart = {NULL, "Restart", 0, "Tap again to restart", "Restarting"};
 static void forget_label(forget_t *f, const char *t, uint32_t c)
 {
 	lv_obj_t *l = lv_obj_get_child(f->btn, -1);
@@ -3055,6 +3056,15 @@ static void forget_tap(lv_event_t *e)
 {
 	(void)e;
 	if (forget_second(&fg_cmdr)) save(DASH_CMDR_FORGET);
+}
+/* what a restart does, the device's own words (its profile: the F133's power is cut and restored by its MCU) */
+#ifndef DASH_RESTART_NOTE
+#define DASH_RESTART_NOTE "It starts again in under a minute; settings and pairings stay"
+#endif
+static void restart_tap(lv_event_t *e)
+{
+	(void)e;
+	if (forget_second(&fg_restart)) save(DASH_RESTART);
 }
 /* The time zones a tap steps through (POSIX TZ: no tzdata on the card); another, from dash.conf, shows as it is. */
 static const char *const tz_name[] = {"UTC", "UK / Ireland", "Central Europe", "Eastern Europe", "US Eastern", "US Central",
@@ -3825,6 +3835,9 @@ static void settings_build(void)
 	lv_label_set_long_mode(set_nor_l, LV_LABEL_LONG_MODE_WRAP);
 	fg_nor.btn = button_row(c, set_nor_l, "Copy to flash", nor_tap, aw);
 	nor_refresh(true);
+	lv_obj_set_style_margin_top(group_title(c, "Restart"), ri(PB(14)), 0);
+	lv_obj_t *rw = text_block(c, "Restart the screen", DASH_RESTART_NOTE);
+	fg_restart.btn = button_row(c, rw, "Restart", restart_tap, aw);
 	tab_select(set_tab);
 	show(settings, false);
 }
@@ -4207,7 +4220,7 @@ void dash_ui_show(int v)
 		lv_obj_set_state(set_sw[12], LV_STATE_CHECKED, ST.show_fps);
 		/* the units as shown now, until switched (panda.dart's toggles) */
 		units_sw(&S);
-		forget_reset(&fg_cmdr, true), forget_reset(&fg_aa, true), forget_reset(&fg_nor, true);
+		forget_reset(&fg_cmdr, true), forget_reset(&fg_aa, true), forget_reset(&fg_nor, true), forget_reset(&fg_restart, true);
 		for (int i = 0; i < 6; i++) { /* the chosen car filled, as a selected chip */
 			fill(set_car_btn[i], i == ST.car ? 0xFF4A4458u : 0x00000000u);
 			border(set_car_btn[i], i == ST.car ? 0xFFD0BCFFu : W70, PB(1));
@@ -4676,7 +4689,7 @@ static void set_touch(const dash_state_t *s)
 		set_text(set_bt_line, "%s", s->bt_line);
 		if (set_wifi_line) set_text(set_wifi_line, "%s", s->wifi_line);
 		/* a second tap's window over: the label again */
-		forget_reset(&fg_cmdr, false), forget_reset(&fg_aa, false), forget_reset(&fg_nor, false);
+		forget_reset(&fg_cmdr, false), forget_reset(&fg_aa, false), forget_reset(&fg_nor, false), forget_reset(&fg_restart, false);
 		if (set_guard && lv_obj_is_clickable(set_guard) && !FRESH(set_back_at, 500)) lv_obj_set_clickable(set_guard, false);
 		net_delete_reset(false);
 		bool join_over = joining[0] && lv_tick_elaps(joining_at) >= 20000; /* a join that did not take: Connect again */

@@ -63,7 +63,8 @@ enum { DASH_SETTINGS_SAVE, DASH_CMDR_APPROVE, DASH_CMDR_FORGET, DASH_PAIR_START,
        DASH_AA_START, DASH_AA_STOP /* the on-screen button: bring wireless Android Auto up / tear it down */,
        DASH_OTA_CHECK, DASH_OTA_INSTALL, DASH_OTA_RESTART /* Advanced: software update (dash-update check / auto / reboot) */,
        DASH_AA_FORGET /* Advanced: forget the phones paired for Android Auto (dash-aa forget) */,
-       DASH_NOR_COPY /* Advanced: a card install copied to the built-in flash (dash-nor copy: the F133 screen) */ };
+       DASH_NOR_COPY /* Advanced: a card install copied to the built-in flash (dash-nor copy: the F133 screen) */,
+       DASH_RESTART /* Advanced: restart the screen (the device's reboot: the F133's power cycle) */ };
 typedef void (*dash_settings_cb)(int what, const dash_settings_t *s, void *ctx);
 void dash_ui_set_settings_cb(dash_settings_cb cb, void *ctx);
 void dash_ui_settings(const dash_settings_t *s); /* the saved values, as the screen should show them */

@@ -302,7 +302,7 @@ int main(int argc, char **argv)
 		}
 		/* the long pages scrolled to their ends (the bar shows where) */
 		static const struct { int tab; const char *last, *name; } ends[] = {
-			{2, "Time zone", "touch-settings-display-end"}, {4, "Check for updates", "touch-settings-advanced-end"}};
+			{2, "Time zone", "touch-settings-display-end"}, {4, "Restart the screen", "touch-settings-advanced-end"}};
 		for (int k = 0; k < 2; k++) {
 			dash_ui_settings_tab(ends[k].tab);
 			lv_obj_t *l = find_ui_label(ends[k].last);
