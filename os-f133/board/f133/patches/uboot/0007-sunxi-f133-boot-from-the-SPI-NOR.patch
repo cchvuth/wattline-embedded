@@ -235,7 +235,7 @@
 @@ -650,9 +854,11 @@
  	u32 starts = readl(F133_REG(0x07090118)) + 1;
  
- 	f133_backlight_on();
+ 	f133_panel_pins();
 +	f133_nor_pins();
  	writel(starts, F133_REG(0x07090118));
  	printf("F133: start %u; caches as the BROM left them: mxstatus %08lx mhcr %08lx mcor %08lx\n", starts,

@@ -83,14 +83,14 @@
 +}
 +
 +/*
-+ * The backlight on (stock sys_config [lcd0]: lcd_reset PD21, lcd_bl_en PG15, driven high): with no console wired
-+ * out, a lit screen is the sign the SPL runs; U-Boot and Linux blink it at their stages.
++ * The panel's pins (stock sys_config [lcd0]: lcd_reset PD21 driven high, lcd_bl_en PG15): the backlight held off,
++ * until Linux has the boot picture up (lit from here, it showed an empty panel); a boot that fails blinks it.
 + */
-+static void f133_backlight_on(void)
++static void f133_panel_pins(void)
 +{
 +	setbits_le32(F133_REG(0x020000a0), 1 << 21);			/* PD_DAT */
 +	clrsetbits_le32(F133_REG(0x02000098), 0xf << 20, 0x1 << 20);	/* PD21 output */
-+	setbits_le32(F133_REG(0x02000130), 1 << 15);			/* PG_DAT */
++	clrbits_le32(F133_REG(0x02000130), 1 << 15);			/* PG_DAT */
 +	clrsetbits_le32(F133_REG(0x02000124), 0xf << 28, 0x1 << 28);	/* PG15 output */
 +}
 +
@@ -480,7 +480,7 @@
 +	/* RTC general-purpose register 6 keeps its value over a reset: counts the SPL's starts (a watchdog loop shows) */
 +	u32 starts = readl(F133_REG(0x07090118)) + 1;
  
-+	f133_backlight_on();
++	f133_panel_pins();
 +	writel(starts, F133_REG(0x07090118));
 +	printf("F133: start %u; caches as the BROM left them: mxstatus %08lx mhcr %08lx mcor %08lx\n", starts,
 +	       csr_read(CSR_MXSTATUS), csr_read(CSR_MHCR), csr_read(CSR_MCOR));
