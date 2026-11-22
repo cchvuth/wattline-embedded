@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Embeds the Roboto faces the app's text uses (ui/fonts, Apache-2.0) as C arrays for tiny_ttf: ui/gen/roboto.c
 
-Each face cut to what the dash can show (fontTools' subsetter: pip install fonttools): Latin with its extensions,
+Each face cut to what the dash can show (fontTools' subsetter: pip install fonttools): Latin with its extensions (Vietnamese and the
+combining accents included),
 Greek, Cyrillic, punctuation, currency, arrows, maths and shapes; Wi-Fi names and the car's texts in other scripts
 were never in Roboto. Outlines, kerning and the names (the licence) as they are; no hinting (tiny_ttf ignores it).
 A third of each face, 115 KiB of the F133's flash in all."""
@@ -9,7 +10,7 @@ import io
 import os
 import sys
 from fontTools import subset
-KEEP = ('U+0020-007E,U+00A0-024F,U+0370-03FF,U+0400-04FF,U+2000-206F,U+20A0-20CF,U+2100-218F,U+2190-21FF,'
+KEEP = ('U+0020-007E,U+00A0-036F,U+0370-03FF,U+1E00-1EFF,U+0400-04FF,U+2000-206F,U+20A0-20CF,U+2100-218F,U+2190-21FF,'
         'U+2200-22FF,U+25A0-25FF,U+FFFD')
 here = os.path.dirname(os.path.abspath(__file__))
 fonts, out = os.path.join(here, '..', 'fonts'), os.path.join(here, '..', 'gen', 'roboto.c')
