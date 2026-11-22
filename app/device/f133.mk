@@ -9,6 +9,10 @@ DEVICE_CPU := -mcpu=thead-c906
 # The Commander's Bluetooth session (GDBus to BlueZ, the AIC8800's own Bluetooth): the buttons' actions need it, as on
 # the T113 (Bluetooth stays linked to the Commander beside Android Auto, whose Bluetooth is the power MCU's)
 CMDR ?= 1
+# Its session built as a plugin (libdashble.so, installed beside the dash) that the dash loads on a thread once the system bus
+# is there, not linked in: GLib and GIO (~4 MB) read and relocated before main() were 0.9 s of the 1.9 s from the
+# dash's start to its first frame at boot, for a session that cannot start before dbus-daemon, seconds later
+BLE_DL := 1
 # The phone app's layouts; the canvas and the Android Auto picture (project_region.h: the left half's lower 3/4, as
 # the receiver's build has it); each frame from the panel's vertical blank, rotated into the framebuffer by the G2D's
 # rotation unit (the OS's g2drot module), else by the CPU in tiles (DASH_FB_ROT: port/linux/fb_rot.c; LVGL's own rotate

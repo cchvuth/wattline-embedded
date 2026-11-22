@@ -1,0 +1,5 @@
+/* libdashble.so's exports: what port/linux/ble_dl.c looks up; the rest stays inside it */
+{
+  global: ble_start; ble_stop; ble_fd; ble_post; ble_take; ble_state;
+  local: *;
+};

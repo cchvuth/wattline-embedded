@@ -20,6 +20,7 @@ endef
 
 define DASHAPP_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/build/f133/arm-app-cmdr/dash.stripped $(TARGET_DIR)/usr/lib/dash/dash
+	$(INSTALL) -D -m 0755 $(@D)/build/f133/arm-app-cmdr/libdashble.so.stripped $(TARGET_DIR)/usr/lib/dash/libdashble.so
 endef
 
 $(eval $(generic-package))

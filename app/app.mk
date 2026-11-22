@@ -4,6 +4,7 @@
 #         drive recorded and replayed through fake_panda.py --replay (test/test_record.py)
 #   arm   build/arm-app/dash (+ .stripped) for the Dash
 #   CMDR=1 (any target) adds the Commander session (port/linux/ble_bluez.c, GDBus): build/{app-host,arm-app}-cmdr/
+#     (the profile's BLE_DL=1: that session in libdashble.so beside the dash, port/linux/ble_dl.c loads it)
 #   DEVICE=f133 (any target): the device profile device/$(DEVICE).mk (t113 by default), its outputs under its BUILD
 #   (build/f133/...); arm is then the F133's (RISC-V) build. docs/DEVICES.md
 DEVICE ?= t113
@@ -26,6 +27,12 @@ CMDR_DEFS := -DDASH_CMDR=1 -DAES256=1
 HA := $(BUILD)/app-host-cmdr
 AA := $(BUILD)/arm-app-cmdr
 endif
+ifeq ($(CMDR)$(BLE_DL),11)   # the profile's: the session's GLib in libdashble.so beside the dash, loaded once the system
+# bus is there (port/linux/ble_dl.c instead of ble_bluez.c). It holds its own copy of what ble_bluez.c needs: none of
+# those files has state that is written (the dash keeps cmdr.c for cmdr_cfg_default, pb.c and cmdr_msg.c for itself)
+BLE_SO_SRC := port/linux/ble_bluez.c core/cmdr.c core/sec1.c core/pb.c core/cmdr_msg.c third_party/monocypher.c third_party/aes.c
+APP_SRC := $(patsubst port/linux/ble_bluez.c,port/linux/ble_dl.c,$(APP_SRC))
+endif
 
 build/signals_gen.h: tools/gen_signals.py tools/extra_signals.json $(wildcard ../wattline/lib/signals.dart ../wattline/lib/panda.dart)
 	python3 -I tools/gen_signals.py ../wattline build
@@ -45,8 +52,12 @@ HOST_GIO_L = $(if $(CMDR_DEFS),$(shell pkg-config --libs gio-2.0))
 $(HA)/%.o: %.c $(APP_H)
 	@mkdir -p $(dir $@); $(HOST_CC) $(HOST_CFLAGS) $(DEV_FLAGS) $(WARN) $(SAN) $(CMDR_DEFS) $(HOST_GIO_C) -Ibuild -c $< -o $@
 $(HA)/dash-host: $(patsubst %.c,$(HA)/%.o,app/main_host.c $(APP_SRC)) $(patsubst %.c,$(BUILD)/host/%.o,$(UI_SRC) $(LVGL_SRC))
-	$(HOST_CC) $(SAN) -o $@ $^ -lm $(HOST_GIO_L)
-host: $(HA)/dash-host
+	$(HOST_CC) $(SAN) -o $@ $^ -lm $(if $(BLE_SO_SRC),-lpthread -ldl,$(HOST_GIO_L))
+$(HA)/so/%.o: %.c $(APP_H)
+	@mkdir -p $(dir $@); $(HOST_CC) $(HOST_CFLAGS) $(DEV_FLAGS) $(WARN) $(SAN) $(CMDR_DEFS) $(HOST_GIO_C) -Ibuild -fPIC -c $< -o $@
+$(HA)/libdashble.so: $(patsubst %.c,$(HA)/so/%.o,$(BLE_SO_SRC))
+	$(HOST_CC) $(SAN) -shared -o $@ $^ $(HOST_GIO_L)
+host: $(HA)/dash-host $(if $(BLE_SO_SRC),$(HA)/libdashble.so)
 test: host
 	python3 -I test/test_app_bench.py $(HA)/dash-host
 	$(if $(findstring DASH_NO_RECORD=1,$(DEVICE_DEFS)),@echo "test_record: skipped (this profile records no drives)",python3 -I test/test_record.py $(HA)/dash-host)
@@ -66,8 +77,15 @@ ARM_GIO_L = $(if $(CMDR_DEFS),$(shell $(ARM_PKG_CONFIG) --libs gio-2.0))
 $(AA)/%.o: %.c $(APP_H)
 	@mkdir -p $(dir $@); $(ARM_CC) $(ARM_CFLAGS) $(DEVICE_CPU) $(DEV_FLAGS) $(WARN) $(CMDR_DEFS) $(ARM_GIO_C) -Ibuild -c $< -o $@
 $(AA)/dash: $(patsubst %.c,$(AA)/%.o,app/main.c port/linux/fb_rot.c $(APP_SRC)) $(patsubst %.c,$(BUILD)/arm-ui/%.o,$(UI_SRC) $(LVGL_SRC))
-	$(ARM_CC) -o $@ $^ $(ARM_LIBS) $(ARM_GIO_L)
+	$(ARM_CC) -o $@ $^ $(ARM_LIBS) $(if $(BLE_SO_SRC),,$(ARM_GIO_L))
 	$(ARM_CC:gcc=strip) -o $@.stripped $@
-arm: $(AA)/dash
+# the plugin: exports ble_dl.c's six calls only (port/linux/libdashble.map), needs nothing of the dash (-z defs) and
+# calls its own functions, never the dash's of the same name (-Bsymbolic: ble_stop's ble_post; this PIE exports some)
+$(AA)/so/%.o: %.c $(APP_H)
+	@mkdir -p $(dir $@); $(ARM_CC) $(ARM_CFLAGS) $(DEVICE_CPU) $(DEV_FLAGS) $(WARN) $(CMDR_DEFS) $(ARM_GIO_C) -Ibuild -fPIC -c $< -o $@
+$(AA)/libdashble.so: $(patsubst %.c,$(AA)/so/%.o,$(BLE_SO_SRC)) port/linux/libdashble.map
+	$(ARM_CC) -shared -o $@ $(filter %.o,$^) -Wl,--version-script=port/linux/libdashble.map -Wl,-z,defs -Wl,-Bsymbolic $(ARM_GIO_L)
+	$(ARM_CC:gcc=strip) -o $@.stripped $@
+arm: $(AA)/dash $(if $(BLE_SO_SRC),$(AA)/libdashble.so)
 
 .PHONY: host test arm

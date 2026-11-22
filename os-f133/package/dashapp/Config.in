@@ -3,4 +3,5 @@ config BR2_PACKAGE_DASHAPP
 	select BR2_PACKAGE_LIBGLIB2
 	help
 	  The dash program for this screen: the app checkout (mounted at /native) built with its F133 profile
-	  (app/device/f133.mk) and the Commander's Bluetooth link. Installs /usr/lib/dash/dash; S05dash runs it.
+	  (app/device/f133.mk) and the Commander's Bluetooth link. Installs /usr/lib/dash/dash and, beside it, the
+	  Bluetooth session it loads once D-Bus is up (libdashble.so); S05dash runs it.

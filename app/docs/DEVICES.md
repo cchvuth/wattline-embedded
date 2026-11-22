@@ -22,6 +22,7 @@ A difference neither can express becomes a profile define or a dash.conf key, ne
 | Vertical blank wait (`DASH_VSYNC`) | off | on (not after a frame whose flushes ran past half a scan) |
 | Flush (`DASH_FB_ROT`, `DASH_FB_ROWS`) | LVGL's fbdev driver (its rotation), 240-row buffer | `port/linux/fb_rot.c`: the G2D's rotation unit when the OS has `/dev/g2drot`, else the CPU in tiles; 120-row buffers (two from the module's CMA with the unit) |
 | Restart (`DASH_REBOOT`, `DASH_REBOOT_ARG`) | `/sbin/reboot` | `/etc/init.d/S03mcu power-cycle` (a warm reboot loses its Wi-Fi chip) |
+| Commander session (`CMDR`, `BLE_DL`) | with `CMDR=1`, linked into the dash | on; `libdashble.so` beside the dash (GLib in it alone), loaded on a thread once the system bus is there (`port/linux/ble_dl.c`): the dash starts without reading GLib |
 | Build outputs (`BUILD`) | `build/` | `build/f133/` |
 
 The fonts (`ui/gen/roboto.c`) are shared. The defines reach every build of that device, the host's too, so the
@@ -44,7 +45,8 @@ F133:
   make -f app.mk -j8 DEVICE=f133 ARM_CC=<buildroot>/host/bin/riscv64-buildroot-linux-gnu-gcc CMDR=1 arm
   ```
 
-  → `build/f133/arm-app-cmdr/dash.stripped` (`CMDR=0`: `build/f133/arm-app/`)
+  → `build/f133/arm-app-cmdr/dash.stripped` and `libdashble.so.stripped`, installed side by side (`CMDR=0`:
+  `build/f133/arm-app/`, the dash alone)
 - on the host: `make -f ui.mk shots DEVICE=f133` (`build/f133/shots`, 1920x720), `make -f app.mk test DEVICE=f133`
 
 The icons, when the app's glyphs, car pictures or lights change: `ui/assets/export.sh` and `ui/assets/aa_icon.py`
