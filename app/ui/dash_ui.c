@@ -3130,7 +3130,7 @@ static void fps_text_cb(lv_observer_t *o, lv_subject_t *subject)
 	const lv_sysmon_perf_info_t *p = lv_subject_get_pointer(subject);
 	char t[160] = "CPU ";
 	if (fps_mc != LONG_MIN) {
-		fps_num(t, sizeof t, lroundf(shown_deg(fps_mc / 1000.0f)), S.fahrenheit ? 3 : 2); /* (up to 99 C, 199 F) */
+		fps_num(t, sizeof t, lroundf(shown_deg(fps_mc / 1000.0f)), S.fahrenheit ? 3 : 2); /* (2 places: up to 99 C) */
 		snprintf(t + strlen(t), sizeof t - strlen(t), " \xc2\xb0%c, ", S.fahrenheit ? 'F' : 'C');
 	}
 	fps_num(t, sizeof t, p->calculated.cpu, 3);
@@ -3139,7 +3139,7 @@ static void fps_text_cb(lv_observer_t *o, lv_subject_t *subject)
 	snprintf(t + strlen(t), sizeof t - strlen(t), " FPS, ");
 	fps_num(t, sizeof t, p->calculated.render_avg_time + p->calculated.flush_avg_time, 3);
 	snprintf(t + strlen(t), sizeof t - strlen(t), " ms (");
-	fps_num(t, sizeof t, p->calculated.render_avg_time, 2); /* (a rarer one of 100 ms or more pushes the rest along) */
+	fps_num(t, sizeof t, p->calculated.render_avg_time, 2); /* (a rare 100 ms or more: the row wraps for that second) */
 	snprintf(t + strlen(t), sizeof t - strlen(t), " | ");
 	fps_num(t, sizeof t, p->calculated.flush_avg_time, 2);
 	snprintf(t + strlen(t), sizeof t - strlen(t), ")");
