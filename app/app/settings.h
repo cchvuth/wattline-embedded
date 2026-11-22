@@ -1,7 +1,7 @@
 // The settings screen's values, kept on /data (R3's writable mount) when there is one, else in memory only (the Mac):
 //   <root>/settings.conf        minor_figures, clock_24h, brightness_pct, follow_car, ssh, record, car, sparse,
 //                               wifi_first, tz, panda_host, panda_port, ota_auto, aa_low_res,
-//                               unit_miles, unit_f, unit_psi (-1 untouched);
+//                               unit_miles, unit_f, unit_psi (-1 untouched), show_fps;
 //                               the phone layout's (the F133's), written once moved off their defaults: basic, cards,
 //                               split_card, ring_page   (key = value)
 //   <root>/tyres                the last tyre pressures, for the next start

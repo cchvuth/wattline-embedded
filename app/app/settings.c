@@ -134,6 +134,7 @@ void settings_load(dash_settings_t *st, const conf_t *cf) {
         else if (!strcmp(k, "wifi_first")) st->wifi_first = v;
         else if (!strcmp(k, "ota_auto")) st->ota_auto = v;   // S99ota reads it from the file too
         else if (!strcmp(k, "aa_low_res")) st->aa_low_res = v;   // aa reads it from the file at each connection
+        else if (!strcmp(k, "show_fps")) st->show_fps = v;
         else if (!strcmp(k, "unit_miles")) st->unit_miles = v < 0 ? -1 : !!v;
         else if (!strcmp(k, "unit_f")) st->unit_f = v < 0 ? -1 : !!v;
         else if (!strcmp(k, "unit_psi")) st->unit_psi = v < 0 ? -1 : !!v;
@@ -238,11 +239,11 @@ int settings_save(dash_settings_t *st) {
   snprintf(text, sizeof text,
            "minor_figures = %d\nclock_24h = %d\nbrightness_pct = %d\nfollow_car = %d\nfollow_offset = %d\nssh = %d\nrecord = %d\n"
            "car = %s\nsparse = %d\nwifi_first = %d\ntz = %s\npanda_host = %s\npanda_port = %d\nota_auto = %d\naa_low_res = %d\n"
-           "unit_miles = %d\nunit_f = %d\nunit_psi = %d\n",
+           "unit_miles = %d\nunit_f = %d\nunit_psi = %d\nshow_fps = %d\n",
            now.minor_figures, !now.hour12, now.brightness_pct, now.follow_car, now.follow_offset, now.dev_ssh, now.record,
            kCars[now.car >= 0 && now.car < CAR_COUNT ? now.car : CAR_FALLBACK].id, now.sparse, now.wifi_first,
            strchr(now.tz, '\n') ? "UTC0" : now.tz, strchr(now.panda_host, '\n') ? "192.168.4.1" : now.panda_host,
-           now.panda_port, now.ota_auto, now.aa_low_res, now.unit_miles, now.unit_f, now.unit_psi);
+           now.panda_port, now.ota_auto, now.aa_low_res, now.unit_miles, now.unit_f, now.unit_psi, now.show_fps);
   if (now.basic || memcmp(now.cards, kCards, sizeof kCards)) {   // the phone layout's, once off its full layout (the Dash
     size_t k = strlen(text);                                      // never moves them: its file as before)
     snprintf(text + k, sizeof text - k, "basic = %d\ncards = %d, %d, %d, %d\n", now.basic, now.cards[0], now.cards[1],

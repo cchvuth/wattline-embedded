@@ -41,6 +41,7 @@ typedef struct {
 	bool wifi_first;          /* Bluetooth waits for the WiFi stream, no time limit */
 	bool ota_auto;            /* automatic updates: with internet, download + verify + arm for the next start */
 	bool aa_low_res;          /* Android Auto at 480p, scaled up: less for the phone and the WiFi (aa reads the file) */
+	bool show_fps;            /* the frames a second (and the CPU's share, a frame's ms) in the screen's bottom right corner */
 	int unit_miles, unit_f, unit_psi; /* the owner's units, 1 / 0 once switched; -1: as before (the car's speed unit, °F with mph, psi) */
 	char tz[64];              /* POSIX TZ for the clocks (arrival, charge done) */
 	char tz_conf[64];         /* dash.conf's (the owner's own, kept in the time zone button's cycle); read only */

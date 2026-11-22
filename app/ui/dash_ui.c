@@ -1203,6 +1203,7 @@ static void link_make(typeof(link_w) *l)
 	l->stat = label(l->box, FS(BOLD, 12, UI_S_LINK), WHITE);
 }
 
+static void fps_show(void);
 void dash_ui_init(lv_obj_t *scr)
 {
 	unlink(PJ_VISIBLE); /* a restarted UI starts on the dash, so no touches go to a phone until it shows the picture */
@@ -1224,11 +1225,7 @@ void dash_ui_init(lv_obj_t *scr)
 	G.card_w = PN(154);
 	G.cab = ui_car_pics[0].car->header.h / px(236);
 
-#if LV_USE_PERF_MONITOR
-	/* LVGL's fps / CPU overlay: off unless DASH_PERF=1 (performance checks) */
-	const char *perf = getenv("DASH_PERF");
-	if (!perf || strcmp(perf, "1")) lv_sysmon_hide_performance(disp);
-#endif
+	fps_show(); /* (LVGL shows its counter by itself) */
 	lv_obj_set_style_bg_color(scr, rgb(BLACK), 0);
 	lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 	lv_obj_set_scrollable(scr, false);
@@ -2552,7 +2549,7 @@ static char shown_nearby[DASH_NEARBY][33];     /* the Nearby rows as drawn (a ta
 static lv_obj_t *tip, *snack, *snack_wheel, *snack_text;
 static lv_obj_t *project, *project_video, *pj_hint, *pj_gear, *pj_bar, *pj_bar_fill, *pj_soc, *pj_cold, *pj_range,
 	*pj_belt, *pj_grip, *pj_info, *pj_exit;
-static lv_obj_t *panel, *panel_msg, *settings, *set_dlg, *set_status, *set_step, *set_wheel, *set_sw[12], *set_car_btn[6], *set_slider, *set_bl_note, *set_offset, *set_offset_note, *net_list, *near_list, *net_edit, *net_ta[2],
+static lv_obj_t *panel, *panel_msg, *settings, *set_dlg, *set_status, *set_step, *set_wheel, *set_sw[13], *set_car_btn[6], *set_slider, *set_bl_note, *set_offset, *set_offset_note, *net_list, *near_list, *net_edit, *net_ta[2],
 	*net_kb, *net_err, *set_bt_line, *set_wifi_line, *set_net_line, *set_car_ask, *set_tz_btn, *set_host_l;
 enum { HOST_SLOT = -2 }; /* edit_slot: the editor holds the Panda's address, not a network */
 static lv_timer_t *tip_timer;
@@ -3100,6 +3097,16 @@ static void host_tap(lv_event_t *e)
 	dash_ui_show(DASH_VIEW_NETWORK);
 }
 static void slider_look(void);
+/* LVGL's own counter in the bottom right corner (frames a second, the CPU's share, a frame's render and flush ms): the
+ * Display settings' switch, or DASH_PERF=1 (performance checks). The corner is clear of the split's picture. */
+static void fps_show(void)
+{
+#if LV_USE_PERF_MONITOR
+	const char *perf = getenv("DASH_PERF");
+	if (ST.show_fps || (perf && !strcmp(perf, "1"))) lv_sysmon_show_performance(lv_display_get_default());
+	else lv_sysmon_hide_performance(lv_display_get_default());
+#endif
+}
 static void switch_changed(lv_event_t *e)
 {
 	int i = (intptr_t)lv_event_get_user_data(e);
@@ -3115,6 +3122,7 @@ static void switch_changed(lv_event_t *e)
 	else if (i == 9) ST.unit_miles = on;
 	else if (i == 10) ST.unit_f = on;
 	else if (i == 11) ST.unit_psi = on;
+	else if (i == 12) ST.show_fps = on, fps_show();
 	else ST.follow_car = on, slider_look();
 	save(DASH_SETTINGS_SAVE);
 }
@@ -3657,18 +3665,9 @@ static void settings_build(void)
 	lv_obj_set_width(cnote, ri(w - xp - pad));
 	lv_label_set_text(cnote, "The car's picture, its seats and belts, and a rear-motor car's ring (the pedals on the right) follow it.");
 	/* the display */
-	c = set_page[2]; /* one column, three groups: performance (AA's resolution), the dash's figures and clock, the screen's brightness */
+	c = set_page[2]; /* one column, three groups: the screen's brightness, performance (AA's resolution, the frame counter), the dash's figures and clock */
 	cw = w - xp - pad;
-	group_title(c, "Performance");
-	switch_note_row(c, "Android Auto at 480p", "Scaled up to fit: a softer picture, lighter on the WiFi and the phone. From the next connection", 8, cw);
-	lv_obj_set_style_margin_top(group_title(c, "Dash"), ri(PB(14)), 0);
-	switch_row(c, "Show 12 V, other power and cell imbalance", 0, cw);
-	switch_row(c, "Distance and speed in miles (mph)", 9, cw);
-	switch_row(c, "Temperature in °F", 10, cw);
-	switch_row(c, "Tyre pressure in psi", 11, cw);
-	switch_row(c, "24-hour clock", 1, cw); /* the zone's name on a button: a tap, the next */
-	set_tz_btn = button_row(c, text_block(c, "Time zone", "The arrival and charge clocks, summer time included"), "UTC", tz_tap, cw);
-	lv_obj_set_style_margin_top(group_title(c, "Screen"), ri(PB(14)), 0);
+	group_title(c, "Screen"); /* first: the one reached for most, and at night */
 	switch_row(c, "Follow car screen brightness", 3, cw);
 	lv_obj_t *br = box(c); /* "Brightness", and what it does now */
 	lv_obj_set_size(br, ri(cw), LV_SIZE_CONTENT);
@@ -3708,6 +3707,16 @@ static void settings_build(void)
 	lv_obj_set_adv_hittest(set_offset, true);
 	lv_obj_add_event_cb(set_offset, offset_changed, LV_EVENT_VALUE_CHANGED, NULL);
 	lv_obj_add_event_cb(set_offset, offset_changed, LV_EVENT_RELEASED, NULL);
+	lv_obj_set_style_margin_top(group_title(c, "Performance"), ri(PB(22)), 0); /* (clear of the slider's knob above) */
+	switch_note_row(c, "Android Auto at 480p", "Scaled up to fit: a softer picture, lighter on the WiFi and the phone. From the next connection", 8, cw);
+	switch_row(c, "Show frames per second", 12, cw);
+	lv_obj_set_style_margin_top(group_title(c, "Dash"), ri(PB(14)), 0);
+	switch_row(c, "Show 12 V, other power and cell imbalance", 0, cw);
+	switch_row(c, "Distance and speed in miles (mph)", 9, cw);
+	switch_row(c, "Temperature in °F", 10, cw);
+	switch_row(c, "Tyre pressure in psi", 11, cw);
+	switch_row(c, "24-hour clock", 1, cw); /* the zone's name on a button: a tap, the next */
+	set_tz_btn = button_row(c, text_block(c, "Time zone", "The arrival and charge clocks, summer time included"), "UTC", tz_tap, cw);
 	/* the networks, two columns across the page: the status and the saved ones; what is in range (settings_fill_nets) */
 	float nw = w - xp - pad, ncw = (nw - PB(32)) / 2;
 	c = set_page[3];
@@ -3989,6 +3998,7 @@ void dash_ui_settings(const dash_settings_t *s)
 	ST = *s;
 	for (int i = 0; i < DASH_NETS; i++) memset(ST.net[i].pass, 0, sizeof ST.net[i].pass); /* never kept for show */
 	ST.join[0] = 0; /* a one-off: never sent again with the next save */
+	fps_show();
 	if (view == DASH_VIEW_SETTINGS) dash_ui_show(DASH_VIEW_SETTINGS);
 }
 
@@ -4129,6 +4139,7 @@ void dash_ui_show(int v)
 		lv_obj_set_state(set_sw[6], LV_STATE_CHECKED, ST.wifi_first);
 		lv_obj_set_state(set_sw[7], LV_STATE_CHECKED, ST.ota_auto);
 		lv_obj_set_state(set_sw[8], LV_STATE_CHECKED, ST.aa_low_res);
+		lv_obj_set_state(set_sw[12], LV_STATE_CHECKED, ST.show_fps);
 		/* the units as shown now, until switched (panda.dart's toggles) */
 		units_sw(&S);
 		forget_reset(&fg_cmdr, true), forget_reset(&fg_aa, true), forget_reset(&fg_nor, true);
