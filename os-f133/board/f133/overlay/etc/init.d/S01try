@@ -1,8 +1,9 @@
 #!/bin/sh
 # A tried boot (try=kernel: S98try) that hangs before S98try can judge it: the hardware watchdog (16 s), kept fed from
 # here: 150 s at most until S98try starts judging (/run/try-judging), then 300 s more for its own wait and checks.
-# Its verdict ends that (/run/try-judged: the watchdog let go; a try given up gets its own power cycle there). No
-# verdict by then (a script on the way stuck, the system wedged): the feeding stops, and the reset starts the last
+# Its verdict ends that (/run/try-judged: the watchdog let go, and stopped until the next start: the kernel does not
+# take it back; a try given up gets its own power cycle there). No verdict by then (a script on the way stuck, the
+# system wedged): the feeding stops, and the reset starts the last
 # good files (U-Boot marked the try before starting it); as after a power cut, the try is made again at a later
 # start, 3 in all. Without this such a try stayed up,
 # dark, until the power went, and was tried again at the next two starts.

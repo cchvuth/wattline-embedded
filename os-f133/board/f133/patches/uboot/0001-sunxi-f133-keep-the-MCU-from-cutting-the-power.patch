@@ -9,7 +9,7 @@
  
  #ifdef CONFIG_RISCV
  int board_init(void)
-@@ -178,6 +180,483 @@
+@@ -178,6 +180,502 @@
  	return sunxi_get_boot_device();
  }
  
@@ -98,7 +98,8 @@
 + * The CPU on 1296 MHz from the SPL's start, not the 1008 of its data sheet, which the BROM leaves (the measurements:
 + * the Linux device tree, os-f133's): so that Linux finds its fastest operating point set and changes nothing while
 + * it starts, when a change to a rate this high did not always go well. As the changes that never failed were made:
-+ * the CPU on the 24 MHz crystal meanwhile, the PLL's output off for the new rate, and 2 ms for each step.
++ * the CPU on the 24 MHz crystal meanwhile, the PLL's output off for the new rate, and 2 ms for each step (longer
++ * than its lock takes; the AXI bus keeps its half of the CPU's clock: 648 MHz). Not on a start after a reset.
 + */
 +static void f133_cpu_clock(void)
 +{
@@ -396,6 +397,21 @@
 +}
 +
 +/*
++ * The watchdog (16 s, a reset of the system), started or started again: from the SPL's first lines, so that a start
++ * that hangs (the DRAM's init or the CPU at clocks above their data sheets') resets the board, and the start after it
++ * goes without them. U-Boot proper runs it on (riscv_wdt), then Linux.
++ */
++static void f133_watchdog(void)
++{
++	void __iomem *w = F133_REG(0x06011000);
++
++	writel((readl(w + 0x14) & ~0x3) | 0x1 | 0x16aa0000, w + 0x14);			/* CFG: reset the system */
++	writel((readl(w + 0x18) & ~(0xf << 4)) | (0xb << 4) | 0x16aa0000, w + 0x18);	/* MODE: 16 s */
++	writel(readl(w + 0x18) | BIT(0) | 0x16aa0000, w + 0x18);			/* on */
++	writel((0xa57 << 1) | 1, w + 0x10);						/* CTRL: restart */
++}
++
++/*
 + * bytes from buf onto the card from sector (in the logs' area), a few tries per block. *step, *err: the step that
 + * failed (0: none; 1..12 the bring-up, 13 no free area for the logs on this card) and its interrupt bits, or the last
 + * write error. Returns true if every block went; stops at the first block that fails all its tries, so a card that
@@ -414,6 +430,7 @@
 +	if (*step)
 +		return false;
 +	for (i = 0; i < (bytes + 511) / 512; i++) {
++		f133_watchdog();	/* (a slow card delays the start: it does not reset it) */
 +		for (t = 0; t < 4; t++) {
 +			e = f133_sd_block(sector + i, (u32 *)buf + i * 128, hc, true);
 +			if (!e)
@@ -437,6 +454,7 @@
 +{
 +	struct f133_log *l = F133_LOG_BUF;
 +
++	f133_watchdog();	/* (with no card too: the DRAM driver calls this between its two tries) */
 +	printf("F133: log save at %lu ms\n", get_timer(0));
 +	return f133_sd_save(F133_LOG_SECTOR, l, offsetof(struct f133_log, text) + l->len, &l->sd_step, &l->sd_err);
 +}
@@ -473,8 +491,9 @@
 +}
 +
 +/*
-+ * DRAM init failed: the log goes to the card, then the backlight flashes for good: fast (5 Hz) with the log saved,
-+ * slow (1 Hz) if the card took no log. The MCU hold goes out again every 10 s.
++ * DRAM init failed: the log goes to the card, then the backlight flashes: fast (5 Hz) with the log saved, slow (1 Hz)
++ * if the card took no log, until the watchdog resets the board (16 s; the start after it is at the stock clock, and
++ * its log is written over this one). The MCU hold goes out again every 10 s.
 + */
 +static void __noreturn f133_dram_failed(void)
 +{
@@ -493,7 +512,7 @@
  #define CSR_MXSTATUS		0x7c0
  #define CSR_MHCR		0x7c1
  #define CSR_MCOR		0x7c2
-@@ -187,18 +666,44 @@
+@@ -187,18 +685,46 @@
  {
  	int ret;
  	struct udevice *dev;
@@ -502,6 +521,7 @@
  
 +	f133_panel_pins();
 +	writel(starts, F133_REG(0x07090118));
++	f133_watchdog();
 +	printf("F133: start %u; caches as the BROM left them: mxstatus %08lx mhcr %08lx mcor %08lx\n", starts,
 +	       csr_read(CSR_MXSTATUS), csr_read(CSR_MHCR), csr_read(CSR_MCOR));
 +
@@ -520,8 +540,9 @@
 +	       readl(F133_REG(0x02001000)), readl(F133_REG(0x02001010)), readl(F133_REG(0x02001020)),
 +	       readl(F133_REG(0x02001540)), readl(F133_REG(0x02001800)), readl(F133_REG(0x0200180c)),
 +	       readl(F133_REG(0x02001d00)));
-+	f133_cpu_clock();
-+	printf("F133: the CPU at 1296 MHz: PLL_CPU %08x RISCV_CLK %08x at %lu ms\n", readl(F133_REG(0x02001000)),
++	if (starts < 2)		/* (a start after a reset: at the BROM's clock, as the DRAM at its stock one) */
++		f133_cpu_clock();
++	printf("F133: the CPU's clock: PLL_CPU %08x RISCV_CLK %08x at %lu ms\n", readl(F133_REG(0x02001000)),
 +	       readl(F133_REG(0x02001d00)), get_timer(0));
 +	/* a first save before the DRAM init: proves the card takes the log, whatever happens next */
 +	f133_log_save();
@@ -540,7 +561,7 @@
  
  	/* Initialize extension CSRs. */
  	printf("mxstatus=0x%08lx mhcr=0x%08lx mcor=0x%08lx mhint=0x%08lx\n",
-@@ -207,15 +712,40 @@
+@@ -207,15 +733,37 @@
  	       csr_read(CSR_MCOR),
  	       csr_read(CSR_MHINT));
  
@@ -563,23 +584,38 @@
  
  #ifdef CONFIG_SPL_BUILD
 +/*
-+ * Right before OpenSBI and U-Boot proper take over: the SPL's log again, then the watchdog U-Boot proper later runs
-+ * itself (riscv_wdt, 16 s, system reset), so a hang before that resets the board and the next SPL run finds their
-+ * logs. Armed after the save: a slow card delays the boot, it never lets the watchdog reset the board here.
++ * Right before OpenSBI and U-Boot proper take over: the SPL's log again, then the watchdog from its full time
++ * (U-Boot proper later runs it itself: riscv_wdt), so a hang before that resets the board and the next SPL run finds
++ * their logs.
 + */
 +void spl_board_prepare_for_boot(void)
 +{
 +	void __iomem *w = F133_REG(0x06011000);
 +
-+	printf("F133: watchdog %08x %08x before it is armed; on to OpenSBI and U-Boot proper at %lu ms\n",
++	printf("F133: watchdog %08x %08x; on to OpenSBI and U-Boot proper at %lu ms\n",
 +	       readl(w + 0x14), readl(w + 0x18), get_timer(0));
 +	f133_log_save();
-+	writel((readl(w + 0x14) & ~0x3) | 0x1 | 0x16aa0000, w + 0x14);			/* CFG: reset the system */
-+	writel((readl(w + 0x18) & ~(0xf << 4)) | (0xb << 4) | 0x16aa0000, w + 0x18);	/* MODE: 16 s */
-+	writel(readl(w + 0x18) | BIT(0) | 0x16aa0000, w + 0x18);			/* on */
-+	writel((0xa57 << 1) | 1, w + 0x10);						/* CTRL: restart */
++	f133_watchdog();
 +}
 +
  void spl_perform_fixups(struct spl_image_info *spl_image)
  {
  	struct ram_info info;
+@@ -612,6 +1160,17 @@
+ 
+ 	bluetooth_dt_fixup(blob);
+ 
++	/*
++	 * A start after a reset (the SPL's count of its starts): the SPL left the CPU at the BROM's 1008 MHz and the
++	 * memory at 528, and the kernel is not to raise the CPU's clock itself: its operating point above the data
++	 * sheet's goes (sun20i-d1s-srnubi-t313d.dts).
++	 */
++	if (readl(F133_REG(0x07090118)) >= 2) {
++		r = fdt_path_offset(blob, "/opp-table-cpu/opp-1296000000");
++		if (r >= 0)
++			fdt_del_node(blob, r);
++	}
++
+ #ifdef CONFIG_VIDEO_DT_SIMPLEFB
+ 	r = sunxi_simplefb_setup(blob);
+ 	if (r)

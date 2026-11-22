@@ -56,7 +56,11 @@ start)
 	(
 		k=0
 		while :; do
-			{ cat /proc/uptime; cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null; free; ip addr; ip route; iw dev; ps; } > /run/state.txt 2>&1
+			# (the clocks this start runs at: the SPL's count of its starts since the power came on, a start after a
+			# reset being at the stock ones; the CPU's and the memory's PLL registers, the CPU's clock as the kernel has it)
+			{ cat /proc/uptime; cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null
+			  echo "starts $(devmem 0x07090118 32) PLL_CPU $(devmem 0x02001000 32) PLL_DDR $(devmem 0x02001010 32) cpu $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) kHz"
+			  free; ip addr; ip route; iw dev; ps; } > /run/state.txt 2>&1
 			[ $k = 0 ] && cp /run/state.txt $L/state.txt
 			k=$(((k + 1) % 12))
 			for f in $L/dash.out $L/wpa.txt $L/wifi.txt $L/mcu.txt $L/dmesg.txt; do   # appended to (O_APPEND): emptied in place, the writer goes on

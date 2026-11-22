@@ -110,15 +110,20 @@
 
 /*
  * The CPU at 1296 MHz, not the 1008 of its data sheet: the core's rail is a fixed 0.9 V (nothing to raise or lower),
- * and on this board a checked workload ran right from 1104 to 1392 MHz at 52 to 55 C, and hung the board at 1488.
- * 1296 and not 1392: about one change to 1392 MHz in a thousand hung the board once it was up, and one start in
- * eight when the kernel made the change during its own start, the panel and the rest coming up around it; 1296 MHz
- * took 4000 changes without one. And no change at all while it starts: the SPL sets the 1296 MHz (U-Boot patch 0001),
- * so the kernel finds its fastest operating point as the clock it runs on. Only while cool: from 80 C it runs at
- * 1008 MHz again (the thermal zone below); cpufreq's scaling_max_freq lowers it by hand. The watchdog the boot loader
- * starts stays on through the kernel (patches/linux 0011): a change that hangs the board resets it, and it comes up
- * again by itself. No operating point at 1200 MHz: the clock framework makes that one from the peripherals' PLL,
- * changing its 800 MHz output's divider.
+ * and on the one board measured a checked workload ran right from 1104 to 1392 MHz at 52 to 55 C, and hung the board
+ * at 1488. 1296 and not 1392: about one change to 1392 MHz in a thousand hung the board once it was up, and one start
+ * in eight when the kernel made the change during its own start, the panel and the rest coming up around it. No change
+ * at all while it starts: the SPL sets the 1296 MHz (U-Boot patch 0001), so the kernel finds its fastest operating
+ * point as the clock it runs on. A change the kernel does make (back up from 1008 MHz after heat, or the first one
+ * under a boot loader older than this) waits 2 ms for the PLL before the CPU is back on it (patches/linux 0010).
+ * Only on the first start since the power came on: after a reset the SPL leaves the BROM's 1008 MHz and U-Boot takes
+ * this operating point out of the tree it hands the kernel (ft_board_setup), so a board that cannot run the 1296 is at
+ * the data sheet's clock on its next start (the cooling maps' state 2 then does not exist: map1 fails to bind, with a
+ * line in the log, and map0, which has to stay the first for that, gives 408 MHz from 80 C). Only
+ * while cool: from 80 C it runs at 1008 MHz again (the thermal zone below); cpufreq's scaling_max_freq lowers it by
+ * hand. The watchdog the SPL starts stays on through the kernel (patches/linux 0011): a change that hangs the board
+ * resets it, and it comes up again by itself. No operating point at 1200 MHz: the clock framework makes that one from
+ * the peripherals' PLL, changing its 800 MHz output's divider.
  */
 &opp_table_cpu {
 	opp-1296000000 {
@@ -130,7 +135,8 @@
 /*
  * Heat: the SoC's temperature sensor (the D1's THS: the driver's entry is patches/linux/0009, its node and thermal
  * zone as upstream has them since 6.8), calibrated from the efuse. From 80 C the CPU runs at its data sheet's 1008 MHz
- * (to 75 C again before it goes back up), at 85 C it is held at 408 MHz (the cooling states: 0 is 1296 MHz, 1 is 1008,
+ * (until it is under 75 C again: the trip's hysteresis, which patches/linux 0012 has the governor keep), at 85 C it
+ * is held at 408 MHz (the cooling states: 0 is 1296 MHz, 1 is 1008,
  * 2 is 408; the trips can be moved by hand in /sys/class/thermal); at 110 C the system shuts down (forced after 10 s) and halts,
  * the backlight off: nothing here can cut the power, and the MCU, no longer held, cycles it; a start still that hot
  * shuts down again.

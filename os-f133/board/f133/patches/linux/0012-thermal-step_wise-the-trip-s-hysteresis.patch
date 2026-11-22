@@ -1,0 +1,20 @@
+--- a/drivers/thermal/gov_step_wise.c
++++ b/drivers/thermal/gov_step_wise.c
+@@ -101,6 +101,17 @@
+ 		if (instance->trip != trip)
+ 			continue;
+ 
++		/*
++		 * The trip's hysteresis, which this governor did not look at:
++		 * a cooling state taken at the trip is kept until the zone is
++		 * that far under it, not given up and taken again around it
++		 * (the F133: each time a change of the CPU's clock).
++		 */
++		if (!throttle && instance->initialized &&
++		    instance->target != THERMAL_NO_TARGET &&
++		    tz->temperature > trip->temperature - trip->hysteresis)
++			continue;
++
+ 		old_target = instance->target;
+ 		instance->target = get_target_state(instance, trend, throttle);
+ 		dev_dbg(&instance->cdev->device, "old_target=%d, target=%d\n",

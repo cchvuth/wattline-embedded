@@ -145,12 +145,27 @@ reset) and its clock.
 - **Display.** The dash draws in strips and the 2D engine's rotation unit turns them into the portrait framebuffer
   (`package/g2drot`). Without the module, the CPU rotates them.
 - **Clocks.** The SPL sets the CPU to 1296 MHz (the data sheet's rate is 1008) and the memory to 696 MHz (the stock
-  firmware's is 528): measured on this board, with the reasons and the limits found, in the device tree
-  (`board/f133/sun20i-d1s-srnubi-t313d.dts`) and U-Boot patches 0001 and 0002. The memory goes back to 528 MHz if it
-  does not come up, and from the third start in a row without a power cycle. A hang resets the board: the watchdog
-  U-Boot starts stays on, fed by the kernel.
+  firmware's is 528): measured on one board, with the reasons and the limits found, in the device tree
+  (`board/f133/sun20i-d1s-srnubi-t313d.dts`) and U-Boot patches 0001 and 0002. Only on the first start since the power
+  came on. A start after a reset (the watchdog's, a panic's, a `reboot`) runs at the stock clocks: the SPL leaves the
+  CPU's, sets the memory to 528 MHz and reads U-Boot from the flash at 24 MHz, and U-Boot takes the 1296 MHz operating
+  point out of the kernel's device tree; the power cycle such a start ends in (S03mcu: the Wi-Fi chip is lost with a
+  reset) brings the higher clocks back. The memory is also at 528 MHz if it does not come up whole at 696. The
+  watchdog runs from the SPL's first lines, through U-Boot and the kernel (16 s; the kernel feeds it): a hang at these
+  clocks resets the board. So a board that cannot run them hangs or crashes, starts again at the stock clocks, is
+  power-cycled and tries again. Failing within its first minute each time, it stays up at the stock clocks after three
+  such rounds, without Wi-Fi, and does the same after every later power-on. Failing later (Wi-Fi up a minute in clears
+  S03mcu's count), it goes round for good: some minutes up, a minute and a half down. And nothing catches a clock that
+  is only nearly right: wrong data without a hang or a crash. For such a board: lower numbers, three of them (the
+  CPU's in U-Boot patch 0001, the same as the device tree's operating point, whose name is also in that patch's
+  `ft_board_setup`; the memory's in 0002). With a boot loader older than this one the kernel raises the CPU's clock
+  itself as it starts (the PLL given 2 ms to settle: patches/linux 0010), and the memory stays as that boot loader set
+  it.
+- **Watchdog.** Stopped for the rest of that start once a tried boot is judged (S01try's feeder lets it go), and
+  the dash's own (dash.conf `watchdog = 1`, off here) takes it from the kernel when set.
 - **Heat.** The SoC's temperature sensor is read by the kernel (`/sys/class/thermal/thermal_zone0/temp`, logged with
-  the boot's state): from 80 °C the CPU runs at 1008 MHz, at 85 °C it is held at 408. At 110 °C the system shuts down and halts with
+  the boot's state): from 80 °C the CPU runs at 1008 MHz (until it is under 75 °C again), at 85 °C it is held at
+  408 (on a start after a reset, at the stock clocks: 408 from 80 °C). At 110 °C the system shuts down and halts with
   the backlight off; the MCU, no longer held, then cycles the power, and a start that is still that hot shuts down
   again.
 - **Memory.** Android Auto's video decoder uses 16 MiB of CMA for its pictures and the framebuffer. The decoder keeps

@@ -28,7 +28,7 @@
  }
  
  uint32_t sunxi_get_spl_size(void)
-@@ -634,8 +643,243 @@
+@@ -673,8 +682,244 @@
  		mdelay(half);
  		if (n % (5000 / half) == 0)
  			f133_mcu_hold();
@@ -207,7 +207,8 @@
 +/*
 + * The BROM booted the SPL from the NOR: U-Boot's FIT (OpenSBI, U-Boot proper, its device tree) follows it there, as in
 + * u-boot-sunxi-with-spl.bin (binman: right after the SPL, 32 KiB in at least). At 50 MHz, as U-Boot reads the kernel
-+ * (0.07 s where the probe's 24 MHz READ took 0.45 of each start); that READ again if the FIT does not load so.
++ * (0.07 s where the probe's 24 MHz READ took 0.45 of each start); that READ again if the FIT does not load so, and
++ * from the first on a start after a reset (nothing checks what was read: a bad read ends in a reset).
 + */
 +static int f133_spl_nor_load(struct spl_image_info *spl_image, struct spl_boot_device *bootdev)
 +{
@@ -217,7 +218,7 @@
 +	int try;
 +
 +	for (try = 0; try < 2; try++) {
-+		f133_spl_mhz = f133_nor_init(try ? 24 : 50);
++		f133_spl_mhz = f133_nor_init(try || readl(F133_REG(0x07090118)) >= 2 ? 24 : 50);
 +		printf("F133: NOR JEDEC %06x, status %02x; U-Boot's FIT at 0x%x, %u MHz, at %lu ms\n", f133_nor_reg(0x9f, 3),
 +		       f133_nor_reg(0x05, 1), off, f133_spl_mhz, get_timer(0));
 +		if (f133_nor_read(header, off, 64, f133_spl_mhz) && image_get_magic(header) == FDT_MAGIC &&
@@ -272,12 +273,13 @@
  
  #define CSR_MXSTATUS		0x7c0
  #define CSR_MHCR		0x7c1
-@@ -650,9 +894,11 @@
+@@ -689,10 +934,12 @@
  	u32 starts = readl(F133_REG(0x07090118)) + 1;
  
  	f133_panel_pins();
 +	f133_nor_pins();
  	writel(starts, F133_REG(0x07090118));
+ 	f133_watchdog();
  	printf("F133: start %u; caches as the BROM left them: mxstatus %08lx mhcr %08lx mcor %08lx\n", starts,
  	       csr_read(CSR_MXSTATUS), csr_read(CSR_MHCR), csr_read(CSR_MCOR));
 +	printf("F133: boot media %d (0: card, 3: SPI NOR)\n", sunxi_get_boot_source());

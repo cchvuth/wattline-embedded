@@ -5,43 +5,27 @@
  	.common		= &riscv_clk.common,
  	.cm		= &riscv_clk.mux,
 -	.delay_us       = 1,
-+	.delay_us       = 20,	/* (1: see ccu_pll_notifier_cb) */
++	.delay_us       = 20,	/* (1: see ccu_mux_notifier_cb) */
  	.bypass_index   = 4, /* index of pll-periph0 */
  };
  
---- a/drivers/clk/sunxi-ng/ccu_common.c
-+++ b/drivers/clk/sunxi-ng/ccu_common.c
-@@ -7,6 +7,7 @@
- 
- #include <linux/clk.h>
- #include <linux/clk-provider.h>
-+#include <linux/delay.h>
- #include <linux/device.h>
- #include <linux/iopoll.h>
- #include <linux/module.h>
-@@ -79,12 +80,25 @@
- 		goto out;
- 
- 	ccu_gate_helper_disable(pll->common, pll->enable);
-+	udelay(20);
- 
- 	ret = ccu_gate_helper_enable(pll->common, pll->enable);
- 	if (ret)
- 		goto out;
-+	udelay(20);
- 
- 	ccu_helper_wait_for_lock(pll->common, pll->lock);
-+
-+	/*
-+	 * The F133's CPU at 1392 MHz, close to what it can do at all: each step
-+	 * here given time, and the PLL time to settle past its lock bit, which
-+	 * is up while it still swings (the CPU is put back on it next, by the
-+	 * mux's notifier). Measured on that board: with nothing after the lock
-+	 * bit a change to 1392 MHz hung it within a few tries, 100 us after it
-+	 * were enough for 600; and a kernel with the 2 ms but without the 20 us
-+	 * between the steps did not get through its first change at boot.
-+	 */
-+	usleep_range(2000, 3000);
- 
- out:
- 	return notifier_from_errno(ret);
+--- a/drivers/clk/sunxi-ng/ccu_mux.c
++++ b/drivers/clk/sunxi-ng/ccu_mux.c
+@@ -293,6 +293,17 @@
+ 		ret = ccu_mux_helper_set_parent(mux->common, mux->cm,
+ 						mux->bypass_index);
+ 	} else if (event == POST_RATE_CHANGE) {
++		/*
++		 * The F133's CPU above its data sheet's clock: the PLL given
++		 * time to settle at its new rate before the CPU is back on it.
++		 * Its lock bit does not say so: it is still up from the rate
++		 * before, and nothing else waits here (the D1 has no notifier
++		 * for the PLL itself, only this one). Measured on that board,
++		 * changing to 1392 MHz by hand: back on the PLL at once hung it
++		 * on the first change, 20 us after the new rate within some 130,
++		 * and 100 us were enough for 600.
++		 */
++		usleep_range(2000, 3000);
+ 		ret = ccu_mux_helper_set_parent(mux->common, mux->cm,
+ 						mux->original_index);
+ 	}
