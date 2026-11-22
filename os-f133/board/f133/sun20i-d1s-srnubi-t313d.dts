@@ -456,6 +456,9 @@
 		 * each); 50 keeps a margin for the car's temperatures. 64 KiB reads 2.3 -> 5.7 MB/s.
 		 */
 		spi-max-frequency = <50000000>;
+		/* read on both data lines (the chip's dual output read, no pins more than the four): 5.5 -> 10 MiB/s, the
+		 * three partitions read the same as on one line */
+		spi-rx-bus-width = <2>;
 
 		partitions {
 			compatible = "fixed-partitions";

@@ -46,7 +46,7 @@ CONFIG_USE_BOOTCOMMAND=y
 # seems to miss (the probe that kept the power on sent it ~1 s in); here at ~2 s and right before booti.
 # The NOR's kernel read at 50 MHz first (Linux read the whole chip right at 40..75 MHz), again at
 # 24 if anything in that try fails (a SPI timeout, a header that is not a FIT or too big for the partition, bootm's
-# sha256): 2 s of the boot at 24 MHz. Try-once (tested in U-Boot sandbox): an Image.try (with f133.dtb.try if there)
+# check): 2 s of the boot at 24 MHz. Try-once (tested in U-Boot sandbox): an Image.try (with f133.dtb.try if there)
 # beside rootfs.sqfs.try, the root it comes with, boots once: only once try.boot, its mark, is written (a card too
 # full for it boots Image), with "try=kernel" in bootargs, which alone has the initramfs mount rootfs.sqfs.try.
 # S98try keeps both once the screen works, else the next boot finds try.boot and goes back to Image. A card with a

@@ -1,0 +1,11 @@
+#!/bin/sh
+# The kernel settings of /etc/sysctl.d and /etc/sysctl.conf, in one process (Buildroot's script took 0.2 s of the boot
+# for them: a find, an xargs, a readlink and two loggers).
+case "$1" in
+start|restart|reload|"")
+	set --
+	for f in /etc/sysctl.d/*.conf /etc/sysctl.conf; do [ -f "$f" ] && set -- "$@" "$f"; done
+	[ $# = 0 ] || sysctl -q -p "$@"
+	;;
+esac
+exit 0

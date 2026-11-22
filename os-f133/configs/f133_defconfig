@@ -21,7 +21,8 @@ BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_F133_PATH)/board/f133/lin
 BR2_LINUX_KERNEL_DTS_SUPPORT=y
 BR2_LINUX_KERNEL_CUSTOM_DTS_PATH="$(BR2_EXTERNAL_F133_PATH)/board/f133/sun20i-d1s-srnubi-t313d.dts"
 BR2_TARGET_ROOTFS_SQUASHFS=y
-# xz: the root has to fit the 16 MiB NOR (12.0 MB in xz before the trims, 17.8 in lz4); the kernel reads it either way
+# xz: the root has to fit the 16 MiB NOR (12.0 MB in xz before the trims, 17.8 in lz4); post-image.sh packs it again in
+# zstd (faster to read) when that still fits; the kernel reads either
 BR2_TARGET_ROOTFS_SQUASHFS4_XZ=y
 # BR2_TARGET_ROOTFS_TAR is not set
 BR2_TARGET_OPENSBI=y

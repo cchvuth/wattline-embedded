@@ -1,9 +1,9 @@
 #!/bin/sh
 # The images, in BINARIES_DIR, and copied to /out when build.sh mounts it there:
 #   u-boot-sunxi-with-spl.bin  the SPL and U-Boot: the NOR's offset 0, or 8 KiB into a card (padded to 4 KiB sectors)
-#   kernel.itb                 the kernel (LZMA) and its device tree, sha256 each (kernel.its): the NOR's "kernel"
+#   kernel.itb                 the kernel (gzip) and its device tree, a crc32 each (kernel.its): the NOR's "kernel"
 #                              partition, which U-Boot checks and boots
-#   rootfs.sqfs                the root: the NOR's "rootfs" partition, or a card's
+#   rootfs.sqfs                the root: the NOR's "rootfs" partition, or a card's (zstd when it fits, else xz)
 #   Image, f133.dtb            the kernel and device tree on their own (a card boot)
 #   card/                      a card install's files, for its fourth partition: the boot files, and nor/ (kernel.itb,
 #                              U-Boot) for copying it to the built-in flash later (dash-nor)
@@ -15,7 +15,7 @@ trap 'rm -rf "$K"' EXIT
 cp "$B/Image" "$K/Image"
 cp "$B/sun20i-d1s-srnubi-t313d.dtb" "$K/f133.dtb"
 cp "$BR2_EXTERNAL_F133_PATH/board/f133/kernel.its" "$K/kernel.its"
-"$HOST_DIR/bin/xz" --format=lzma -9 -k "$K/Image"
+gzip -9 -n -k "$K/Image"
 (cd "$K" && "$BUILD_DIR/uboot-custom/tools/mkimage" -f kernel.its kernel.itb >/dev/null)
 # FILE SIZE PARTITION: each image fits its NOR partition (U-Boot reads at most the kernel's: its norboot, fitsize <=
 # 0x440000)
@@ -24,6 +24,22 @@ fits() {
 	[ "$s" -le $(($2)) ] || { echo "post-image: ${1##*/} is $s bytes, more than the NOR's $3 partition ($2)" >&2; exit 1; }
 }
 fits "$K/kernel.itb" 0x440000 kernel
+# The root again in zstd, kept when that fits the partition: the one core unpacks it far faster than xz (a cold start
+# of the dash 1.3-1.9 s where it took 2.9, the dash on the screen 1.4 s sooner after power-on), but it is a tenth
+# bigger, so an image with more in it stays in xz. The kernel reads either (linux.fragment). Only as root (the build
+# container): unpacked by anyone else, the files would lose their owners and device nodes.
+if [ "$(id -u)" = 0 ]; then
+	"$HOST_DIR/bin/unsquashfs" -q -d "$K/r" "$B/rootfs.squashfs" >/dev/null
+	"$HOST_DIR/bin/mksquashfs" "$K/r" "$K/zstd.sqfs" -comp zstd -Xcompression-level 22 -b 131072 -noappend \
+		-no-progress >/dev/null
+	if [ "$(wc -c < "$K/zstd.sqfs")" -le $((0xa40000)) ]; then
+		cp "$K/zstd.sqfs" "$B/rootfs.squashfs"
+		echo "post-image: the root in zstd ($(wc -c < "$B/rootfs.squashfs") bytes)"
+	else
+		echo "post-image: the root stays in xz (in zstd $(wc -c < "$K/zstd.sqfs") bytes: more than its partition)"
+	fi
+	rm -rf "$K/r" "$K/zstd.sqfs"
+fi
 fits "$B/rootfs.squashfs" 0xa40000 rootfs
 # U-Boot: the NOR's boot partition is 1 MiB, but the same file goes 8 KiB into a card whose first partition may start
 # at 1 MiB, so the card's room is the limit

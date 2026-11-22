@@ -30,7 +30,7 @@ Docker volume `wattline-f133`, and the images land in `out-f133/`:
 | File | Where it goes |
 |---|---|
 | `u-boot-sunxi-with-spl.bin` | the NOR's start, or 8 KiB into an SD card |
-| `kernel.itb` | the NOR's kernel partition: the kernel and its device tree, checked by U-Boot |
+| `kernel.itb` | the NOR's kernel partition: the kernel (gzip) and its device tree, checked by U-Boot |
 | `rootfs.sqfs` | the NOR's root partition, or the card |
 | `Image`, `f133.dtb` | a boot from the card |
 | `card/` | a card install's files, ready to copy (below) |
@@ -48,7 +48,7 @@ stops working.
 |---|---|---|---|
 | boot | 0 | 1 MiB | SPL, OpenSBI, U-Boot |
 | kernel | 0x100000 | 0x440000 | `kernel.itb` |
-| rootfs | 0x540000 | 0xa40000 | `rootfs.sqfs` (squashfs, xz) |
+| rootfs | 0x540000 | 0xa40000 | `rootfs.sqfs` (squashfs: zstd when it fits, else xz) |
 | data | 0xf80000 | 0x80000 | `/data` (JFFS2): settings, Wi-Fi networks, SSH keys, the AA certificate |
 
 ## First install: from an SD card

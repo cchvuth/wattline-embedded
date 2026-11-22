@@ -1,0 +1,12 @@
+#!/bin/sh
+# The boot scripts in order, as Buildroot's rcS, with the time each starts (seconds since the kernel did) in
+# /run/boot.times: where a slow boot spends its time is read off the screen itself (one read each, no process).
+for i in /etc/init.d/S??*; do
+	[ -f "$i" ] || continue
+	read t _ < /proc/uptime && echo "$t ${i##*/}" >> /run/boot.times
+	case "$i" in
+	*.sh) ( trap - INT QUIT TSTP; set start; . "$i" ) ;;
+	*) "$i" start ;;
+	esac
+done
+read t _ < /proc/uptime && echo "$t done" >> /run/boot.times

@@ -199,6 +199,8 @@ CONFIG_MTD_SPI_NOR=y
 CONFIG_MTD_BLOCK_RO=y
 CONFIG_JFFS2_FS=y
 CONFIG_SQUASHFS_XZ=y
+# (the root in zstd when it fits its partition: post-image.sh)
+CONFIG_SQUASHFS_ZSTD=y
 # Trims: the kernel stays resident (text + data were ~12 MB of the 64 MiB) and has to fit the NOR. Nothing here uses
 # them: the root is squashfs, the card vfat (so no ext4); no LSMs, cgroups, namespaces, audit, perf, eBPF syscalls,
 # io_uring, IPsec, tunnels or traffic control; no EFI (U-Boot's booti); one core. Symbols: System.map, kept beside each
