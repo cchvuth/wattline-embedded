@@ -369,14 +369,31 @@ overlay:
 
 	mkdir("/newroot/mnt", 0755);
 	mkdir("/newroot/mnt/sd", 0755);
-	if (nor) {
-		/* /data: the NOR's JFFS2 partition, on a directory in place of the rootfs's link to the card */
+	if (!nor && mount("/sd", "/newroot/mnt/sd", NULL, MS_MOVE, NULL))
+		say("moving the card to /mnt/sd", errno);
+	/*
+	 * /data: the NOR's JFFS2 partition, on a directory in place of the rootfs's link to the card. On a NOR boot, and
+	 * on a card boot U-Boot made for a screen that runs from the NOR (data=nor: an update on trial, or kept and on
+	 * its way to the NOR), which so has the screen's own settings. There the flash may still be on its way (5 s for
+	 * it), and the card's /data stays if the NOR's does not mount.
+	 */
+	if (nor || strstr(cmd, "data=nor")) {
+		int e;
+
 		unlink("/newroot/data");
 		mkdir("/newroot/data", 0755);
-		if (mount("mtd:data", "/newroot/data", "jffs2", MS_NOATIME, NULL))
+		for (i = 0; (e = mount("mtd:data", "/newroot/data", "jffs2", MS_NOATIME, NULL)) && !nor && i < 50; i++)
+			usleep(100000);
+		if (e) {
 			say("mounting the NOR's data partition (mtd:data)", errno);
-	} else if (mount("/sd", "/newroot/mnt/sd", NULL, MS_MOVE, NULL))
-		say("moving the card to /mnt/sd", errno);
+			if (!nor) {
+				rmdir("/newroot/data");
+				if (symlink("/mnt/sd/data", "/newroot/data"))
+					say("the card's /data again", errno);
+			}
+		} else
+			nor = 1;	/* (for the boot picture: the NOR's /data) */
+	}
 	splash(nor);
 	if (mount("/dev", "/newroot/dev", NULL, MS_MOVE, NULL))
 		say("moving /dev", errno);

@@ -460,7 +460,7 @@
 			/* the eGON SPL the BROM loads, then U-Boot's FIT (OpenSBI, U-Boot proper) */
 			partition@0 {
 				label = "boot";
-				reg = <0x000000 0x100000>;
+				reg = <0x000000 0x0f0000>;
 				read-only;
 			};
 
@@ -480,6 +480,17 @@
 			partition@f80000 {
 				label = "data";
 				reg = <0xf80000 0x080000>;
+			};
+
+			/*
+			 * One erase block before the kernel, the last of the boot area's 1 MiB: "TRY1" at its start
+			 * while an update for a screen that runs from here is on the card (dash-update sets and
+			 * clears it, U-Boot reads it: uboot.fragment). After the others, so that they keep their
+			 * numbers.
+			 */
+			partition@f0000 {
+				label = "try";
+				reg = <0x0f0000 0x010000>;
 			};
 		};
 	};

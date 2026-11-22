@@ -10,8 +10,9 @@ Linux and the Wattline dash for the SRNUBI T313D, an 11.26" aftermarket car scre
 
 The dash is the same program as the T113 Dash's ([app/](../app), device profile `app/device/f133.mk`). It gets the
 car's data from the Commander over Wi-Fi or Bluetooth LE, and runs wireless Android Auto with your own Google-signed
-head-unit certificate (see the top README). The screen boots from its NOR in about ten seconds. Over-the-air
-updates need the card install (below); a screen running from its NOR is updated over SSH.
+head-unit certificate (see the top README). The screen boots from its NOR in about five seconds. Over-the-air
+updates go through an SD card (below): a card install's own, or, for a screen running from its NOR, a card left in
+it; without a card such a screen is updated over SSH.
 
 The certificate goes to `/data/wattline/` as on the Dash. The image's SSH server has no SFTP, so copy the files with
 `scp -O` or `ssh root@<screen> 'cat > /data/wattline/aa.crt' < aa.crt` (and the same for `aa.key`).
@@ -46,7 +47,8 @@ stops working.
 
 | Partition | Offset | Size | Contents |
 |---|---|---|---|
-| boot | 0 | 1 MiB | SPL, OpenSBI, U-Boot |
+| boot | 0 | 0xf0000 | SPL, OpenSBI, U-Boot |
+| try | 0xf0000 | 0x10000 | `TRY1` while an update for the screen is on the card (U-Boot then looks there first) |
 | kernel | 0x100000 | 0x440000 | `kernel.itb` |
 | rootfs | 0x540000 | 0xa40000 | `rootfs.sqfs` (squashfs: zstd when it fits, else xz) |
 | data | 0xf80000 | 0x80000 | `/data` (JFFS2): settings, Wi-Fi networks, SSH keys, the AA certificate |
@@ -86,9 +88,9 @@ A card without U-Boot on it (nothing at 8 KiB) does not start the screen: the bo
 and the system there mounts the card's fourth partition. The boot's logs then go to the card instead of RAM
 (`log/<boot>/`), a `swapfile` there is used, `wpa_supplicant.conf` and `authorized_keys` are read, and a `dash/dash`
 there runs in place of the image's (for trying a build). If the flash's kernel cannot be started, its U-Boot falls
-back to an `Image`, `f133.dtb` and `rootfs.sqfs` on the card.
+back to an `Image`, `f133.dtb` and `rootfs.sqfs` on the card. Such a card also takes the screen's updates (below).
 
-## Over-the-air updates: the card install
+## Over-the-air updates
 
 Run from an SD card (the first install's step 1, without writing the NOR), the screen updates itself from this
 repository's releases: the dash's **Settings → Advanced → Software update**, or on its own with **Automatic updates**
@@ -100,8 +102,22 @@ the tried boot), and `S98try` keeps them once the dash is on screen and the Wi-F
 Android Auto's access point is up), with SSH listening if it is on with a key. The update replaces the card's `nor/`
 files too, so a later copy to the built-in flash writes the same version. A version that does not come up within 90 s
 is given up: the screen power-cycles into the old one, and automatic updates skip that version. A start that ends
-sooner (the power gone in the first minute and a half) is tried again at the next power-up, three starts at most. A
-screen running from its NOR keeps one system there, so its settings page says that updates need the card install.
+sooner (the power gone in the first minute and a half) is tried again at the next power-up, three starts at most.
+
+**A screen running from its NOR** updates the same way while a card is in it (any card whose fourth partition is the
+FAT one: the card it was installed from, or files only). The bundle's files go to the card as the `.try` files and
+`dash-update` marks the NOR's `try` partition; U-Boot, which starts the NOR's system otherwise, then tries the new
+version from the card, with the NOR's own `/data` (settings, networks, keys: `data=nor` in that boot's arguments). The
+NOR is not written until `S98try` has kept the version: then, from that same card boot, its root and kernel (the
+card's files checked against the download's checksums first) are written to the NOR and read back (`dash-update
+flash`, `nor.sh update`: about a minute, the dash running), the mark is cleared, and the next start is the NOR's
+again, on the new version. Until the mark is cleared the card starts the
+screen, so a write the power cuts goes on at the next start. A version given up never reaches the NOR: the screen
+power-cycles into the system there. Without the card nothing changes: the NOR's system starts. An update never
+writes the boot loader, and this needs one that looks at the mark (`ota=flash` in a NOR boot's arguments: since
+0.1.2; an older one is replaced by copying a card install to the flash again, or with `flashcp` from a card boot):
+with an older one, or without a card, the settings page says that updates need the card install.
+
 `board/f133/mk-ota.sh` makes a release's bundle; each release carries the T113 Dash's bundle as well (see the top
 README).
 

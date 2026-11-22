@@ -10,6 +10,11 @@
 #                        kept off the screen, and compared with a second read before the first write). A data
 #                        partition of this system's (not erased) is saved first, beside stock.bin: nor-data.bin
 #                        (a later flash's as nor-data.2.bin, .3...: none is written over).
+#   nor.sh update DIR    DIR/rootfs.sqfs and kernel.itb (or ROOTFS=, KERNEL=) onto a NOR that runs this system: a new
+#                        version, from the card boot that tried it for a screen whose home is the NOR (dash-update
+#                        flash). Each read back; what the NOR holds already is not written again (a copy the power
+#                        cut is done again from the start of what is missing). The boot loader, the data partition
+#                        (in use on that boot) and the stock copy are left alone.
 #   nor.sh seed          the card's /data (no logs), Wi-Fi settings and SSH keys into the NOR's data partition
 #   nor.sh restore FILE  a whole-chip image (the stock backup) or the data partition (nor-data.bin) back onto the NOR,
 #                        read back and compared
@@ -23,6 +28,8 @@ sha() { sha256sum | cut -d' ' -f1; }
 CHIP=$(awk '$2 == "01000000" { sub(":", "", $1); print "/dev/" $1; exit }' $MTD)
 
 grep -q "root=mtd:" ${CMDLINE:-/proc/cmdline} && die "running from the NOR: boot from the card first"
+# a card boot U-Boot made for a screen that runs from the NOR (data=nor): the NOR's data partition is mounted as /data
+data_in_use() { grep -q "data=nor" ${CMDLINE:-/proc/cmdline}; }
 [ -n "$CHIP" ] || die "no 16 MiB MTD device (a kernel without the NOR's support?)"
 
 # FILE DEVICE: flashcp erases the blocks FILE covers, writes and compares; then a read-back sha256 of FILE's length
@@ -60,6 +67,7 @@ read)
 	mv "$F.new" "$F"
 	;;
 flash)
+	data_in_use && die "the NOR's data partition is in use (a card boot for the NOR's update): nor.sh update"
 	# DIR's files, or ROOTFS= KERNEL= UBOOT= STOCK= for any of them elsewhere (dash-nor: the card install's root)
 	D=${2:?DIR}
 	R=${ROOTFS:-$D/rootfs.sqfs} K=${KERNEL:-$D/kernel.itb} U=${UBOOT:-$D/u-boot-sunxi-with-spl.bin} S=${STOCK:-$D/stock.bin}
@@ -112,11 +120,34 @@ flash)
 	else
 		put "$U" "$CHIP"
 	fi
+	# no update on trial for this system (dash-update's mark, which has U-Boot look at the card first)
+	T=$(part try); [ -z "$T" ] || flash_eraseall "$T"
 	rm -f "$FL"
 	sync
 	echo "the NOR is ready: it boots when no card with a boot loader is in"
 	;;
+update)
+	D=${2:?DIR}
+	R=${ROOTFS:-$D/rootfs.sqfs} K=${KERNEL:-$D/kernel.itb}
+	for f in "$R" "$K"; do [ -f "$f" ] || die "no $f"; done
+	stock_on_chip && die "the stock firmware is on the NOR: nor.sh flash"
+	fits "$R" rootfs
+	fits "$K" kernel
+	same() { [ "$(head -c "$(wc -c < "$1")" "$2" | sha)" = "$(sha < "$1")" ]; }
+	if same "$R" "$(part rootfs)" && same "$K" "$(part kernel)"; then
+		echo "the NOR holds this root and kernel already"
+	else
+		# the kernel FIT is the commit mark, as in flash: erased first, written after the root, so a cut write fails
+		# U-Boot's check (the card's way then) and never boots a half-written root
+		flash_eraseall "$(part kernel)"
+		same "$R" "$(part rootfs)" || put "$R" "$(part rootfs)"
+		put "$K" "$(part kernel)"
+		sync
+		echo "the NOR holds the new root and kernel"
+	fi
+	;;
 seed)
+	data_in_use && die "the NOR's data partition is in use (a card boot for the NOR's update)"
 	# the card's /data (settings, Wi-Fi networks, the AA certificate, Bluetooth bonds, the Commander's id...) without
 	# its logs and recordings, the bench's Wi-Fi, the SSH keys and host key (the same fingerprint) where the NOR's
 	# system looks for them (dash-ssh-enable, wifi-connect). On the screen only: nothing leaves it.
@@ -157,6 +188,7 @@ stock)
 	stock_on_chip
 	;;
 restore)
+	data_in_use && die "the NOR's data partition is in use (a card boot for the NOR's update): start from a card with its own boot loader"
 	F=${2:?FILE}
 	case $(($(wc -c < "$F"))) in
 	16777216)
@@ -174,7 +206,7 @@ restore)
 	echo "restored: remove the card to boot it"
 	;;
 *)
-	sed -n '2,16p' "$0"
+	sed -n '2,21p' "$0"
 	exit 1
 	;;
 esac

@@ -2,7 +2,10 @@
 # The card install's try-once with no device: S98try's verdict on a tried boot (kept, or given up: try.failed, Image.try
 # gone, the power cycled) against stub Wi-Fi, SSH and dash marks; then dash-update confirm at the next start (a try
 # that ended undecided armed again, 3 starts at most; the failed list only after a verdict to give up; a keep cut short
-# finished; a cut apply cleared) and apply (an older try's marks removed; a card kernel.itb only at the keep). From the root:
+# finished; a cut apply cleared) and apply (an older try's marks removed; a card kernel.itb only at the keep). Then a
+# screen that runs from its flash: the try mark set by apply and kept up while the try waits, cleared with a try given
+# up; from the card's boot for it (data=nor) the kept version written to the flash (a stub nor.sh) and the mark
+# cleared; no update where U-Boot does not look at the mark. From the root:
 #   sh os-f133/test/test_ota_try.sh
 set -u
 O=$(cd "$(dirname "$0")/.." && pwd)/board/f133/overlay
@@ -18,6 +21,7 @@ printf '#!/bin/sh\n' > $T/bin/sleep
 printf '#!/bin/sh\n' > $T/bin/logger
 printf '#!/bin/sh\n' > $T/bin/keeper
 printf '#!/bin/sh\necho reboot >> %s/log\n' "$T" > $T/bin/reboot
+printf '#!/bin/sh\nshift\nexec "$@"\n' > $T/bin/timeout   # (S98try's limit on wpa_cli: not everywhere this test runs)
 cat > $T/bin/wpa_cli <<EOF
 #!/bin/sh
 echo "bssid / frequency / signal level / flags / ssid"
@@ -29,6 +33,9 @@ cat > $T/bin/netstat <<EOF
 [ -e $T/sshd ] && echo "tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN"
 exit 0
 EOF
+# the flash's try partition as a file: erased to 0xFF; nor.sh logged, failing on demand
+printf '#!/bin/sh\n[ -e %s/noerase ] && exit 1\nprintf "\\377\\377\\377\\377\\377\\377\\377\\377" > "$1"\n' "$T" > $T/bin/flash_eraseall
+printf '#!/bin/sh\necho "nor.sh $* ROOTFS=$ROOTFS KERNEL=$KERNEL" >> %s/log\n[ ! -e %s/norfail ]\n' "$T" "$T" > $T/bin/norsh
 chmod +x $T/bin/*
 echo "/dev/mmcblk0p4 $SD vfat rw,noatime 0 0" > $T/mounts
 echo 0.1.0-20261120-120000 > $T/image-id
@@ -55,7 +62,8 @@ s98() {   # S98try start, then its verdict: kept, or the reboot after giving up 
 }
 upd() { PATH=$T/bin:$PATH DASH_UPDATE_SD=$SD DASH_UPDATE_RUN=$R/run DASH_UPDATE_CMDLINE=$R/proc/cmdline \
 	DASH_UPDATE_MOUNTS=$T/mounts DASH_UPDATE_TRIED=$R/.rootfs-tried DASH_UPDATE_IMAGEID=$T/image-id \
-	DASH_UPDATE_KEEPER=$T/bin/keeper sh $O/usr/sbin/dash-update "$@" > /dev/null; }
+	DASH_UPDATE_KEEPER=$T/bin/keeper DASH_UPDATE_TRYDEV=${TRYF-$T/try} DASH_UPDATE_NORSH=$T/bin/norsh DASH_UPDATE_NORLOG=$T/norlog \
+	DASH_UPDATE_MTD=/dev/null sh $O/usr/sbin/dash-update "$@" > /dev/null; }
 st() { sed -n 's/^state=//p' $R/run/dash-update.status 2>/dev/null; }
 is() { [ "$(cat $SD/$1 2>/dev/null)" = "$2" ]; }   # is FILE CONTENT
 none() { for f in "$@"; do [ ! -e $SD/$f ] || return 1; done; }
@@ -123,4 +131,105 @@ upd apply; [ "$(st)" = armed ] && is Image.try new && is rootfs.sqfs.try new && 
 	none try.boot rootfs.try try.failed ota/tries ota/0.2.0 && has kernel.itb &&
 	ok "apply: the .try files in place, older marks gone, a card-root kernel.itb kept until the keep" ||
 	no "apply ($(st))"
+
+# a screen that runs from its built-in flash
+mark() { [ "$(head -c 4 $T/try 2>/dev/null)" = TRY1 ]; }
+flashboot() { echo "console=tty0 root=mtd:rootfs ota=flash f133t=1,2,50" > $R/proc/cmdline; }
+forflash() { echo "console=tty0 $* data=nor" > $R/proc/cmdline; }
+unpacked() {   # version 0.2.0 fetched, nothing in place
+	for f in Image f133.dtb rootfs.sqfs nor/kernel.itb nor/u-boot-sunxi-with-spl.bin; do rm $SD/$f.try; done; rm $SD/ota/trying
+	mkdir -p $SD/ota/0.2.0/b/nor; echo 0.2.0 > $SD/ota/0.2.0/b/version
+	for f in Image f133.dtb rootfs.sqfs nor/kernel.itb nor/u-boot-sunxi-with-spl.bin; do echo new > $SD/ota/0.2.0/b/$f; done
+	( cd $SD/ota/0.2.0/b && sha256sum rootfs.sqfs nor/kernel.itb > sums )
+}
+rm -f $T/try; card; unpacked; echo "console=tty0 root=mtd:rootfs f133t=1,2,50" > $R/proc/cmdline
+upd apply; [ $? = 1 ] && [ "$(st)" = card-only ] && none Image.try && ! mark && ok "from the flash, a U-Boot that does not look at the mark: no update" ||
+	no "old U-Boot ($(st))"
+card; unpacked; flashboot
+echo stale > $SD/ota/sums
+upd apply; [ "$(st)" = armed ] && is Image.try new && is rootfs.sqfs.try new && mark && grep -q " rootfs.sqfs$" $SD/ota/sums && ! grep -q stale $SD/ota/sums &&
+	ok "from the flash: apply puts the files on the card, keeps their checksums and sets the mark" || no "flash apply ($(st))"
+upd confirm; [ "$(st)" = armed ] && mark && is Image.try new && ok "looked at again on that start: armed" || no "armed twice ($(st))"
+rm $T/try; upd confirm; [ "$(st)" = armed ] && mark && ok "armed with the mark missing (a cut apply): set" || no "armed, no mark ($(st))"
+upd confirm; [ "$(st)" = armed ] && mark && is Image.try new && none ota/failed && ok "and looked at again on that start: still armed" || no "armed, mark set, again ($(st))"
+card; unpacked; flashboot; rm -f $T/try; : > $T/noerase
+upd apply; [ $? = 1 ] && [ "$(st)" = error ] && ! mark && ok "the mark cannot be written: the apply fails" || no "no mark ($(st))"
+rm -f $T/noerase
+card try.boot rootfs.try; flashboot; printf TRY1 > $T/try
+upd confirm; [ "$(st)" = trial-failed ] && mark && none try.boot && ok "a try cut short, seen from the flash: armed again, the mark kept" ||
+	no "flash re-arm ($(st))"
+upd confirm; [ "$(st)" = armed ] && mark && is Image.try new && none ota/failed && ok "and looked at again on that start (a tap on Check): armed, nothing given up" ||
+	no "flash re-arm, again ($(st))"
+card try.boot rootfs.try try.failed; rm $SD/Image.try; flashboot; printf TRY1 > $T/try
+upd confirm; [ "$(st)" = rolled-back ] && ! mark && none rootfs.sqfs.try try.boot try.failed ota/trying && grep -qx 0.2.0 $SD/ota/failed &&
+	ok "a try given up, back on the flash: cleared, the mark too" || no "flash rollback ($(st))"
+card try.boot rootfs.try try.failed; rm $SD/Image.try; flashboot; printf TRY1 > $T/try; : > $T/noerase
+upd confirm; [ "$(st)" = error ] && mark && has try.boot rootfs.sqfs.try && ok "the mark cannot be cleared: the card's marks stay (U-Boot still starts the flash)" ||
+	no "rollback, mark stuck ($(st))"
+rm -f $T/noerase
+card; unpacked; rm -rf $SD/ota/0.2.0; flashboot; printf TRY1 > $T/try
+upd confirm; ! mark && ok "a mark with nothing on the card for it: cleared" || no "stale mark"
+# the card's boot for the flash: the try, kept, then onto the flash
+card; forflash try=kernel; : > $SD/try.boot; : > $R/.rootfs-tried; printf TRY1 > $T/try
+upd flash; [ $? = 1 ] && ! grep -q nor.sh $T/log && mark && ok "on trial: not to the flash yet" || no "flash during the trial"
+upd install; [ $? = 1 ] && ok "the card's boot for the flash: no other update from it" || no "install on the card's boot"
+card; forflash; printf TRY1 > $T/try; echo 0.2.0-20261121-120000 > $T/image-id
+for f in Image f133.dtb rootfs.sqfs nor/kernel.itb nor/u-boot-sunxi-with-spl.bin; do mv $SD/$f.try $SD/$f; done
+upd confirm; [ "$(st)" = ok ] && mark && is ota/to-flash 0.2.0 && ok "kept, seen from the card's boot: the mark stays until the flash holds it" || no "kept for the flash ($(st))"
+: > $T/norfail; upd flash; [ $? = 1 ] && [ "$(st)" = error ] && mark && ok "the flash cannot be written: the mark stays (the card starts the screen)" ||
+	no "flash write failed ($(st))"
+rm $T/norfail; : > $T/log
+upd flash; [ "$(st)" = ok ] && ! mark && grep -qx "nor.sh update $SD/nor ROOTFS=$SD/rootfs.sqfs KERNEL=$SD/nor/kernel.itb" $T/log &&
+	none ota/to-flash && ok "the kept version written to the flash (nor.sh update), the mark cleared" || no "to the flash ($(st)): $(cat $T/log)"
+: > $T/log; upd flash; [ "$(st)" = ok ] && ! grep -q nor.sh $T/log && ok "again on that boot: nothing more to write" || no "flash twice"
+card; echo console=tty0 > $R/proc/cmdline; printf TRY1 > $T/try; : > $T/log
+upd flash; ! grep -q nor.sh $T/log && mark && ok "a card install: nothing to the flash" || no "flash on a card install"
+# on the try's own start, once S98try has kept it: confirmed and written to the flash from that same start
+card; forflash try=kernel; tryboot; forflash try=kernel; healthy; printf TRY1 > $T/try; echo 0.2.0-20261121-120000 > $T/image-id; : > $T/log; s98
+upd confirm; upd flash; [ "$(st)" = ok ] && ! mark && all_new && grep -q "nor.sh update" $T/log && none ota/trying ota/to-flash &&
+	ok "the try's own start: kept by S98try, confirmed, written to the flash" || no "flash on the kept try's start ($(st))"
+card; forflash; echo 0.2.0-20261121-120000 > $T/image-id; rm $SD/ota/trying; echo 0.2.0 > $SD/ota/to-flash; rm -f $T/try; : > $T/log
+for f in Image f133.dtb rootfs.sqfs nor/kernel.itb nor/u-boot-sunxi-with-spl.bin; do mv $SD/$f.try $SD/$f; done
+upd flash; [ "$(st)" = ok ] && none ota/to-flash && ! grep -q nor.sh $T/log && ok "written before, its last step cut: nothing more, said as done" || no "flash, mark off ($(st))"
+printf TRY1 > $T/try; echo 0.2.0 > $SD/ota/to-flash
+TRYF=; upd flash; r=$?; unset TRYF
+[ $r = 1 ] && [ "$(st)" = error ] && ! grep -q nor.sh $T/log && ok "a kernel without the try partition: nothing written" || no "flash without the partition ($(st))"
+# the card's files changed since the download: not to the flash
+card; forflash; printf TRY1 > $T/try; : > $T/log
+for f in Image f133.dtb rootfs.sqfs nor/kernel.itb nor/u-boot-sunxi-with-spl.bin; do mv $SD/$f.try $SD/$f; done
+( cd $SD && sha256sum rootfs.sqfs nor/kernel.itb > ota/sums ); echo damaged > $SD/rootfs.sqfs; rm $SD/ota/trying
+upd flash; [ $? = 1 ] && [ "$(st)" = error ] && ! mark && ! grep -q nor.sh $T/log && ok "the card's root is not the download's any more: nothing written, the flash keeps its version" ||
+	no "sums ($(st))"
+echo new > $SD/rootfs.sqfs; printf TRY1 > $T/try
+upd flash; [ "$(st)" = ok ] && ! mark && grep -q "nor.sh update" $T/log && none ota/sums && ok "files that match the download: written" || no "sums ok ($(st))"
+# the card's start for the flash, the try not made (U-Boot could not write try.boot): given up, the mark cleared
+echo 0.1.0-20261120-120000 > $T/image-id
+card; forflash; printf TRY1 > $T/try
+upd confirm; upd flash; [ "$(st)" = error ] && ! mark && none Image.try rootfs.sqfs.try ota/trying && grep -qx 0.2.0 $SD/ota/failed && is Image old &&
+	! grep -q nor.sh $T/log && ok "a try U-Boot could not mark on the card: cleared and said so, the flash starts the screen again" || no "unmarked try ($(st))"
+card; flashboot; printf TRY1 > $T/try
+upd confirm; [ "$(st)" = error ] && ! mark && none Image.try rootfs.sqfs.try ota/trying ota/failed &&
+	ok "the same seen from the flash (a card with files only: U-Boot had nothing else to start), not held against the version" ||
+	no "unmarked try, from the flash ($(st))"
+# seen from the flash: a keep cut before its end, and a kept version whose start from the card did not come
+card try.boot rootfs.try; flashboot; printf TRY1 > $T/try; mv $SD/rootfs.sqfs.try $SD/rootfs.sqfs; mv $SD/nor/kernel.itb.try $SD/nor/kernel.itb
+upd confirm; [ "$(st)" = armed ] && mark && all_new && none try.boot rootfs.try Image.try ota/trying && is ota/to-flash 0.2.0 &&
+	ok "from the flash, a keep cut short: finished, the card starts the screen next (to the flash)" || no "cut keep, from the flash ($(st))"
+rm $T/try; upd confirm; mark && [ "$(st)" = armed ] && ok "from the flash, a kept version not yet there: still armed, the mark set again" || no "to-flash mark ($(st))"
+rm $R/run/dash-update.armed   # the next start, from the flash again: the card did not start the screen
+upd confirm; [ "$(st)" = error ] && ! mark && none ota/to-flash && ok "the card never started it: given up, not armed for good" || no "to-flash, no card start ($(st))"
+echo 0.2.0 > $SD/ota/to-flash; printf TRY1 > $T/try; : > $R/run/dash-update.armed; rm -f $R/run/dash-update.status
+echo 0.2.0-20261121-120000 > $T/image-id
+upd confirm; ! mark && none ota/to-flash && [ "$(st)" = ok ] && ok "the flash runs that version by now: nothing left to write" || no "to-flash, done ($(st))"
+echo 0.1.0-20261120-120000 > $T/image-id
+card; flashboot; printf TRY1 > $T/try; rm -rf $SD/ota $SD/*.try $SD/nor/*.try; : > $T/mounts
+upd confirm; ! mark && ok "no card in the screen: the mark cleared" || no "mark without a card"
+echo "/dev/mmcblk0p4 $SD vfat rw,noatime 0 0" > $T/mounts
+card; flashboot; printf TRY1 > $T/try
+for f in Image f133.dtb rootfs.sqfs nor/kernel.itb nor/u-boot-sunxi-with-spl.bin; do mv $SD/$f.try $SD/$f; done
+upd confirm; [ "$(st)" = armed ] && mark && is ota/to-flash 0.2.0 && none ota/trying &&
+	ok "from the flash, kept and never confirmed: the card starts the screen next (to the flash)" || no "kept, unconfirmed, from the flash ($(st))"
+card; flashboot; printf TRY1 > $T/try; rm $SD/Image.try $SD/f133.dtb.try $SD/rootfs.sqfs.try $SD/nor/*.try; mkdir -p $SD/ota/0.2.0/b; echo new > $SD/ota/0.2.0/b/Image
+upd confirm; [ "$(st)" = error ] && ! mark && none ota/trying ota/to-flash ota/0.2.0 && ok "from the flash, a cut apply: cleared, the mark too" || no "cut apply, from the flash ($(st))"
+echo 0.1.0-20261120-120000 > $T/image-id
 [ $bad -eq 0 ] && echo "ota try: ok" || { echo "ota try: $bad failed"; exit 1; }

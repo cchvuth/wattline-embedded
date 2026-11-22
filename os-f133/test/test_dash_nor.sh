@@ -31,6 +31,10 @@ st() { sed -n 's/^state=//p' $T/run/dash-nor.status 2>/dev/null; }
 
 echo "console=tty0 root=mtd:rootfs" > $T/cmdline
 run status; [ ! -e $T/run/dash-nor.status ] && ok "NOR boot: no status, nothing to copy" || no "NOR boot status"
+echo "console=tty0 data=nor" > $T/cmdline
+run status; [ ! -e $T/run/dash-nor.status ] && ok "the card's boot for the flash's update (data=nor): no status, nothing to copy" || no "data=nor status"
+run copy > /dev/null 2>&1; [ "$(st)" = error ] && ok "and no copy from it" || no "data=nor copy ($(st))"
+rm -f $T/run/dash-nor.status
 echo "console=tty0" > $T/cmdline
 touch $T/stock
 run status; [ "$(st)" = stock ] && ok "card install, stock firmware on the NOR: stock" || no "status stock ($(st))"

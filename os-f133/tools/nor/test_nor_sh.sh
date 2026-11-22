@@ -10,18 +10,19 @@ rm -rf $T && mkdir -p $T/bin $T/img
 cat > $T/mtd <<'EOF'
 dev:    size   erasesize  name
 mtd0: 01000000 00010000 "spi0.0"
-mtd1: 00100000 00010000 "boot"
+mtd1: 000f0000 00010000 "boot"
 mtd2: 00440000 00010000 "kernel"
 mtd3: 00a40000 00010000 "rootfs"
 mtd4: 00080000 00010000 "data"
+mtd5: 00010000 00010000 "try"
 EOF
 echo "console=tty0 panic=5" > $T/cmdline
 ff() { tr '\000' '\377' < /dev/zero | head -c "$1"; }
 # the stock chip: random, its GPT signature at 0xc200
 head -c 16777216 /dev/urandom > /dev/mtd0
 printf 'EFI PART' | dd of=/dev/mtd0 bs=1 seek=49664 conv=notrunc 2>/dev/null
-for p in 1:1048576 2:4456448 3:10747904 4:524288; do head -c ${p#*:} /dev/urandom > /dev/mtd${p%%:*}; done
-head -c 985489 /dev/urandom > $T/img/u-boot-sunxi-with-spl.bin
+for p in 1:983040 2:4456448 3:10747904 4:524288 5:65536; do head -c ${p#*:} /dev/urandom > /dev/mtd${p%%:*}; done
+head -c 885489 /dev/urandom > $T/img/u-boot-sunxi-with-spl.bin
 head -c 4030000 /dev/urandom > $T/img/kernel.itb
 head -c 5955584 /dev/urandom > $T/img/rootfs.sqfs
 printf '#!/bin/sh\n[ -e %s/fail-cp ] && exit 1\n[ "$1" = -v ] && shift\ndd if="$1" of="$2" conv=notrunc 2>/dev/null\n' $T > $T/bin/flashcp
@@ -145,6 +146,41 @@ mkdir -p /mnt/sd/data/ssh && touch /mnt/sd/data/ssh/disabled && echo "ssh-ed2551
 sh $N/nor.sh seed > $T/out 2>&1 && [ -e /tmp/nordata/ssh/disabled ] && [ ! -e /tmp/nordata/ssh/enabled ] &&
 	! grep -qs card /tmp/nordata/ssh/authorized_keys && ok "a seed with SSH turned off: it stays off" || { no "seed ssh off"; cat $T/out; }
 rm -rf /mnt/sd/data/ssh /mnt/sd/authorized_keys
+# a flash clears the try mark (dash-update's, for U-Boot); update: the root and the kernel only, on a NOR that is ours
+printf '\0\0\0\0\0\0\0\0' | dd of=/dev/mtd0 bs=1 seek=49664 conv=notrunc 2>/dev/null   # (no stock GPT: ours)
+printf TRY1 | dd of=/dev/mtd5 conv=notrunc 2>/dev/null
+sh $N/nor.sh flash $T/img > $T/out 2>&1 && [ "$(head -c 4 /dev/mtd5)" != TRY1 ] && ok "flash: the try mark cleared" || { no "flash, try mark"; cat $T/out; }
+mkdir -p $T/new; head -c 6000000 /dev/urandom > $T/new/rootfs.sqfs; head -c 4000000 /dev/urandom > $T/new/kernel.itb
+cp /dev/mtd4 $T/data.before; cp /dev/mtd1 $T/boot.before
+sh $N/nor.sh update $T/new > $T/out 2>&1 && same $T/new/rootfs.sqfs /dev/mtd3 && same $T/new/kernel.itb /dev/mtd2 &&
+	cmp -s /dev/mtd4 $T/data.before && cmp -s /dev/mtd1 $T/boot.before &&
+	ok "update: the root and the kernel written, /data and the boot loader left alone" || { no update; cat $T/out; }
+printf '#!/bin/sh\nexit 1\n' > $T/bin/flashcp   # (any write fails)
+sh $N/nor.sh update $T/new > $T/out 2>&1 && grep -q "already" $T/out && ok "update again: nothing written" || { no "update twice"; cat $T/out; }
+head -c 4000000 /dev/urandom > $T/new/kernel.itb
+sh $N/nor.sh update $T/new > $T/out 2>&1 && no "an update whose write fails went on" ||
+	{ [ "$(head -c 4 /dev/mtd2 | od -An -tx1 | tr -d ' ')" = ffffffff ] && same $T/new/rootfs.sqfs /dev/mtd3 &&
+		ok "an update cut short: the kernel erased (U-Boot goes the card's way), the root as it was"; } || { no "cut update"; cat $T/out; }
+printf '#!/bin/sh\n[ "$1" = -v ] && shift\ndd if="$1" of="$2" conv=notrunc 2>/dev/null\n' > $T/bin/flashcp
+sh $N/nor.sh update $T/new > $T/out 2>&1 && same $T/new/kernel.itb /dev/mtd2 && same $T/new/rootfs.sqfs /dev/mtd3 &&
+	ok "the update done again: the kernel written" || { no "update resumed"; cat $T/out; }
+truncate -s 10747905 $T/new/rootfs.sqfs; cp /dev/mtd2 $T/kernel.before
+sh $N/nor.sh update $T/new > $T/out 2>&1 && no "an oversized root went on" ||
+	{ cmp -s /dev/mtd2 $T/kernel.before && ok "update: an oversized root refused, nothing erased"; } || no "update size"
+head -c 6000000 /dev/urandom > $T/new/rootfs.sqfs
+printf 'EFI PART' | dd of=/dev/mtd0 bs=1 seek=49664 conv=notrunc 2>/dev/null
+sh $N/nor.sh update $T/new > $T/out 2>&1 && no "an update over the stock firmware went on" ||
+	{ grep -q "stock firmware" $T/out && cmp -s /dev/mtd2 $T/kernel.before && ok "update refused while the stock firmware is on the chip"; } || no "update on stock"
+printf '\0\0\0\0\0\0\0\0' | dd of=/dev/mtd0 bs=1 seek=49664 conv=notrunc 2>/dev/null
+# the card's boot for the flash's update (data=nor): the NOR's /data is mounted there
+echo "console=tty0 data=nor" > $T/cmdline; cp /dev/mtd3 $T/rootfs.before
+for c in "flash $T/img" seed "restore $T/img/stock.bin"; do
+	sh $N/nor.sh $c > $T/out 2>&1 && no "$c ran with the NOR's /data in use" ||
+		{ grep -q "data partition is in use" $T/out && cmp -s /dev/mtd4 $T/data.before && cmp -s /dev/mtd3 $T/rootfs.before; } || no "data=nor: $c"
+done
+[ $bad = 0 ] && ok "with the NOR's /data in use: flash, seed and restore refused"
+sh $N/nor.sh update $T/new > $T/out 2>&1 && same $T/new/rootfs.sqfs /dev/mtd3 && cmp -s /dev/mtd4 $T/data.before &&
+	ok "and update goes on, /data untouched" || { no "update with data=nor"; cat $T/out; }
 echo "console=tty0 root=mtd:rootfs" > $T/cmdline
 sh $N/nor.sh read $T/x.bin > $T/out 2>&1 && no "ran while booted from the NOR" ||
 	{ grep -q "running from the NOR" $T/out && ok "refuses while running from the NOR"; } || no nor-boot

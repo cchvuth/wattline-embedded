@@ -32,7 +32,7 @@ unsquashfs -cat "$I/rootfs.sqfs" etc/wattline-ota.pub.raw | cmp -s - "$(dirname 
 	[ "$(wc -c < "$I/rootfs.sqfs")" -le 268435456 ] || { echo "mk-ota: a boot file is too big" >&2; exit 1; }
 # and the built-in flash's partitions (a card install copied there: dash-nor)
 [ "$(wc -c < "$I/rootfs.sqfs")" -le 10747904 ] && [ "$(wc -c < "$I/kernel.itb")" -le 4456448 ] &&
-	[ "$(wc -c < "$I/u-boot-sunxi-with-spl.bin")" -le 1048576 ] || { echo "mk-ota: too big for the built-in flash" >&2; exit 1; }
+	[ "$(wc -c < "$I/u-boot-sunxi-with-spl.bin")" -le 983040 ] || { echo "mk-ota: too big for the built-in flash" >&2; exit 1; }
 # the key must be the one the image trusts
 openssl pkey -in "$K" -pubout -outform DER | tail -c 32 | cmp -s - "$(dirname "$0")/wattline-ota.pub.raw" ||
 	{ echo "mk-ota: $K is not the key of board/f133/wattline-ota.pub.raw" >&2; exit 1; }
