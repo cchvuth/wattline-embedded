@@ -17,13 +17,11 @@
 //   AA_BT                 aa bt: the Bluetooth start over BlueZ (RFCOMM profiles over GDBus; gio-2.0 and gio-unix-2.0)
 //   AA_MCU                aa mcu: the Bluetooth start through the screen's power MCU, which is its classic Bluetooth:
 //                         mcud hands aa the phone's RFCOMM channel over its socket (BlueZ has no part in it)
-//   AA_USB                aa usb: wired, Android Open Accessory over usbfs (link -lpthread)
 //   PJ_PANEL_H, PJ_RGN_X/Y/W/H  the canvas and the picture's place on it (ui/project_region.h; defaults: the Dash's)
 // The Dash (the T113, the default): -DAA_BT on the device (with gio's cflags and libs), nothing on a build host.
 // The F133 screen (SRNUBI T313D: its 720x1920 portrait panel shown as a 1920x720 canvas, the picture in the left
 // half's lower 3/4; its AP is the OS's, so aa ap goes unused there):
-//   -DAA_MCU=1 -DAA_USB=1 -DPJ_PANEL_H=720 -DPJ_RGN_X=0 -DPJ_RGN_Y=180 -DPJ_RGN_W=960
-//   -DPJ_RGN_H=540, linked with -lssl -lcrypto -lpthread
+//   -DAA_MCU=1 -DPJ_PANEL_H=720 -DPJ_RGN_X=0 -DPJ_RGN_Y=180 -DPJ_RGN_W=960 -DPJ_RGN_H=540, linked with -lssl -lcrypto
 // Found at run time rather than built in: a touchscreen that reports a portrait panel (taller than wide, the F133's)
 // is turned as the dash's display is (mt_canvas).
 #include "../core/pb.h"
@@ -55,12 +53,6 @@
 #include <sys/time.h>
 #include <poll.h>
 #include <time.h>
-#ifdef AA_USB   // usbfs, and a thread for the accessory's bulk IN
-#include <dirent.h>
-#include <pthread.h>
-#include <linux/usbdevice_fs.h>
-#include <linux/usb/ch9.h>
-#endif
 #ifdef AA_BT   // target build: BlueZ RFCOMM advertise/accept over GDBus (host selftest build omits glib)
 #include <gio/gio.h>
 #include <gio/gunixfdlist.h>
@@ -585,10 +577,6 @@ static int recv_msg(int fd, aa_tls_t *tls, uint8_t *chan, const uint8_t **msg, s
 	}
 }
 
-// the transport's write: the socket's (TCP), or aa usb's usb_write (a frame a bulk transfer, over the accessory's OUT
-// endpoint)
-static ssize_t (*xwrite)(int, const void *, size_t) = write;
-
 // a write to the phone failed or was cut short (SO_SNDTIMEO: the phone stopped reading): the frame stream is broken,
 // so every send fails at once from then on (callers that ack, ping or send touches don't check each send, and each would
 // wait out the timeout again) and the session ends at its loop's next turn. Cleared per phone, at its dial.
@@ -616,7 +604,7 @@ static int send_msg(int fd, aa_tls_t *tls, uint8_t chan, uint8_t msgtype, uint16
 	// SO_SNDTIMEO): then the rest goes on, so the frame stays whole for the goodbye that follows
 	size_t w = 0;
 	while (w < (size_t)fn) {
-		ssize_t r = xwrite(fd, frame + w, (size_t)fn - w);
+		ssize_t r = write(fd, frame + w, (size_t)fn - w);
 		if (r > 0) { w += (size_t)r; if (w < (size_t)fn && !aa_quit) break; continue; }
 		if (r < 0 && errno == EINTR) continue;
 		break;
@@ -1191,8 +1179,8 @@ static int rx_selftest(void)
 	return 0;
 }
 
-/* one phone's connection, from the version to its session's end, TCP or USB (fd: the socket; for aa usb and
- * --conn-test, a socketpair); closes fd; true: a session ran */
+/* one phone's connection, from the version to its session's end (fd: the socket; for --conn-test, a socketpair);
+ * closes fd; true: a session ran */
 static int aa_conn(int fd, SSL_CTX *ctx, int *touchp)
 {
 	while (waitpid(-1, NULL, WNOHANG) > 0) {}   /* a decoder left behind (it would not die) that has died since */
@@ -1297,178 +1285,6 @@ static int aa_serve(const char *cert, const char *key)
 		aa_conn(fd, ctx, &touch);
 	}   // (a stop during a session: the loop's top, once aa_conn has said goodbye and closed it)
 }
-
-#ifdef AA_USB
-// ---- wired: Android Open Accessory over usbfs (no libusb needed) ----
-// A phone in its normal mode answers AOA's vendor requests: GET_PROTOCOL (51), the identity strings (SEND_STRING, 52:
-// the Android Auto app's accessory filter takes manufacturer "Android", model "Android Auto"), START (53). It comes back
-// as Google's accessory (18d1:2d00, 2d01 with adb), whose interface 0 has a bulk IN and a bulk OUT endpoint carrying the
-// same frames as the TCP socket. A thread copies bulk IN into a socketpair, so aa_conn reads and polls a socket as over
-// Wi-Fi; its writes go out one frame a bulk transfer (usb_write). aa usb serves one phone's connection and exits: its
-// wrapper cuts the port's power (VBUS) and runs it again, as the stock firmware does before every start, so the phone
-// always comes back out of accessory mode for a fresh session.
-#define AOA_VID 0x18d1
-enum { AOA_GET_PROTOCOL = 51, AOA_SEND_STRING = 52, AOA_START = 53 };
-static const char *const aoa_ident[6] = {   /* manufacturer, model, description, version, URI, serial (a placeholder) */
-	"Android", "Android Auto", "Android Auto", "2.0.1", "https://www.android.com/auto/", "HU-AAAAAA001" };
-typedef struct { uint16_t vid, pid; uint8_t cls; unsigned ep_in, ep_out, mps; } usb_dev_t;
-static int usb_fd = -1;
-static unsigned usb_ep_out, usb_mps = 512;
-
-// a bulk write's timeout is the session socket's own send timeout (aa_conn sets it once the session starts); before
-// that, 20 s: the phone's app may still be starting
-static ssize_t usb_write(int fd, const void *b, size_t n)
-{
-	struct timeval tv = { 0, 0 }; socklen_t tl = sizeof tv;
-	getsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, &tl);
-	unsigned ms = tv.tv_sec || tv.tv_usec ? (unsigned)(tv.tv_sec * 1000 + tv.tv_usec / 1000) : 20000;
-	struct usbdevfs_bulktransfer t = { .ep = usb_ep_out, .len = (unsigned)n, .timeout = ms, .data = (void *)b };
-	int r = ioctl(usb_fd, USBDEVFS_BULK, &t);
-	if (r == (int)n && n % usb_mps == 0) {   /* whole packets end with a zero-length one, else the phone waits for more */
-		t.len = 0;
-		if (ioctl(usb_fd, USBDEVFS_BULK, &t) < 0) return -1;
-	}
-	return r;
-}
-
-// a usbfs node's descriptors (the device's, then its configurations', as read() gives them) -> ids, class, and the first
-// configuration's interface 0 bulk endpoints (the accessory's); 0, or -1 if they are not a device's
-static int usb_parse(const uint8_t *b, size_t n, usb_dev_t *d)
-{
-	if (n < 18 || b[0] < 18 || b[1] != USB_DT_DEVICE) return -1;
-	*d = (usb_dev_t){ .vid = (uint16_t)(b[8] | b[9] << 8), .pid = (uint16_t)(b[10] | b[11] << 8), .cls = b[4], .mps = 512 };
-	int if0 = 0, configs = 0;
-	for (size_t i = b[0]; i + 2 <= n && b[i] >= 2 && i + b[i] <= n; i += b[i]) {
-		if (b[i + 1] == USB_DT_CONFIG && ++configs > 1) break;
-		if (b[i + 1] == USB_DT_INTERFACE && b[i] >= 9) if0 = b[i + 2] == 0 && b[i + 3] == 0;   /* interface 0, setting 0 */
-		else if (b[i + 1] == USB_DT_ENDPOINT && b[i] >= 7 && if0 && (b[i + 3] & USB_ENDPOINT_XFERTYPE_MASK) == USB_ENDPOINT_XFER_BULK) {
-			if (b[i + 2] & USB_DIR_IN) d->ep_in = b[i + 2];
-			else d->ep_out = b[i + 2], d->mps = (b[i + 4] | b[i + 5] << 8) & 0x7ff;
-		}
-	}
-	if (!d->mps) d->mps = 512;
-	return 0;
-}
-
-// a phone's accessory descriptors (device; configuration; interface 0, the accessory: bulk 0x81 in, 0x02 out; interface
-// 1, adb) and a second configuration that must not count -> interface 0's endpoints
-static int usb_selftest(void)
-{
-	static const uint8_t d[] = {
-		18, USB_DT_DEVICE, 0x00, 0x02, 0, 0, 0, 64, 0xd1, 0x18, 0x01, 0x2d, 0, 1, 1, 2, 3, 1,
-		9, USB_DT_CONFIG, 55, 0, 2, 1, 0, 0x80, 250,
-		9, USB_DT_INTERFACE, 0, 0, 2, 0xff, 0xff, 0, 0,
-		7, USB_DT_ENDPOINT, 0x81, USB_ENDPOINT_XFER_BULK, 0x00, 0x02, 0,
-		7, USB_DT_ENDPOINT, 0x02, USB_ENDPOINT_XFER_BULK, 0x00, 0x02, 0,
-		9, USB_DT_INTERFACE, 1, 0, 2, 0xff, 0x42, 1, 0,
-		7, USB_DT_ENDPOINT, 0x83, USB_ENDPOINT_XFER_BULK, 0x00, 0x02, 0,
-		7, USB_DT_ENDPOINT, 0x04, USB_ENDPOINT_XFER_BULK, 0x00, 0x02, 0,
-		9, USB_DT_CONFIG, 32, 0, 1, 2, 0, 0x80, 250,
-		9, USB_DT_INTERFACE, 0, 0, 2, 0xff, 0xff, 0, 0,
-		7, USB_DT_ENDPOINT, 0x85, USB_ENDPOINT_XFER_BULK, 0x40, 0x00, 0,
-		7, USB_DT_ENDPOINT, 0x06, USB_ENDPOINT_XFER_BULK, 0x40, 0x00, 0,
-	};
-	usb_dev_t u;
-	if (usb_parse(d, sizeof d, &u) || u.vid != AOA_VID || u.pid != 0x2d01 || u.ep_in != 0x81 || u.ep_out != 0x02 || u.mps != 512)
-		die("usb selftest: the accessory's endpoints (in 0x%02x out 0x%02x, %u-byte packets)", u.ep_in, u.ep_out, u.mps);
-	if (!usb_parse(d, 17, &u) || !usb_parse(d + 18, sizeof d - 18, &u)) die("usb selftest: not a device's descriptors, taken");
-	printf("AA-USB-SELFTEST OK: the accessory's bulk endpoints from its descriptors\n");
-	return 0;
-}
-
-static int usb_ctrl(int fd, uint8_t type, uint8_t req, uint16_t val, uint16_t idx, void *data, uint16_t len)
-{
-	struct usbdevfs_ctrltransfer c = { .bRequestType = type, .bRequest = req, .wValue = val, .wIndex = idx, .wLength = len,
-					   .timeout = 1000, .data = data };
-	return ioctl(fd, USBDEVFS_CONTROL, &c);
-}
-
-// The phone, opened as an accessory with interface 0 claimed: every second, each USB device (/dev/bus/usb/BBB/DDD, from
-// devtmpfs) is looked at: an accessory is opened (one left from an earlier run is used as it is, as AOA says; its power
-// cut by the wrapper first is the sure start); any other device but a hub is asked for AOA once (a refusal: not again).
-// Returns its usbfs fd, *d its endpoints.
-static int usb_accessory(usb_dev_t *d)
-{
-	static char asked[16][64]; static unsigned nasked;   /* nodes asked already (devnums only grow: no clash soon) */
-	for (int said = 0;; sleep(1)) {
-		DIR *bus = opendir("/dev/bus/usb");
-		if (!bus) { if (!said++) fprintf(stderr, "aa: no /dev/bus/usb (no USB host, or no mdev): waiting\n"); continue; }
-		struct dirent *be, *de;
-		while ((be = readdir(bus))) {
-			char dir[48]; DIR *dv;
-			if (be->d_name[0] == '.' || snprintf(dir, sizeof dir, "/dev/bus/usb/%.8s", be->d_name) >= (int)sizeof dir || !(dv = opendir(dir))) continue;
-			while ((de = readdir(dv))) {
-				char path[64]; uint8_t desc[4096]; ssize_t n; usb_dev_t u; int fd, seen = 0;
-				if (de->d_name[0] == '.' || snprintf(path, sizeof path, "%s/%.8s", dir, de->d_name) >= (int)sizeof path) continue;
-				if ((fd = open(path, O_RDWR | O_CLOEXEC)) < 0) continue;
-				if ((n = read(fd, desc, sizeof desc)) < 18 || usb_parse(desc, (size_t)n, &u) || u.cls == USB_CLASS_HUB) { close(fd); continue; }
-				if (u.vid == AOA_VID && u.pid >= 0x2d00 && u.pid <= 0x2d05) {   /* an accessory */
-					unsigned ifc = 0;
-					int bad = !u.ep_in || !u.ep_out ? -1 : ioctl(fd, USBDEVFS_CLAIMINTERFACE, &ifc) ? errno : 0;
-					if (!bad) { closedir(dv), closedir(bus); *d = u; return fd; }
-					for (unsigned k = 0; k < nasked && k < 16; k++) seen |= !strcmp(asked[k], path);
-					if (!seen) {   /* said once a node: it is looked at again every second, the log is on /data */
-						snprintf(asked[nasked++ % 16], sizeof asked[0], "%s", path);
-						if (bad < 0) fprintf(stderr, "aa: accessory %s without its two bulk endpoints\n", path);
-						else fprintf(stderr, "aa: accessory %s: interface 0: %s\n", path, strerror(bad));
-					}
-					close(fd); continue;
-				}
-				for (unsigned k = 0; k < nasked && k < 16; k++) seen |= !strcmp(asked[k], path);
-				if (seen) { close(fd); continue; }
-				snprintf(asked[nasked++ % 16], sizeof asked[0], "%s", path);
-				uint8_t ver[2] = { 0, 0 };
-				if (usb_ctrl(fd, USB_DIR_IN | USB_TYPE_VENDOR, AOA_GET_PROTOCOL, 0, 0, ver, 2) == 2 && (ver[0] | ver[1] << 8) >= 1) {
-					int ok = 1;
-					for (int i = 0; i < 6 && ok; i++)
-						ok = usb_ctrl(fd, USB_DIR_OUT | USB_TYPE_VENDOR, AOA_SEND_STRING, 0, (uint16_t)i, (void *)aoa_ident[i],
-							      (uint16_t)(strlen(aoa_ident[i]) + 1)) >= 0;
-					ok = ok && usb_ctrl(fd, USB_DIR_OUT | USB_TYPE_VENDOR, AOA_START, 0, 0, NULL, 0) >= 0;
-					fprintf(stderr, "aa: %s (%04x:%04x) speaks AOA %u: %s\n", path, u.vid, u.pid, ver[0] | ver[1] << 8,
-						ok ? "asked to start Android Auto (accessory mode)" : "its switch failed");
-				}
-				close(fd);
-			}
-			closedir(dv);
-		}
-		closedir(bus);
-	}
-}
-
-typedef struct { int sock, ufd; unsigned ep; } usb_rx_t;
-static void *usb_rx(void *arg)   /* bulk IN -> the session's socket, until the phone goes (or aa exits: usbfs waits are killable) */
-{
-	const usb_rx_t *u = arg;
-	static uint8_t b[16384];   /* a multiple of the packet size: a transfer never overflows it */
-	for (;;) {
-		struct usbdevfs_bulktransfer t = { .ep = u->ep, .len = sizeof b, .timeout = 0, .data = b };   /* no timeout: one would */
-		int n = ioctl(u->ufd, USBDEVFS_BULK, &t);                                                   /* drop the bytes it got */
-		if (n < 0 || (n > 0 && writen(u->sock, b, (size_t)n))) break;
-	}
-	shutdown(u->sock, SHUT_RDWR);   /* the session reads the end */
-	return NULL;
-}
-
-// aa usb: one phone's connection over USB; 0 if its session ran. The reader thread dies with the process.
-static int aa_usb_serve(const char *cert, const char *key)
-{
-	signal(SIGPIPE, SIG_IGN);
-	setvbuf(stderr, NULL, _IOLBF, 0);
-	int touch = touch_open();
-	SSL_CTX *ctx = tls_ctx(cert, key, 0);
-	fprintf(stderr, "aa: waiting for a phone on USB (cert %s)\n", cert);
-	usb_dev_t d; pthread_t th; int sv[2];
-	int ufd = usb_accessory(&d);
-	fprintf(stderr, "aa: the phone is on as an accessory (%04x:%04x, bulk in 0x%02x, out 0x%02x, %u-byte packets)\n",
-		d.vid, d.pid, d.ep_in, d.ep_out, d.mps);
-	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv)) die("socketpair: %s", strerror(errno));
-	static usb_rx_t rx;   /* the reader thread reads it until the process ends: not on this function's stack */
-	rx = (usb_rx_t){ sv[1], ufd, d.ep_in };
-	usb_fd = ufd, usb_ep_out = d.ep_out, usb_mps = d.mps, xwrite = usb_write;
-	if (pthread_create(&th, NULL, usb_rx, &rx)) die("no USB reader thread");
-	return aa_conn(sv[0], ctx, &touch) ? 0 : 1;
-}
-#endif // AA_USB
 
 // ---- the connection self-test (aa --conn-test): a phone over a socketpair, through version, TLS, discovery, a channel,
 // a ping, its shutdown; then a stop (SIGTERM): the head unit tells the phone ----
@@ -2185,11 +2001,7 @@ int main(int argc, char **argv)
 		return 0;
 	}
 	if (argc > 1 && !strcmp(argv[1], "--conn-test")) return conn_selftest();   /* the build host only (it says why) */
-	if (argc > 1 && !strcmp(argv[1], "--selftest")) return selftest() | msg_selftest() | rx_selftest() | mt_selftest() | bt_selftest()
-#ifdef AA_USB
-		| usb_selftest()
-#endif
-		;
+	if (argc > 1 && !strcmp(argv[1], "--selftest")) return selftest() | msg_selftest() | rx_selftest() | mt_selftest() | bt_selftest();
 	if ((argc == 3 || argc == 4) && !strcmp(argv[1], "certcheck")) {   // certcheck <crt> [key]: 0 if usable (see cert_check)
 		int r = cert_check(argv[2], argc == 4 ? argv[3] : NULL);
 		if (r) fprintf(stderr, "aa: %s: %s\n", argv[2], r == 1 ? "self-signed: phones reject it (a Google-signed head-unit certificate is needed)"
@@ -2212,10 +2024,6 @@ int main(int argc, char **argv)
 		return aa_serve(cert, key);
 	}
 	if (argc == 6 && !strcmp(argv[1], "ap")) return aa_ap_up(argv[2], argv[3], key_arg(argv[4]), argv[5]); // ap <iface> <ssid> <key> <ip>
-#ifdef AA_USB
-	if ((argc == 4 || argc == 2) && !strcmp(argv[1], "usb"))   // usb [<cert.pem> <key.pem>]: the wired receiver (AOA)
-		return aa_usb_serve(argc == 4 ? argv[2] : "/etc/wattline/aa.crt", argc == 4 ? argv[3] : "/etc/wattline/aa.key");
-#endif
 #ifdef AA_MCU
 	if (argc == 6 && !strcmp(argv[1], "mcu")) aa_mcu_serve(argv[2], argv[3], key_arg(argv[4]), argv[5]); // mcu <ip> <ssid> <key> <bssid>
 #endif
@@ -2226,9 +2034,6 @@ int main(int argc, char **argv)
 			"       aa ap <iface> <ssid> <key> <ip> | aa bt <ip> <ssid> <key> <bssid>\n"
 			"  (serve: no cert args auto-generates a persistent self-signed cert at /etc/wattline/)\n"
 			"  (<key> as -: the passphrase on stdin's first line, out of the process list)\n");
-#ifdef AA_USB
-	fprintf(stderr, "       aa usb [<cert.pem> <key.pem>]: the phone on USB (Android Open Accessory), the certificate as serve's\n");
-#endif
 #ifdef AA_MCU
 	fprintf(stderr, "       aa mcu <ip> <ssid> <key> <bssid>: the Bluetooth start through the screen's MCU (mcud)\n");
 #endif
