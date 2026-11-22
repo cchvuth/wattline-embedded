@@ -400,14 +400,17 @@ void cmdr_tick(cmdr_t *c, int64_t now) {
 
 void cmdr_kick(cmdr_t *c, int ask, int64_t now) {
   if (ask && c->paused && !ready(c)) {   // stepped aside for WiFi: the tap is kept, and dialled as WiFi lets go
-    c->asks = 1, c->ask_at = now, c->parked = 0, c->attempt = 0, c->redial = 1;
+    c->asks = 2, c->ask_at = now, c->parked = 0, c->attempt = 0, c->redial = 1;
     set(c, CS_PAUSED, "waiting for the WiFi stream");
     return;
   }
   if (!c->on || ready(c)) return;
   if (ask) {
-    c->asked = 1; // an approval already running counts as asked too
-    c->asks = 1, c->ask_at = now;
+    // A tap is two asks, the ask and its one retry (an approval cut short), whichever way it came: turned into "asked"
+    // by dial alone, so a tap whose first dial misses, or one kept while stepped aside, has its retry as any other
+    // (they had none). An approval already running is asked as it is.
+    if (c->state == CS_APPROVING) c->asked = 1;
+    c->asks = c->state == CS_APPROVING ? 1 : 2, c->ask_at = now;
     c->parked = 0;
     c->attempt = 0;
   }
@@ -532,7 +535,7 @@ int cmdr_press_guard(cmdr_action a, int parked, char gear) {
 int cmdr_press(cmdr_t *c, cmdr_action a, int parked, char gear, int64_t now) {
   if (!ready(c)) { // answered now; the look is the next tick's (a dial here would hold the answer up to 20 s)
     if (c->paused) cmdr_kick(c, 1, now); // kept for when WiFi lets go (no dial)
-    else if (c->on && c->state != CS_APPROVING) c->asked = c->asks = 1, c->ask_at = now, c->parked = 0, c->attempt = 0, c->retry_at = now;
+    else if (c->on && c->state != CS_APPROVING) c->asks = 2, c->ask_at = now, c->parked = 0, c->attempt = 0, c->retry_at = now;
     return CMDR_E_NOT_READY;
   }
   int g = cmdr_press_guard(a, parked, gear);

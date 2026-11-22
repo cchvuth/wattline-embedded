@@ -476,7 +476,7 @@ int main(void) {
   CHECK(c.state == CS_REFUSED);           // the boot dial, never asked: parked
   cmdr_wifi(&c, 0, 1, now), cmdr_step_aside(&c, now), run(&c, 1000);
   cmdr_kick(&c, 1, now);                   // the tap, WiFi mid-try
-  CHECK(c.state == CS_PAUSED && c.asks == 1);
+  CHECK(c.state == CS_PAUSED && c.asks == 2);
   run(&c, 3000);
   cmdr_resume(&c, now), cmdr_wifi(&c, 1, 0, now), run(&c, 5000);
   CHECK(c.state == CS_APPROVING);
@@ -490,10 +490,17 @@ int main(void) {
   dev.advertising = 0;
   cmdr_kick(&c, 1, now);
   for (int i = 0; i < 4; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
-  CHECK(c.state == CS_AWAY && c.asks == 1);
+  CHECK(c.state == CS_AWAY && c.asks == 2);
   dev.advertising = 1;
   for (int i = 0; i < 40 && c.state != CS_APPROVING; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
   CHECK(c.state == CS_APPROVING);
+  // and that tap, whose first dials missed, still has its one retry when the approval is cut short; then no more
+  cmdr_link_lost(&c, now);
+  for (int i = 0; i < 30 && c.state != CS_APPROVING; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
+  CHECK(c.state == CS_APPROVING && c.asks == 0);
+  cmdr_link_lost(&c, now);
+  for (int i = 0; i < 30 && c.state == CS_RETRYING; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
+  CHECK(c.state == CS_REFUSED);
 
   // Nor do dials that fail before the Commander answers (seen, the link not made): the tap stands, the approval asked
   // once one gets through.
@@ -504,7 +511,7 @@ int main(void) {
   dev.has = 0;
   cmdr_kick(&c, 1, now);
   for (int i = 0; i < 8; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
-  CHECK(c.state != CS_APPROVING && c.asks == 1);
+  CHECK(c.state != CS_APPROVING && c.asks == 2);
   dev.has = CMDR_HAS_SESSION | CMDR_HAS_API | CMDR_HAS_PUSH;
   for (int i = 0; i < 40 && c.state != CS_APPROVING; i++) cmdr_wifi(&c, 1, 0, now), run(&c, 1000);
   CHECK(c.state == CS_APPROVING);
@@ -529,7 +536,7 @@ int main(void) {
   cmdr_step_aside(&c, now), cmdr_wifi(&c, 1, 0, now), run(&c, 2500);
   cmdr_wifi(&c, 0, 1, now), cmdr_step_aside(&c, now), run(&c, 1000);
   cmdr_kick(&c, 1, now);
-  CHECK(c.state == CS_PAUSED && c.asks == 1);
+  CHECK(c.state == CS_PAUSED && c.asks == 2);
   run(&c, 301000);
   cmdr_resume(&c, now), cmdr_wifi(&c, 1, 0, now), run(&c, 5000);
   CHECK(c.state == CS_REFUSED && c.asks == 0);
