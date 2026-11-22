@@ -3131,6 +3131,7 @@ static void show_in_page(lv_obj_t *o, bool on)
 {
 	if (on != lv_obj_is_hidden(o)) return;
 	show(o, on);
+	lv_obj_mark_layout_as_dirty(lv_obj_get_parent(o)); /* its row: a plain box is not laid out again for a child hidden */
 	for (lv_obj_t *p = lv_obj_get_parent(o); p; p = lv_obj_get_parent(p))
 		if (lv_obj_is_scrollable(p)) { /* the page: its rows' boxes do not scroll */
 			lv_obj_update_layout(p), lv_obj_readjust_scroll(p, LV_ANIM_OFF), lv_obj_invalidate(p);

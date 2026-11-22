@@ -29,7 +29,7 @@ typedef struct {
 } dash_net_t;
 typedef struct {
 	bool minor_figures, hour12;
-	int brightness_pct;       /* 5..100: the manual value */
+	int brightness_pct;       /* 0..100: the manual value (0: the lowest lit level) */
 	bool follow_car;          /* follow the car screen's brightness (0x273); moving the slider turns it off */
 	int follow_offset;        /* -50..50: % points added to the followed brightness ("Follow offset") */
 	int net_count;
