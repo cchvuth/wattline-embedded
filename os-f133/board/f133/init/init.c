@@ -12,10 +12,14 @@
  * Booted from the SPI NOR, U-Boot passes root=mtd:rootfs: the root is the squashfs in the NOR's "rootfs" partition
  * (/dev/mtdblock<n>) under the same overlay, /data is the NOR's JFFS2 "data" partition, and the card is not needed
  * (S02sd mounts one if it is there). Updates are tried on the card's own system, then written to the NOR.
+ *
+ * The boot picture goes on the screen from here, as soon as the root and /data are there, and only then the backlight
+ * comes on (the kernel leaves it off: the device tree): the first light shows the picture, not an empty panel.
  */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/fb.h>
 #include <linux/loop.h>
 #include <stdio.h>
 #include <string.h>
@@ -23,6 +27,7 @@
 #include <sys/mount.h>
 #include <sys/reboot.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static void say(const char *what, int err)
@@ -38,14 +43,96 @@ static void say(const char *what, int err)
 	}
 }
 
+/* The backlight on (15 % of its 2000 steps, as the kernel had it; the dash sets its own level when it starts). */
+static void light(void)
+{
+	int fd = open("/sys/class/backlight/backlight/brightness", O_WRONLY);
+
+	if (fd >= 0) {
+		write(fd, "300", 3);
+		close(fd);
+	}
+}
+
 static void fail(const char *what)
 {
+	light();	/* the messages are on the screen */
 	say(what, errno);
 	say("rebooting in 10 s", 0);
 	sleep(10);
 	reboot(RB_AUTOBOOT);
 	for (;;)
 		pause();
+}
+
+/*
+ * The boot picture, then the backlight: the owner's own (/data/splash.bgra.gz: the NOR's data partition, or the
+ * card's /data) if there is one, else the image's. Each is the panel's framebuffer, gzipped; one of another size (its
+ * last 4 bytes say it) is passed over. Unpacked by the new root's own zcat, as S00splash did 1.5 s later (the root's
+ * init and its scripts read from the flash first); the text console lets go of the framebuffer first, so no cursor
+ * lands on the picture. /.splash-shown tells S00splash. Whatever fails here, the boot goes on and the backlight comes
+ * on: nothing of this is needed to start.
+ */
+static void splash(int nor)
+{
+	const char *pic[2] = { nor ? "/newroot/data/splash.bgra.gz" : "/newroot/mnt/sd/data/splash.bgra.gz",
+			       "/newroot/usr/share/splash/splash.bgra.gz" };
+	struct fb_var_screeninfo v;
+	struct fb_fix_screeninfo f;
+	unsigned char t[4];
+	char p[64], name[32];
+	int i, n, fd, st, s = -1, fb = open("/dev/fb0", O_WRONLY);
+	pid_t pid;
+
+	if (fb < 0 || ioctl(fb, FBIOGET_VSCREENINFO, &v) || ioctl(fb, FBIOGET_FSCREENINFO, &f))
+		goto out;
+	for (i = 0; i < 2 && s < 0; i++) {
+		s = open(pic[i], O_RDONLY);
+		if (s >= 0 && (lseek(s, -4, SEEK_END) < 0 || read(s, t, 4) != 4 ||
+			       (t[0] | t[1] << 8 | t[2] << 16 | (unsigned)t[3] << 24) != f.line_length * v.yres)) {
+			close(s);
+			s = -1;
+		}
+	}
+	if (s < 0)
+		goto out;
+	for (i = 0; i < 8; i++) {
+		snprintf(p, sizeof(p), "/sys/class/vtconsole/vtcon%d/name", i);
+		fd = open(p, O_RDONLY);
+		if (fd < 0)
+			break;
+		n = read(fd, name, sizeof(name) - 1);
+		close(fd);
+		name[n > 0 ? n : 0] = 0;
+		if (!strstr(name, "frame buffer"))
+			continue;
+		snprintf(p, sizeof(p), "/sys/class/vtconsole/vtcon%d/bind", i);
+		fd = open(p, O_WRONLY);
+		if (fd >= 0) {
+			write(fd, "0", 1);
+			close(fd);
+		}
+	}
+	pid = fork();
+	if (pid == 0) {
+		if (lseek(s, 0, SEEK_SET) || dup2(s, 0) < 0 || dup2(fb, 1) < 0 || chroot("/newroot") || chdir("/"))
+			_exit(1);
+		execl("/bin/busybox", "zcat", (char *)NULL);
+		_exit(1);
+	}
+	if (pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st) && !WEXITSTATUS(st)) {
+		fd = open("/newroot/.splash-shown", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+		if (fd >= 0)
+			close(fd);
+	} else {
+		say("the boot picture was not drawn", 0);
+	}
+out:
+	if (s >= 0)
+		close(s);
+	if (fb >= 0)
+		close(fb);
+	light();
 }
 
 /*
@@ -223,6 +310,7 @@ overlay:
 			say("mounting the NOR's data partition (mtd:data)", errno);
 	} else if (mount("/sd", "/newroot/mnt/sd", NULL, MS_MOVE, NULL))
 		say("moving the card to /mnt/sd", errno);
+	splash(nor);
 	if (mount("/dev", "/newroot/dev", NULL, MS_MOVE, NULL))
 		say("moving /dev", errno);
 	umount("/proc");

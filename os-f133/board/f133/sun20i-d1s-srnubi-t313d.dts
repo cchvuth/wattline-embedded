@@ -66,10 +66,13 @@
 		pwms = <&pwm 7 20000 PWM_POLARITY_INVERTED>;
 		enable-gpios = <&pio 6 15 GPIO_ACTIVE_HIGH>;
 		/* 0..2000: every step of the PWM's 50 kHz period (2000 of its 100 MHz clock), a twentieth of a percent of
-		 * duty each: the dash's lowest level is 2 of them, far below one percent (a night's dark cabin) */
+		 * duty each: the dash's lowest level is one of them, far below one percent (a night's dark cabin) */
 		brightness-levels = <0 2000>;
 		num-interpolated-steps = <2000>;
-		default-brightness-level = <300>;	/* 15 %, until the dash sets its own */
+		/* off until the initramfs has the boot picture on the screen and lights it (init/init.c): the first light
+		 * shows the picture, not an empty panel. Hence no backlight link from the panel either: the DSI coming up
+		 * would light it. */
+		default-brightness-level = <0>;
 	};
 
 	soc {
@@ -280,7 +283,6 @@
 		compatible = "dash,dsi-panel";
 		reg = <0>;
 		reset-gpios = <&pio 3 21 GPIO_ACTIVE_LOW>;	/* stock lcd_reset PD21 */
-		backlight = <&backlight>;
 		/* 11.26" at 720x1920: about 100 x 268 mm in portrait (6.6's of_get_drm_panel_display_mode needs both) */
 		width-mm = <100>;
 		height-mm = <268>;

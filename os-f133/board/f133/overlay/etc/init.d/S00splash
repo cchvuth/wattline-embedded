@@ -1,13 +1,14 @@
 #!/bin/sh
-# Boot screen, as early as init can: shown until the dash draws over it (S05dash). The kernel's text console is
-# detached from the framebuffer first, so no cursor or text lands on the picture (the T113's S00splash).
+# Boot screen: shown until the dash draws over it (S05dash). The initramfs put it up already, before the backlight
+# came on (board/f133/init/init.c: /.splash-shown); this is for a kernel from before that, and for the text console,
+# detached from the framebuffer so no cursor or text lands on the picture (the T113's S00splash).
 # The picture: /data/splash.bgra.gz (the NOR's data partition, or the card's /data) if there is one, else the
 # built-in one. Each is the panel's 720x1920 framebuffer (XRGB8888, i.e. BGRA bytes), gzipped; a picture of another
 # size (the T113's 480x1920) is passed over for the built-in one.
 case "$1" in
 start|"")
 	for v in /sys/class/vtconsole/vtcon*; do grep -q "frame buffer" $v/name 2>/dev/null && echo 0 > $v/bind; done
-	[ -c /dev/fb0 ] || exit 0
+	[ -c /dev/fb0 ] && [ ! -e /.splash-shown ] || exit 0
 	n=$(( $(cat /sys/class/graphics/fb0/stride) * $(cut -d, -f2 /sys/class/graphics/fb0/virtual_size) ))
 	for F in /data/splash.bgra.gz /usr/share/splash/splash.bgra.gz; do
 		# gzip's last 4 bytes: the unpacked size (little-endian)

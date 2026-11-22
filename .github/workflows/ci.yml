@@ -51,7 +51,7 @@ jobs:
           /tmp/aa --selftest && /tmp/aa --conn-test
       - name: Host-compile the H.264 decoder (spike-vdec) and check its picture conversion (--rotate)
         run: cc -O2 -Wall -Werror -o /tmp/spike-vdec app/vdec/spike-vdec.c && /tmp/spike-vdec --rotate
-      - name: The F133 screen's tools (mcud against a pty playing its MCU; aa mcu through mcud; nor.sh with fake flash; norw's checks; dash-nor; the update's try and keep; dash-aa)
+      - name: The F133 screen's tools (mcud against a pty playing its MCU; aa mcu through mcud; nor.sh with fake flash; norw's checks; dash-nor; the update's try and keep; dash-aa; the scripts' log fallbacks; the initramfs' boot picture)
         run: |
           cc -O2 -Wall -o /tmp/mcud os-f133/package/mcud/src/mcud.c && python3 -I os-f133/package/mcud/src/test_mcud.py /tmp/mcud
           cc -O2 -Wall -DAA_MCU=1 -o /tmp/aa-mcu app/aa/aa.c app/core/pb.c -lssl -lcrypto -lpthread
@@ -61,6 +61,7 @@ jobs:
           docker run --rm -v "$PWD":/r:ro debian:stable sh /r/os-f133/test/test_dash_nor.sh
           docker run --rm -v "$PWD":/r:ro debian:stable sh /r/os-f133/test/test_ota_try.sh
           docker run --rm --privileged -e DEBIAN_FRONTEND=noninteractive -v "$PWD":/r:ro debian:stable sh -c 'apt-get -qq update && apt-get -qq install -y busybox >/dev/null && sh /r/os-f133/test/test_dash_aa.sh && sh /r/os-f133/test/test_log_fallback.sh'
+          docker run --rm -e DEBIAN_FRONTEND=noninteractive -v "$PWD":/r:ro debian:stable sh -c 'apt-get -qq update && apt-get -qq install -y gcc libc6-dev busybox >/dev/null && sh /r/os-f133/test/test_init_splash.sh'
 
   decoder-neon:
     runs-on: ubuntu-24.04-arm
