@@ -58,7 +58,8 @@ copy)
 			# kept under a number, never written over
 			if [ -f "$SD/stock.bin" ]; then
 				n=2; while [ -e "$SD/stock.$n.bin" ]; do n=$((n + 1)); done
-				mv "$SD/stock.bin" "$SD/stock.$n.bin"
+				mv "$SD/stock.bin" "$SD/stock.$n.bin" ||
+					{ rm -f "$SD/stock.bin.new"; fail "the stock copy on the card could not be kept aside (is the card full?)"; }
 			fi
 			mv -f "$SD/stock.bin.new" "$SD/stock.bin" && sync
 		fi

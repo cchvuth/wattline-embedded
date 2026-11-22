@@ -13,6 +13,10 @@ start|"")
 	for F in /data/splash.bgra.gz /usr/share/splash/splash.bgra.gz; do
 		# gzip's last 4 bytes: the unpacked size (little-endian)
 		[ -s $F ] && [ "$(tail -c 4 $F | od -An -tu4 | tr -d ' ')" = "$n" ] && zcat $F > /dev/fb0 2>/dev/null && break
-	done ;;
+	done
+	# no mark with a kernel whose device tree leaves the backlight off (an update cut between its two renames starts
+	# the old kernel on the new device tree once): lit here, as the initramfs would have
+	B=/sys/class/backlight/backlight/brightness
+	[ "$(cat $B 2>/dev/null)" = 0 ] && echo 300 > $B ;;
 esac
 exit 0

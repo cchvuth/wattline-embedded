@@ -49,12 +49,15 @@ case "$1" in
 read)
 	F=${2:?FILE}
 	[ ! -e "$F" ] || die "$F is there already: read to another name (a copy of the chip is not written over)"
-	dd if="$CHIP" of="$F" bs=64k
-	a=$(sha < "$F")
+	# under its name only once the two reads agree: a read cut short (a full card) left a bad file there, which the
+	# line above then kept in the way
+	dd if="$CHIP" of="$F.new" bs=64k || { rm -f "$F.new"; die "$F could not be written"; }
+	a=$(sha < "$F.new")
 	b=$(sha < "$CHIP")
 	echo "$F: $a"
 	echo "$CHIP read again: $b"
-	[ "$a" = "$b" ] || die "the two reads differ"
+	[ "$a" = "$b" ] || { rm -f "$F.new"; die "the two reads differ"; }
+	mv "$F.new" "$F"
 	;;
 flash)
 	# DIR's files, or ROOTFS= KERNEL= UBOOT= STOCK= for any of them elsewhere (dash-nor: the card install's root)

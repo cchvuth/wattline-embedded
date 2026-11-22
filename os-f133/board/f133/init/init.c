@@ -79,6 +79,7 @@ static void splash(int nor)
 			       "/newroot/usr/share/splash/splash.bgra.gz" };
 	struct fb_var_screeninfo v;
 	struct fb_fix_screeninfo f;
+	struct stat sb;
 	unsigned char t[4];
 	char p[64], name[32];
 	int i, n, fd, st, s = -1, fb = open("/dev/fb0", O_WRONLY);
@@ -87,8 +88,8 @@ static void splash(int nor)
 	if (fb < 0 || ioctl(fb, FBIOGET_VSCREENINFO, &v) || ioctl(fb, FBIOGET_FSCREENINFO, &f))
 		goto out;
 	for (i = 0; i < 2 && s < 0; i++) {
-		s = open(pic[i], O_RDONLY);
-		if (s >= 0 && (lseek(s, -4, SEEK_END) < 0 || read(s, t, 4) != 4 ||
+		s = open(pic[i], O_RDONLY | O_NONBLOCK);	/* (a FIFO of that name on /data would hold the boot for good) */
+		if (s >= 0 && (fstat(s, &sb) || !S_ISREG(sb.st_mode) || lseek(s, -4, SEEK_END) < 0 || read(s, t, 4) != 4 ||
 			       (t[0] | t[1] << 8 | t[2] << 16 | (unsigned)t[3] << 24) != f.line_length * v.yres)) {
 			close(s);
 			s = -1;

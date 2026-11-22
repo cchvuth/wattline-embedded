@@ -50,5 +50,7 @@ fresh
 $T/t nor; [ ! -s /dev/fb0 ] && [ ! -e /newroot/.splash-shown ] && ok "no picture at all: nothing drawn, no mark" || no "none"
 fresh; head -c 44 /dev/urandom > /newroot/data/splash.bgra.gz; printf '\060\000\000\000' >> /newroot/data/splash.bgra.gz
 $T/t nor; [ ! -e /newroot/.splash-shown ] && ok "a picture that does not unpack: no mark (S00splash tries)" || no "corrupt"
+fresh; mkfifo /newroot/data/splash.bgra.gz; cp $T/built.gz /newroot/usr/share/splash/splash.bgra.gz
+timeout 5 $T/t nor; [ $? = 0 ] && cmp -s /dev/fb0 $T/built.raw && ok "a FIFO of the picture's name: not waited on, the image's drawn" || no "fifo"
 rm -rf $T /newroot /dev/fb0
 [ $bad = 0 ] && echo "init splash: ok" || { echo "init splash: $bad failed"; exit 1; }
