@@ -357,6 +357,7 @@ cmd_flash() {
 	# what this version's own partitions hold (this kernel's: the bundle's): one that nor.sh would refuse at every
 	# start goes now, the flash keeping its version
 	if ! fits rootfs $SD/rootfs.sqfs || ! fits kernel $SD/nor/kernel.itb; then
+		grep -qx "$(current_version)" $OTA/failed 2>/dev/null || echo "$(current_version)" >> $OTA/failed   # (not again by itself)
 		rm -f $OTA/to-flash; mark_clear
 		fail "this version does not fit its own partitions on the built-in flash: the flash keeps its version"
 	fi

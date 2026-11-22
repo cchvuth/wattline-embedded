@@ -203,7 +203,7 @@ card; forflash; printf TRY1 > $T/try; : > $T/log; rm $SD/ota/trying
 for f in Image f133.dtb rootfs.sqfs nor/kernel.itb nor/u-boot-sunxi-with-spl.bin; do mv $SD/$f.try $SD/$f; done
 head -c 300 /dev/zero > $SD/nor/kernel.itb; cp $T/mtd $T/mtd.real
 printf 'dev:    size   erasesize  name\nmtd2: 00000100 00010000 "kernel"\nmtd3: 00a80000 00010000 "rootfs"\n' > $T/mtd
-upd flash; [ $? = 1 ] && [ "$(st)" = error ] && ! mark && ! grep -q nor.sh $T/log && ok "a kernel bigger than its partition: given up before writing" || no "size check ($(st))"
+upd flash; [ $? = 1 ] && [ "$(st)" = error ] && ! mark && ! grep -q nor.sh $T/log && grep -qx 0.2.0 $SD/ota/failed && ok "a kernel bigger than its partition: given up before writing, not again by itself" || no "size check ($(st))"
 mv $T/mtd.real $T/mtd
 # the card's files changed since the download: not to the flash
 card; forflash; printf TRY1 > $T/try; : > $T/log
