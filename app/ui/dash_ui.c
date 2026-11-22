@@ -11,7 +11,8 @@
 #include "src/draw/sw/lv_draw_sw.h"              /* its area and the decoded image */
 #include "src/image/lv_image_decoder_private.h"
 #include "src/indev/lv_indev_private.h"          /* where a swipe began (swipe) */
-#include "src/display/lv_display_private.h"      /* the frame counter's label (fps_show: the CPU's temperature) */
+#include "src/display/lv_display_private.h"      /* the frame counter's label and its data (fps_show) */
+#include "src/debugging/sysmon/lv_sysmon_private.h"
 #include <fcntl.h>
 #include <limits.h>
 #include <sys/stat.h>
@@ -3098,46 +3099,51 @@ static void host_tap(lv_event_t *e)
 	dash_ui_show(DASH_VIEW_NETWORK);
 }
 static void slider_look(void);
-/* LVGL's own counter in the bottom right corner (frames a second, the CPU's share, a frame's render and flush ms): the
- * Display settings' switch, or DASH_PERF=1 (performance checks). The corner is clear of the split's picture. Above
- * it, in its look, the SoC's temperature (the kernel's thermal zone 0, every 2 s, in the dash's unit), where there is
- * one: what the CPU's clock (lowered from 80 C) and the frames are up against. */
+/* LVGL's counter in the bottom right corner, its text ours, two rows: the CPU (the SoC's temperature, from the
+ * kernel's thermal zone 0 every 2 s in the dash's unit where there is one; its load) and the frames (a second; a
+ * frame's ms, render | flush). The Display settings' switch, or DASH_PERF=1 (performance checks). The corner is clear
+ * of the split's picture. */
 #if LV_USE_PERF_MONITOR
-static lv_obj_t *fps_temp;
 static lv_timer_t *fps_temp_timer;
+static long fps_mc = LONG_MIN; /* the SoC's temperature, m°C (LONG_MIN: none) */
 static void fps_temp_cb(lv_timer_t *t)
 {
 	(void)t;
-	lv_display_t *d = lv_display_get_default();
 	FILE *f = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
-	long mc = 0;
-	bool ok = f && fscanf(f, "%ld", &mc) == 1;
+	long mc;
+	fps_mc = f && fscanf(f, "%ld", &mc) == 1 ? mc : LONG_MIN;
 	if (f) fclose(f);
-	lv_obj_set_hidden(fps_temp, !ok || !d->perf_label || lv_obj_has_flag(d->perf_label, LV_OBJ_FLAG_HIDDEN));
-	if (!ok || !d->perf_label) return;
-	lv_label_set_text_fmt(fps_temp, "CPU %d \xc2\xb0%c", (int)lroundf(shown_deg(mc / 1000.0f)), S.fahrenheit ? 'F' : 'C');
-	lv_obj_align_to(fps_temp, d->perf_label, LV_ALIGN_OUT_TOP_RIGHT, 0, 0); /* (its width follows its text) */
+}
+/* after LVGL's own observer (observers run in the order they were added), so this text is the one shown */
+static void fps_text_cb(lv_observer_t *o, lv_subject_t *subject)
+{
+	const lv_sysmon_perf_info_t *p = lv_subject_get_pointer(subject);
+	lv_obj_t *l = lv_observer_get_target(o);
+	char cpu[40];
+	if (fps_mc != LONG_MIN)
+		snprintf(cpu, sizeof cpu, "CPU %d \xc2\xb0%c, %u%%", (int)lroundf(shown_deg(fps_mc / 1000.0f)),
+			 S.fahrenheit ? 'F' : 'C', (unsigned)p->calculated.cpu);
+	else snprintf(cpu, sizeof cpu, "CPU %u%%", (unsigned)p->calculated.cpu);
+	lv_label_set_text_fmt(l, "%s\n%u FPS, %u ms (%u | %u)", cpu, (unsigned)p->calculated.fps,
+			      (unsigned)(p->calculated.render_avg_time + p->calculated.flush_avg_time),
+			      (unsigned)p->calculated.render_avg_time, (unsigned)p->calculated.flush_avg_time);
 }
 #endif
 static void fps_show(void)
 {
 #if LV_USE_PERF_MONITOR
+	lv_display_t *d = lv_display_get_default();
 	const char *perf = getenv("DASH_PERF");
 	bool on = ST.show_fps || (perf && !strcmp(perf, "1"));
-	if (on) lv_sysmon_show_performance(lv_display_get_default());
-	else lv_sysmon_hide_performance(lv_display_get_default());
-	if (on && !fps_temp) { /* the counter's look (lv_sysmon.c) */
-		fps_temp = lv_label_create(lv_layer_sys());
-		lv_obj_set_style_bg_opa(fps_temp, LV_OPA_50, 0);
-		lv_obj_set_style_bg_color(fps_temp, lv_color_black(), 0);
-		lv_obj_set_style_text_color(fps_temp, lv_color_white(), 0);
-		lv_obj_set_style_pad_all(fps_temp, 3, 0);
-		lv_obj_set_hidden(fps_temp, true);
+	if (on) lv_sysmon_show_performance(d);
+	else lv_sysmon_hide_performance(d);
+	if (on && !fps_temp_timer && d->perf_label && d->perf_sysmon_backend.subject) {
+		lv_subject_add_observer_obj(d->perf_sysmon_backend.subject, fps_text_cb, d->perf_label, NULL);
 		fps_temp_timer = lv_timer_create(fps_temp_cb, 2000, NULL);
 	}
-	if (!fps_temp) return;
+	if (!fps_temp_timer) return;
 	if (on) lv_timer_resume(fps_temp_timer), fps_temp_cb(NULL);
-	else lv_timer_pause(fps_temp_timer), lv_obj_set_hidden(fps_temp, true);
+	else lv_timer_pause(fps_temp_timer);
 #endif
 }
 static void switch_changed(lv_event_t *e)
