@@ -32,9 +32,14 @@ start)
 		# (S01try: the boot got this far, the verdict's own time starts: the 45 passes of 2 s and a check each, wpa_cli
 		# cut at 3 s where its daemon does not answer, then the keep's writes)
 		: > $R/run/try-judging
-		i=0
-		while [ $i -lt 45 ] && ! ok; do sleep 2; i=$((i + 1)); done
-		if ok; then
+		# (one look decides: asked again after the loop, a station that had just dropped its list, starting a join,
+		# gave up a try that had passed)
+		i=0 good=
+		while [ $i -lt 45 ]; do
+			if ok; then good=1; break; fi
+			sleep 2; i=$((i + 1))
+		done
+		if [ -n "$good" ]; then
 			for f in rootfs.sqfs nor/kernel.itb nor/u-boot-sunxi-with-spl.bin; do [ -f $C/$f.try ] && mv $C/$f.try $C/$f; done
 			sync
 			for f in f133.dtb Image; do [ -f $C/$f.try ] && mv $C/$f.try $C/$f; done
