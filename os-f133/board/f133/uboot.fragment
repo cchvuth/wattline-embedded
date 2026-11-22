@@ -36,8 +36,9 @@ CONFIG_CMD_FDT=y
 CONFIG_USE_BOOTCOMMAND=y
 # booti: no initrd (the kernel's own initramfs mounts rootfs.sqfs from the card); the console on the screen only,
 # turned to landscape (fbcon rotate 1, 90 degrees: 3 showed the text upside down), 32 bpp (16 banded the car
-# pictures). Quiet: kernel messages only at emergency level (loglevel 1: a panic still shows, the boot's warnings
-# do not) and no cursor, so the screen stays black until the splash (S00splash). The watchdog
+# pictures). Quiet: kernel messages only at emergency level (loglevel 1: a panic still shows once the initramfs has
+# lit the backlight, not one before it; the boot's warnings do not) and no cursor, so nothing is on the screen before
+# the boot picture (init.c). The watchdog
 # U-Boot runs stays on into Linux: its
 # driver stops it at probe, and a kernel stuck before that is reset at 16 s, the SPL then saving its log. The MCU hold
 # (B0 [CE 01 00 00 00] into UART1's FIFO, as the SPL left it) again: the SPL's comes at ~0.4 s, which the MCU

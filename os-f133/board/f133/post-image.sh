@@ -40,5 +40,7 @@ rm -rf /out/card && mkdir -p /out/card/nor
 cp "$B/Image" /out/card/Image
 cp "$B/sun20i-d1s-srnubi-t313d.dtb" /out/card/f133.dtb
 cp "$B/rootfs.squashfs" /out/card/rootfs.sqfs
-cp "$B/kernel.itb" "$B/u-boot-sunxi-with-spl.bin" /out/card/nor/
+# (U-Boot as the update bundle has it, padded: nor.sh then finds an unchanged one unchanged whichever the card's came
+# from, where the unpadded copy had it written again after the first update)
+cp "$B/kernel.itb" /out/u-boot-sunxi-with-spl.bin /out/card/nor/
 ls -l /out /out/card /out/card/nor

@@ -42,6 +42,7 @@ if [ -z "'"$*"'" ]; then
 	rm -rf /work/out/build/dashapp-local /work/out/build/wattline-aa-local /work/out/build/spike-vdec-local \
 		/work/out/build/mcud-local /work/out/build/dash-ota-local
 	k=$(cat /ext/board/f133/*.dts /ext/board/f133/linux.fragment /ext/board/f133/kernel.its /ext/board/f133/init/init.c \
+		/ext/board/f133/initramfs.list \
 		/ext/board/f133/patches/linux/* /ext/board/f133/patches-local/linux/* /ext/package/aic8800/* \
 		/ext/package/g2drot/* /ext/package/g2drot/src/* 2>/dev/null | sha256sum | cut -c1-16)
 	if [ "$k" != "$(cat /work/out/.f133-kernel-inputs 2>/dev/null)" ]; then
