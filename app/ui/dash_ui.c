@@ -11,6 +11,7 @@
 #include "src/draw/sw/lv_draw_sw.h"              /* its area and the decoded image */
 #include "src/image/lv_image_decoder_private.h"
 #include "src/indev/lv_indev_private.h"          /* where a swipe began (swipe) */
+#include "src/display/lv_display_private.h"      /* the frame counter's label (fps_show: the CPU's temperature) */
 #include <fcntl.h>
 #include <limits.h>
 #include <sys/stat.h>
@@ -3098,13 +3099,45 @@ static void host_tap(lv_event_t *e)
 }
 static void slider_look(void);
 /* LVGL's own counter in the bottom right corner (frames a second, the CPU's share, a frame's render and flush ms): the
- * Display settings' switch, or DASH_PERF=1 (performance checks). The corner is clear of the split's picture. */
+ * Display settings' switch, or DASH_PERF=1 (performance checks). The corner is clear of the split's picture. Above
+ * it, in its look, the SoC's temperature (the kernel's thermal zone 0, every 2 s, in the dash's unit), where there is
+ * one: what the CPU's clock (lowered from 80 C) and the frames are up against. */
+#if LV_USE_PERF_MONITOR
+static lv_obj_t *fps_temp;
+static lv_timer_t *fps_temp_timer;
+static void fps_temp_cb(lv_timer_t *t)
+{
+	(void)t;
+	lv_display_t *d = lv_display_get_default();
+	FILE *f = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
+	long mc = 0;
+	bool ok = f && fscanf(f, "%ld", &mc) == 1;
+	if (f) fclose(f);
+	lv_obj_set_hidden(fps_temp, !ok || !d->perf_label || lv_obj_has_flag(d->perf_label, LV_OBJ_FLAG_HIDDEN));
+	if (!ok || !d->perf_label) return;
+	lv_label_set_text_fmt(fps_temp, "CPU %d \xc2\xb0%c", (int)lroundf(shown_deg(mc / 1000.0f)), S.fahrenheit ? 'F' : 'C');
+	lv_obj_align_to(fps_temp, d->perf_label, LV_ALIGN_OUT_TOP_RIGHT, 0, 0); /* (its width follows its text) */
+}
+#endif
 static void fps_show(void)
 {
 #if LV_USE_PERF_MONITOR
 	const char *perf = getenv("DASH_PERF");
-	if (ST.show_fps || (perf && !strcmp(perf, "1"))) lv_sysmon_show_performance(lv_display_get_default());
+	bool on = ST.show_fps || (perf && !strcmp(perf, "1"));
+	if (on) lv_sysmon_show_performance(lv_display_get_default());
 	else lv_sysmon_hide_performance(lv_display_get_default());
+	if (on && !fps_temp) { /* the counter's look (lv_sysmon.c) */
+		fps_temp = lv_label_create(lv_layer_sys());
+		lv_obj_set_style_bg_opa(fps_temp, LV_OPA_50, 0);
+		lv_obj_set_style_bg_color(fps_temp, lv_color_black(), 0);
+		lv_obj_set_style_text_color(fps_temp, lv_color_white(), 0);
+		lv_obj_set_style_pad_all(fps_temp, 3, 0);
+		lv_obj_set_hidden(fps_temp, true);
+		fps_temp_timer = lv_timer_create(fps_temp_cb, 2000, NULL);
+	}
+	if (!fps_temp) return;
+	if (on) lv_timer_resume(fps_temp_timer), fps_temp_cb(NULL);
+	else lv_timer_pause(fps_temp_timer), lv_obj_set_hidden(fps_temp, true);
 #endif
 }
 static void switch_changed(lv_event_t *e)
