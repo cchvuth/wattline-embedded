@@ -28,7 +28,7 @@
  }
  
  uint32_t sunxi_get_spl_size(void)
-@@ -634,8 +643,203 @@
+@@ -634,8 +643,236 @@
  		mdelay(half);
  		if (n % (5000 / half) == 0)
  			f133_mcu_hold();
@@ -142,21 +142,54 @@
 +	return ok ? v : ~0;
 +}
 +
-+/* len bytes from off (3-byte addresses: the whole 16 MiB) into dst; false on a timeout */
++/*
++ * n (<= 64 KiB) bytes in to p in one burst, on both data lines if dual. The controller stops its clock while the
++ * FIFO is full (the transmit pause set at init), so the CPU only has to empty it; false on a timeout.
++ */
++static bool f133_nor_rx(u8 *p, u32 n, bool dual)
++{
++	ulong t = get_timer(0);
++	u32 c, idle = 0;
++
++	writel(BIT(31) | BIT(15), F133_SPI_FCR);			/* both FIFOs reset */
++	writel(~0, F133_SPI_ISR);
++	writel(n, F133_SPI_MBC);
++	writel(0, F133_SPI_MTC);
++	writel(dual ? BIT(28) : 0, F133_SPI_BCC);
++	setbits_le32(F133_SPI_TCR, BIT(31));				/* exchange */
++	while (n) {
++		c = min_t(u32, readl(F133_SPI_FSR) & 0xff, n);
++		if (!c) {
++			if (!(++idle & 0xfff) && get_timer(t) > 250)	/* (the timer is a call to OpenSBI: seldom) */
++				return false;
++			continue;
++		}
++		for (n -= c; c; c--)
++			*p++ = readb(F133_SPI_RXD);
++	}
++	return F133_WAIT(!(readl(F133_SPI_TCR) & BIT(31)));
++}
++
++/*
++ * len bytes from off (3-byte addresses: the whole 16 MiB) into dst; false on a timeout. To 24 MHz: READ, in 64-byte
++ * exchanges, as the probe (the SPL's way to U-Boot, and the second try at the kernel: left as proven). Above: the
++ * dual output FAST READ (a dummy byte after the address, the data on both lines) in bursts of 64 KiB the CPU only
++ * empties: the exchanges gave 2 MB/s whatever the clock (the kernel's FIT took 2.1 s of each start).
++ */
 +static bool f133_nor_read(void *dst, u32 off, u32 len, uint mhz)
 +{
-+	/* READ as the probe, up to 24 MHz; FAST READ (a dummy byte after the address) above, where READ may not go */
-+	u8 cmd[5] = { mhz <= 24 ? 0x03 : 0x0b, off >> 16, off >> 8, off, 0 };
++	bool fast = mhz > 24;
++	u8 cmd[5] = { fast ? 0x3b : 0x03, off >> 16, off >> 8, off, 0 };
 +	u8 *p = dst;
 +	u32 n, i;
 +	bool ok;
 +
 +	f133_nor_cs(true);
-+	ok = f133_nor_xfer(cmd, NULL, mhz <= 24 ? 4 : 5);
++	ok = f133_nor_xfer(cmd, NULL, fast ? 5 : 4);
 +	for (i = 1; ok && len; len -= n, p += n, i++) {
-+		n = min_t(u32, len, 64);
-+		ok = f133_nor_xfer(NULL, p, n);
-+		if (!(i % 1024))
++		n = min_t(u32, len, fast ? SZ_64K : 64);
++		ok = fast ? f133_nor_rx(p, n, true) : f133_nor_xfer(NULL, p, n);
++		if (fast || !(i % 1024))
 +			schedule();					/* each 64 KiB: the watchdog */
 +	}
 +	f133_nor_cs(false);
@@ -220,7 +253,7 @@
 +		return CMD_RET_FAILURE;
 +	}
 +	env_set_ulong("nor_ms", get_timer(t));
-+	env_set_ulong("nor_mhz", mhz);
++	env_set_ulong("nor_mhz", mhz), env_set_ulong("nor_t", get_timer(0));
 +	return CMD_RET_SUCCESS;
  }
 +
@@ -232,7 +265,7 @@
  
  #define CSR_MXSTATUS		0x7c0
  #define CSR_MHCR		0x7c1
-@@ -650,9 +854,11 @@
+@@ -650,9 +887,11 @@
  	u32 starts = readl(F133_REG(0x07090118)) + 1;
  
  	f133_panel_pins();

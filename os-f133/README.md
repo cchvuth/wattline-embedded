@@ -129,6 +129,13 @@ With `-c`, once every block matches, norw remounts `/data` read only and asks th
 reboot is no use here: it leaves the Wi-Fi chip unusable until the power goes off. Check that the screen has enough
 free memory (`MemAvailable` at least the image's size plus 8 MB) before staging the image.
 
+## Where a start's time goes
+
+Read off the screen itself: `/run/boot.times` has the moment each boot script starts (seconds since the kernel did; the
+dash is on the screen when `S05wifi` starts), `dmesg | grep init:` the first-stage init's steps, and `f133t=` in
+`/proc/cmdline` (a NOR boot) U-Boot's read of the kernel: its milliseconds, when it ended (milliseconds since the
+reset) and its clock.
+
 ## Notes on the hardware
 
 - **Power.** The MCU cuts the power about 30 s after power-on unless the SoC holds it: U-Boot sends the hold, then
