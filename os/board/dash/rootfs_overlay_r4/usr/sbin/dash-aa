@@ -154,6 +154,8 @@ start|restore)
 		( sleep 120; btc pairable off; btc discoverable off; rm -f /run/aa-pair-timer ) >/dev/null 2>&1 &
 		echo $! > /run/aa-pair-timer
 	fi
+	# a stop that came meanwhile (the split's Exit, a phone already on it) took it all down: not marked up after it
+	[ -e /run/aa-keep ] || exit 0
 	touch /data/aa-on 2>/dev/null && sync   # up: on again at the next start (the dash restores it), until stopped
 	# (touch, not `: >`: a failed redirect on a special builtin would end the script before the marker)
 	touch "$MARK"
