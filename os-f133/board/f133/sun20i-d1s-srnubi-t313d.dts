@@ -392,50 +392,6 @@
 };
 
 /*
- * USB for the SRNUBI T313D: paste at the end of sun20i-d1s-srnubi-t313d.dts (or #include "usb.dtsi" there).
- *
- * USB0 is the phone port (wired projection). In the stock firmware it becomes the USB device after a phone's role
- * switch (a gadget with a vendor interface + CDC NCM), and the app powers the port itself: Config.ini usb0PowerGpio=103 = PB03 (the file
- * writes port*100+pin), set 0 at boot then 1, and cycled 0 -> 1 whenever a phone link starts. USB1 is host only
- * (stock "USB2", usb1PowerGpio=320 = PD20, raised after a start-up delay).
- *
- * dr_mode "otg" so the role can change at run time: write host | peripheral to musb-hdrc.*.auto/mode. PHY0 is
- * dual-routed (the PHY driver's sun20i-d1 cfg): host mode puts the port on EHCI0/OHCI0 (high speed, DMA),
- * peripheral mode on the musb. No ID or VBUS-detect pin (stock usb_detect_type 0); EHCI0's probe sets the PHY to
- * host mode, so the port comes up as a host.
- *
- * VBUS is not given to the PHY on purpose: PB03 (gpio 35, active high) stays with userspace as in stock. A wired
- * phone link needs VBUS on while the screen is the USB device, and the link code power-cycles the port to reset a stuck phone;
- * a PHY regulator would be held on by EHCI0/OHCI0 and could not be cycled. PD20 (gpio 116) likewise.
- */
-
-&usb_otg {
-	dr_mode = "otg";
-	status = "okay";
-};
-
-&usbphy {
-	status = "okay";
-};
-
-&ehci0 {
-	status = "okay";
-};
-
-&ohci0 {
-	status = "okay";
-};
-
-/* USB1, the second port if this model wires one: on for the boot test (which bus the phone lands on) */
-&ehci1 {
-	status = "okay";
-};
-
-&ohci1 {
-	status = "okay";
-};
-
-/*
  * The SPI NOR: 16 MiB XMC XM25QH128C (JEDEC 20 40 18, spi-nor-generic from its SFDP) on SPI0, PC2..PC5, at 24 MHz (the
  * clock the stock backup was read at). The screen runs from it without a card: U-Boot's SPL and
  * U-Boot, a kernel FIT, the root squashfs, and /data. CONFIG_MTD_PARTITIONED_MASTER also gives the whole chip as mtd0

@@ -62,30 +62,8 @@ CONFIG_FLATMEM_MANUAL=y
 # CONFIG_BPF_SYSCALL is not set
 # CONFIG_SOUND is not set
 # CONFIG_PCI is not set
-# USB: these lines replace the USB_SUPPORT "is not set" line of linux.fragment.
-# Host: EHCI/OHCI (PHY0 routes the phone port to EHCI0/OHCI0 in host mode); usbfs (/dev/bus/usb/BBB/DDD from
-# devtmpfs) is part of usbcore, no option. Device side for a wired phone link: the musb in dual role (the
-# musb-hdrc.*.auto/mode switch needs DUAL_ROLE, which needs USB_GADGET=y), configfs gadgets with NCM (an IP link)
-# and FunctionFS (an interface served by userspace). USB_HID defaults to y and selects HID, which the
-# board keeps off: no kernel driver should take the phone's HID interface. The riscv defconfig (Buildroot's base)
-# turns on xHCI, which the D1s has not; its musb/PHY "m" become "y" here.
-CONFIG_USB_SUPPORT=y
-CONFIG_USB=y
-CONFIG_USB_EHCI_HCD=y
-CONFIG_USB_EHCI_HCD_PLATFORM=y
-CONFIG_USB_OHCI_HCD=y
-CONFIG_USB_OHCI_HCD_PLATFORM=y
-CONFIG_PHY_SUN4I_USB=y
-CONFIG_NOP_USB_XCEIV=y
-CONFIG_USB_MUSB_HDRC=y
-CONFIG_USB_MUSB_DUAL_ROLE=y
-CONFIG_USB_MUSB_SUNXI=y
-CONFIG_USB_GADGET=y
-CONFIG_USB_CONFIGFS=y
-CONFIG_USB_CONFIGFS_NCM=y
-CONFIG_USB_CONFIGFS_F_FS=y
-# CONFIG_USB_HID is not set
-# CONFIG_USB_XHCI_HCD is not set
+# no USB: the screen has no port in use (its host controllers' probes were also 0.9 s of the boot)
+# CONFIG_USB_SUPPORT is not set
 # CONFIG_VIRTIO_MENU is not set
 # CONFIG_VIRTIO_BLK is not set
 # CONFIG_VIRTIO_NET is not set

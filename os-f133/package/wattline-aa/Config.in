@@ -3,5 +3,5 @@ config BR2_PACKAGE_WATTLINE_AA
 	select BR2_PACKAGE_OPENSSL
 	help
 	  The wireless Android Auto receiver (aa), built from the app checkout (/native: aa/aa.c, core/pb.c) for this
-	  screen: the Bluetooth start through its power MCU (aa mcu, mcud), wired AOA (aa usb), only the system audio
+	  screen: the Bluetooth start through its power MCU (aa mcu, mcud), only the system audio
 	  sink offered. dash-aa runs it.
