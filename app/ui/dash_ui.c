@@ -3127,16 +3127,28 @@ static void aa_forget_tap(lv_event_t *e)
 /* A part of a settings page shown or hidden (a row's button, a row): the page it is on is laid out and scrolled back
  * within its content, and redrawn whole. LVGL left a page that had been scrolled to its end past it when a row grew
  * shorter, and its scroll bar's old end stayed drawn. */
-static void show_in_page(lv_obj_t *o, bool on)
+static void page_settle(lv_obj_t *o)
 {
-	if (on != lv_obj_is_hidden(o)) return;
-	show(o, on);
 	lv_obj_mark_layout_as_dirty(lv_obj_get_parent(o)); /* its row: a plain box is not laid out again for a child hidden */
 	for (lv_obj_t *p = lv_obj_get_parent(o); p; p = lv_obj_get_parent(p))
 		if (lv_obj_is_scrollable(p)) { /* the page: its rows' boxes do not scroll */
 			lv_obj_update_layout(p), lv_obj_readjust_scroll(p, LV_ANIM_OFF), lv_obj_invalidate(p);
 			break;
 		}
+}
+static void show_in_page(lv_obj_t *o, bool on)
+{
+	if (on != lv_obj_is_hidden(o)) return;
+	show(o, on);
+	page_settle(o);
+}
+/* A row's words given another width (the button beside them come or gone): fewer lines make the row shorter after the
+ * page was settled for the button, so it is settled again. */
+static void width_in_page(lv_obj_t *l, int32_t w)
+{
+	if (lv_obj_get_style_width(l, 0) == w) return;
+	lv_obj_set_width(l, w);
+	page_settle(l);
 }
 static int ota_next = DASH_OTA_CHECK; /* what the button does now */
 static uint32_t ota_tapped; /* when the button was tapped (and hidden): back after a minute with no news */
@@ -3204,7 +3216,7 @@ static void nor_refresh(bool force)
 	if (btn) forget_reset(&fg_nor, true);
 	show_in_page(fg_nor.btn, btn);
 	lv_obj_update_layout(fg_nor.btn);
-	lv_obj_set_width(set_nor_l, ri(lv_obj_get_width(row) - (btn ? lv_obj_get_width(fg_nor.btn) + PB(12) : 0)));
+	width_in_page(set_nor_l, ri(lv_obj_get_width(row) - (btn ? lv_obj_get_width(fg_nor.btn) + PB(12) : 0)));
 }
 static void ota_refresh(bool force)
 {
@@ -3258,7 +3270,7 @@ static void ota_refresh(bool force)
 	 * is in the log */
 	lv_obj_update_layout(set_ota_btn);
 	float rw = lv_obj_get_width(lv_obj_get_parent(set_ota_l)) - (busy ? 0 : lv_obj_get_width(set_ota_btn) + PB(12));
-	lv_obj_set_width(set_ota_l, ri(rw));
+	width_in_page(set_ota_l, ri(rw));
 	lv_obj_set_style_max_height(set_ota_l, 2 * lv_font_get_line_height(lv_obj_get_style_text_font(set_ota_l, 0)), 0);
 }
 /* Following the car, the slider shows the live backlight greyed; a finger on it takes over (follow off). */
@@ -4421,6 +4433,9 @@ static void swipe(lv_event_t *e)
 	bool across = d == LV_DIR_LEFT || d == LV_DIR_RIGHT; /* basic's cards only: the slot it began on, not where it has got to */
 	if (across) p.x -= in->pointer.gesture_sum.x;
 	bool ring = pj ? p.x < split_x : p.x >= G.cx - G.D / 2 && p.x < G.cx + G.D / 2;
+	/* basic's bar under the ring (the links, the car panel's button) is no part of the ring's pages (main.dart): a swipe
+	 * that began there flips nothing (the cards either side run the screen's whole height) */
+	if (ring && !pj && p.y - in->pointer.gesture_sum.y >= G.row_b) return;
 	if (across ? pj || ring : d != LV_DIR_TOP && d != LV_DIR_BOTTOM) return;
 	if (pj && p.x < pj_vw()) return; /* not on the bar over the picture */
 	int step = d == LV_DIR_TOP || d == LV_DIR_LEFT ? 1 : -1;
@@ -4608,8 +4623,9 @@ static void cards_parts(bool basic)
 	}
 	lv_obj_invalidate(root);
 }
-/* A slot's row of dots at its foot, [cx] its middle, card [lit] lit, card [skip] not in its round (-1 none: all are;
- * widgets.dart _Cards). */
+/* A slot's row of dots at its foot, [cx] its middle, card [lit] lit, card [skip] not in its round (-1 none: all are).
+ * The app's two stacks (widgets.dart _Cards) have theirs in a column at the card's outer edge; the four slots side by
+ * side here have no edge of their own, hence the row under each. */
 static void dots_place(int i, float cx, int lit, int skip)
 {
 	int n = DASH_CARDS - (skip >= 0);
@@ -4865,6 +4881,17 @@ void dash_ui_set(const dash_state_t *s)
 		first = false;
 		return;
 	}
+	/* Under the settings' dialog the dash is left as it was drawn: each part of it that changed had the dialog over it
+	 * drawn again, the same pixels, three quarters of a dash frame's work at every frame on the move. The touch layer
+	 * goes on (the settings' own lines, the snackbar); the first frame after the dialog sets the dash all again. */
+	static bool held;
+	if (view == DASH_VIEW_SETTINGS && !first) {
+		set_touch(s);
+		P = *s;
+		held = true;
+		return;
+	}
+	if (held) first = true, held = false;
 	show(glow_b, s->live && s->braking); /* not in the split: it would run under the picture */
 
 	/* Android Auto button: only with a head-unit cert in place (else the phone rejects the handshake); green while the
@@ -4874,7 +4901,9 @@ void dash_ui_set(const dash_state_t *s)
 	if (aa_cert) {   /* on: AP up, a tap pending, or projecting */
 		bool up = access(dash_ui_aa_up, F_OK) == 0;
 		if (up || (aa_pending && !aa_start_running())) aa_pending = false;
-		if (aa_stopping && (!up || lv_tick_elaps(aa_stop_at) > AA_STOP_MS)) aa_stopping = false;
+		/* (not while a start still holds its lock: Exit in a start's last moments finds no mark yet, and the start
+		 * then keeps one until that stop has ended: the button showed on, and a tap sent a second stop) */
+		if (aa_stopping && ((!up && access(aa_start_lock, F_OK) != 0) || lv_tick_elaps(aa_stop_at) > AA_STOP_MS)) aa_stopping = false;
 		/* off: white, as the other icons; on: Android Auto's blue. Off at once on the tap that stops it (dash-aa stop
 		 * takes a few seconds to take the AP and its processes down) */
 		icon_color(aa_btn, !aa_stopping && (projecting || up || aa_pending) ? AA_BLUE : WHITE);

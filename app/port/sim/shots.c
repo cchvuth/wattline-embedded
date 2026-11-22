@@ -602,6 +602,8 @@ int main(int argc, char **argv)
 		bad |= expect(next != DASH_CARD_ROUTE && saved.cards[2] == DASH_CARD_ROUTE, "basic's slot swiped left, then right: its next card, and back");
 		swipe(W / 2 + W / 20, H / 2, W / 2 + W / 5, H / 2); /* from the ring to over the slot */
 		bad |= expect(saved.ring_page == DASH_RING_POWER && saved.cards[2] == DASH_CARD_ROUTE, "sideways on the ring: nothing");
+		swipe(W / 2 + W / 40, H - 20, W / 2 + W / 40, H / 2); /* up from the bar under the ring: not the ring's */
+		bad |= expect(saved.ring_page == DASH_RING_POWER, "a swipe that begins on the bar under the ring: the ring's face stays");
 		bad |= expect(!presses, "no press from any swipe");
 		st.basic = false; /* last, the split again: a hold on a button names it, in the bar (its tooltip stays: no timers here) */
 		dash_ui_settings(&st);
