@@ -28,7 +28,7 @@
  }
  
  uint32_t sunxi_get_spl_size(void)
-@@ -634,8 +643,236 @@
+@@ -634,8 +643,243 @@
  		mdelay(half);
  		if (n % (5000 / half) == 0)
  			f133_mcu_hold();
@@ -197,27 +197,34 @@
 +}
 +
 +#ifdef CONFIG_SPL_BUILD
++static uint f133_spl_mhz = 24;
++
 +static ulong f133_spl_nor_read(struct spl_load_info *load, ulong off, ulong count, void *buf)
 +{
-+	return f133_nor_read(buf, off, count, 24) ? count : 0;
++	return f133_nor_read(buf, off, count, f133_spl_mhz) ? count : 0;
 +}
 +
 +/*
 + * The BROM booted the SPL from the NOR: U-Boot's FIT (OpenSBI, U-Boot proper, its device tree) follows it there, as in
-+ * u-boot-sunxi-with-spl.bin (binman: right after the SPL, 32 KiB in at least). Read at the probe's 24 MHz.
++ * u-boot-sunxi-with-spl.bin (binman: right after the SPL, 32 KiB in at least). At 50 MHz, as U-Boot reads the kernel
++ * (0.07 s where the probe's 24 MHz READ took 0.45 of each start); that READ again if the FIT does not load so.
 + */
 +static int f133_spl_nor_load(struct spl_image_info *spl_image, struct spl_boot_device *bootdev)
 +{
 +	struct legacy_img_hdr *header = (struct legacy_img_hdr *)CONFIG_TEXT_BASE;
 +	struct spl_load_info load = { .bl_len = 1, .read = f133_spl_nor_read };
 +	u32 off = max_t(u32, sunxi_get_spl_size(), 0x8000);
++	int try;
 +
-+	f133_nor_init(24);
-+	printf("F133: NOR JEDEC %06x, status %02x; U-Boot's FIT at %#x\n", f133_nor_reg(0x9f, 3),
-+	       f133_nor_reg(0x05, 1), off);
-+	if (!f133_nor_read(header, off, 64, 24) || image_get_magic(header) != FDT_MAGIC)
-+		return -EINVAL;
-+	return spl_load_simple_fit(spl_image, &load, off, header);
++	for (try = 0; try < 2; try++) {
++		f133_spl_mhz = f133_nor_init(try ? 24 : 50);
++		printf("F133: NOR JEDEC %06x, status %02x; U-Boot's FIT at 0x%x, %u MHz, at %lu ms\n", f133_nor_reg(0x9f, 3),
++		       f133_nor_reg(0x05, 1), off, f133_spl_mhz, get_timer(0));
++		if (f133_nor_read(header, off, 64, f133_spl_mhz) && image_get_magic(header) == FDT_MAGIC &&
++		    !spl_load_simple_fit(spl_image, &load, off, header))
++			return 0;
++	}
++	return -EINVAL;
 +}
 +SPL_LOAD_IMAGE_METHOD("F133 SPI NOR", 0, BOOT_DEVICE_SPI, f133_spl_nor_load);
 +#else
@@ -265,7 +272,7 @@
  
  #define CSR_MXSTATUS		0x7c0
  #define CSR_MHCR		0x7c1
-@@ -650,9 +887,11 @@
+@@ -650,9 +894,11 @@
  	u32 starts = readl(F133_REG(0x07090118)) + 1;
  
  	f133_panel_pins();
