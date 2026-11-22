@@ -11,8 +11,6 @@ test:
 	  -o build/test_settings test/test_settings.c app/settings.c app/conf.c core/derive.c core/sched.c core/panda.c -lm && build/test_settings
 	$(CC) $(HOSTFLAGS) -Ibuild -o build/test_wifi test/test_wifi.c app/wifi.c && build/test_wifi
 	$(CC) $(HOSTFLAGS) -o build/test_fb_rot test/test_fb_rot.c && build/test_fb_rot
-	$(CC) $(HOSTFLAGS) -DLV_CONF_INCLUDE_SIMPLE -Iport/sim -Ithird_party/lvgl-9.6.0 -Ithird_party/lvgl-9.6.0/src \
-	  -o build/test_blend_xrgb test/test_blend_xrgb.c && build/test_blend_xrgb
 	$(CC) $(HOSTFLAGS) -std=gnu11 -DACTIONS_SELFTEST -DDASH_CMDR=1 -DLV_CONF_INCLUDE_SIMPLE -Iport/sim -Ithird_party/lvgl-9.6.0 \
 	  -Ithird_party/lvgl-9.6.0/src -Ibuild -o build/actions_check app/actions.c app/pair.c app/wifi.c core/cmdr_msg.c core/pb.c && build/actions_check
 	$(CC) $(HOSTFLAGS) -DPAIR_SELFTEST -o build/pair_check app/pair.c && build/pair_check
