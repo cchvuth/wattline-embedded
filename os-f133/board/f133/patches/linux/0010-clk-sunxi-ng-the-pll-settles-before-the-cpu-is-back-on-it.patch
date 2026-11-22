@@ -1,0 +1,47 @@
+--- a/drivers/clk/sunxi-ng/ccu-sun20i-d1.c
++++ b/drivers/clk/sunxi-ng/ccu-sun20i-d1.c
+@@ -1332,7 +1332,7 @@
+ static struct ccu_mux_nb sun20i_d1_riscv_nb = {
+ 	.common		= &riscv_clk.common,
+ 	.cm		= &riscv_clk.mux,
+-	.delay_us       = 1,
++	.delay_us       = 20,	/* (1: see ccu_pll_notifier_cb) */
+ 	.bypass_index   = 4, /* index of pll-periph0 */
+ };
+ 
+--- a/drivers/clk/sunxi-ng/ccu_common.c
++++ b/drivers/clk/sunxi-ng/ccu_common.c
+@@ -7,6 +7,7 @@
+ 
+ #include <linux/clk.h>
+ #include <linux/clk-provider.h>
++#include <linux/delay.h>
+ #include <linux/device.h>
+ #include <linux/iopoll.h>
+ #include <linux/module.h>
+@@ -79,12 +80,25 @@
+ 		goto out;
+ 
+ 	ccu_gate_helper_disable(pll->common, pll->enable);
++	udelay(20);
+ 
+ 	ret = ccu_gate_helper_enable(pll->common, pll->enable);
+ 	if (ret)
+ 		goto out;
++	udelay(20);
+ 
+ 	ccu_helper_wait_for_lock(pll->common, pll->lock);
++
++	/*
++	 * The F133's CPU at 1392 MHz, close to what it can do at all: each step
++	 * here given time, and the PLL time to settle past its lock bit, which
++	 * is up while it still swings (the CPU is put back on it next, by the
++	 * mux's notifier). Measured on that board: with nothing after the lock
++	 * bit a change to 1392 MHz hung it within a few tries, 100 us after it
++	 * were enough for 600; and a kernel with the 2 ms but without the 20 us
++	 * between the steps did not get through its first change at boot.
++	 */
++	usleep_range(2000, 3000);
+ 
+ out:
+ 	return notifier_from_errno(ret);
