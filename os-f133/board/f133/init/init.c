@@ -84,12 +84,14 @@ static void fbcon(int on)
 /*
  * A step the boot cannot go on without: said on the screen, then a restart. The boot is quiet (loglevel=1 in the
  * command line keeps these lines off the console) and the text console may have let go of the framebuffer for the
- * boot picture: both undone first.
+ * boot picture: both undone first, with /dev and /sys there for it whichever step failed.
  */
 static void fail(const char *what)
 {
 	int e = errno;
 
+	mount("devtmpfs", "/dev", "devtmpfs", 0, NULL);	/* (the last steps have moved /dev away and unmounted /sys; */
+	mount("sysfs", "/sys", "sysfs", 0, NULL);	/* over one still there, a second does no harm) */
 	klogctl(8, NULL, 8);	/* SYSLOG_ACTION_CONSOLE_LEVEL: everything */
 	fbcon(1);
 	light();
