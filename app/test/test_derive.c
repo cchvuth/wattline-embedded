@@ -211,6 +211,11 @@ static void test_arrival(void) {   // 'arrival % and route length from the batte
   NEAR(C.pack_new_kwh, 78.8, 0.001);
 }
 
+static void test_bt_soc_fallback(void) {   // no energy fields pushed: the Commander's own %
+  fresh();
+  BT(&C, {111, 62});
+  CHECK(C.soc_pct == 62);
+}
 static void test_bt_stands_in(void) {   // 'Bluetooth stands in for WiFi, WiFi first'
   fresh();
   C.kph = true;
@@ -228,6 +233,9 @@ static void test_bt_stands_in(void) {   // 'Bluetooth stands in for WiFi, WiFi f
   CHECK(C.door_fl && !C.trunk && !car_parked(&C, now)); STR(C.autopilot, "TACC");
   NEAR(C.pack_kwh, 81.76, 1e-9); NEAR(C.pack_new_kwh, 80, 1e-9); NEAR(car_imbalance_mv(&C), 4, 1e-6);
   NEAR(car_range_at(&C, 58.61), 301.2, 0.1);
+  // the car's % from the energy (the 2026-11-23 capture: 51.38 kWh left of 81.62, buffer 3.67: the car 61, 111 said 62)
+  BT(&C, {111, 62}, {35, 4081}, {36, 2569}, {37, 367}); CHECK(C.soc_pct == 61);
+  BT(&C, {111, 62}, {36, 65535}); CHECK(C.soc_pct == 62);   // an SNA in one of them: the Commander's own
   BT(&C, {66, 1}, {113, 0}, {62, 255}, {51, 2047}, {53, 0});
   CHECK(C.gear == 'P' && C.speed == 87 && car_parked(&C, now));   // Bluetooth: a speed can stay stale (an empty push)
   CHECK(C.door_fl && C.pedal_pct == 50 && C.front_kw == 15.5);
@@ -364,6 +372,13 @@ static void test_held(void) {   // 'the newer stats: held, combined, over Blueto
   FR(0x472, 0, 0, 0, 0, 0, 0x02, 0, 0, 0);
   FR(0x33B, 0, 0, 0, 35, 0, 0, 0);
   CHECK(C.charging && C.charge_kw == 48 && C.charge_max_kw == 62 && C.charge_minutes == 35); STR(C.charge_why, "COLD PACK");
+  // the charging screen's figure: the wall's power on AC (0x264, 10.9 kW in, 10.4 kW reaching the pack), the pack's on DC
+  FR(0x264, 0, 0, 0, 0, 109, 0, 0); CHECK(C.charge_kw > 10.89 && C.charge_kw < 10.91 && C.charge_pack_kw == 48);
+  FR(0x212, 0, 0x00, 0x18, 0xF0, 0x00, 0x00, 0xF8, 0x00, 0x00); CHECK(C.charge_kw > 10.89 && C.charge_kw < 10.91);
+  FR(0x264, 0, 0, 0, 0, 0, 0, 0); CHECK(C.charge_kw == 48 && C.charge_line_kw == 0);
+  FR(0x264, 0, 0, 0, 0, 109, 0, 0); now += 3000;   // the wall's last frame 3 s old (unplugged, 0x264 quiet): the pack's
+  FR(0x212, 0, 0x00, 0x18, 0xF0, 0x00, 0x00, 0xF8, 0x00, 0x00); CHECK(C.charge_kw == 48);
+  FR(0x33A, 0, 0xCD, 0xAC, 0xB3, 0xDB, 0xFD, 0xFF, 0xE5, 0x68); CHECK(C.soc_pct == 59 && C.soc_usable_pct == 59);
   FR(0x347, 0, 0x20, 0x00, 0xB4, 0x00, 0x00, 0x00, 0x50, 0x13); CHECK(C.pack_heating && C.precond_c == 45);
   FR(0x399, 0, 0, 0, 0, 0, 0, 0x10, 0, 0); CHECK(C.hands_on == 4);
   FR(0x399, 0, 0, 0, 0, 0, 0, 0x3C, 0, 0); CHECK(C.hands_on == -1);
@@ -944,6 +959,7 @@ int main(void) {
   test_flasher();
   test_arrival();
   test_bt_stands_in();
+  test_bt_soc_fallback();
   test_capture();
   test_bt_tyres_cabin();
   test_km_pick();

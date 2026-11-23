@@ -263,10 +263,10 @@ static void stats(const dash_t *d) {
   const link_t *l = &d->link;
   const car_t *c = &d->car;
   log_msg("wifi %s: %d frames/s, speed %d/s (gap %d ms), foreign %d/s; subscribes %d acks %d resubs %d sparse %d/%d; "
-          "sent ehllo %u clear %u add %u remove %u; speed %.0f gear %c soc %.0f",
+          "sent ehllo %u clear %u add %u remove %u; speed %.0f gear %c soc %.0f usable %.0f; charge pack %.2f wall %.1f kW",
           link_word(l), l->frame_hz, l->speed_hz, l->speed_gap_ms, l->foreign_hz, l->subscribes, l->acks, l->resubscribes,
           l->sparse_ops, l->sparse_fixes, d->sent[0], d->sent[1], d->sent[2], d->sent[3], c->speed,
-          c->gear ? c->gear : '-', c->soc_pct);
+          c->gear ? c->gear : '-', c->soc_pct, c->soc_usable_pct, c->charge_pack_kw, c->charge_line_kw);
 }
 
 static dash_t D;
@@ -291,8 +291,8 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
   bright_init(&d->bright, cf, now);
   settings_load(&app_settings, cf);
   apply_settings(d, now);   // the time zone too (dash.conf's until set in the settings)
-  if (settings_aa_kept() && access("/etc/wattline/aa.crt", F_OK) == 0) {   // left on: up again (the phone rejoins;
-    log_msg("start: Android Auto was on: brought up again");                // the car rides Bluetooth)
+  if (settings_aa_kept()) {   // left on: up again (the phone rejoins; the car rides Bluetooth). dash-aa refuses Android
+    log_msg("start: Android Auto was on: brought up again");   // Auto without its certificate; extra needs none
     settings_aa_restore();
   }
   if (ui->show_settings) ui->show_settings(ui->ctx);

@@ -64,7 +64,8 @@ enum { DASH_SETTINGS_SAVE, DASH_CMDR_APPROVE, DASH_CMDR_FORGET, DASH_PAIR_START,
        DASH_OTA_CHECK, DASH_OTA_INSTALL, DASH_OTA_RESTART /* Advanced: software update (dash-update check / auto / reboot) */,
        DASH_AA_FORGET /* Advanced: forget the phones paired for Android Auto (dash-aa forget) */,
        DASH_NOR_COPY /* Advanced: a card install copied to the built-in flash (dash-nor copy: the F133 screen) */,
-       DASH_RESTART /* Advanced: restart the screen (the device's reboot: the F133's power cycle) */ };
+       DASH_RESTART /* Advanced: restart the screen (the device's reboot: the F133's power cycle) */,
+       DASH_EXTRA_START /* the second projection button: dash-aa extra (an addition kept outside this repository) */ };
 typedef void (*dash_settings_cb)(int what, const dash_settings_t *s, void *ctx);
 void dash_ui_set_settings_cb(dash_settings_cb cb, void *ctx);
 void dash_ui_settings(const dash_settings_t *s); /* the saved values, as the screen should show them */
@@ -79,6 +80,9 @@ void dash_ui_show(int view); /* also opened and closed by touch */
 extern const char *dash_ui_pj_marker; /* "/run/dash-project": an AA session is up (aa serve raises it) */
 extern const char *dash_ui_aa_cert;   /* "/etc/wattline/aa.crt": the AA button only with a head-unit certificate */
 extern const char *dash_ui_aa_up;     /* "/run/dash-aa": Android Auto is on (dash-aa start raises it) */
+/* The second projection button, left of AA: only where an addition kept outside this repository put its hook and its
+ * icon (A8, AA's icon's size). Its session is dash-aa's in the extra mode (marked up by the third file). */
+extern const char *dash_ui_extra_hook, *dash_ui_extra_icon, *dash_ui_extra_up;
 extern const char *dash_ui_pj_fps;    /* PJ_FPS: the phone's pictures shown per second (spike-vdec writes it) */
 /* Set by a port that can show a frame whole (the F133's G2D: fb_rot_whole_next), else NULL: asked for when the split is
  * left with its session gone. With it, the split's Exit keeps the picture until the session has gone (or 1.5 s), so

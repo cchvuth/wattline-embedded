@@ -57,10 +57,10 @@ void car_init(car_t *c) {
   c->p.half_ms = 360;
   c->p.bms_bus = -1;
   c->p.turned_at = c->p.steer_at = c->p.gear_at = c->p.edge_at = c->p.grip_at = c->p.bt_motor_bad_at = NEVER;
-  c->p.blink_off_at = NEVER;
+  c->p.blink_off_at = c->p.line_at = NEVER;
   c->utc.at = NEVER;
   c->tp_fl = c->tp_fr = c->tp_rl = c->tp_rr = NUL;
-  c->soc_pct = c->range_mi = NUL;
+  c->soc_pct = c->range_mi = c->soc_usable_pct = NUL;
   c->cell_v_max = c->cell_v_min = c->pack_kwh = c->pack_left_kwh = c->pack_buffer_kwh = c->pack_new_kwh = NUL;
   c->outside_c = c->pack_temp_c = NUL;
   c->charge_limit_pct = -1;
@@ -329,7 +329,18 @@ void car_frame(car_t *c, uint16_t id, uint8_t bus, const uint8_t *d, uint8_t len
     }
     case SIG_followGap: c->follow_gap = ri(v) + 1; break;
     case SIG_chargeStatus: c->charging = v == 3; break;
-    case SIG_chargeKw: c->charge_kw = v; break;
+    // the car's charging screen shows the wall's power on AC (the onboard charger's input), the pack's on DC (no
+    // charger in the way: 0x264 reads 0)
+    // (the wall's only while 0x264 is fresh, 2 s: it can go quiet once unplugged, and a DC session after must not show it)
+    case SIG_chargeKw:
+      c->charge_pack_kw = v;
+      c->charge_kw = c->charge_line_kw > 0.5 && now - c->p.line_at < 2000 ? c->charge_line_kw : v;
+      break;
+    case SIG_chargeLineKw:
+      c->charge_line_kw = v, c->p.line_at = now;
+      if (v > 0.5) c->charge_kw = v; else if (!isnan(c->charge_pack_kw)) c->charge_kw = c->charge_pack_kw;
+      break;
+    case SIG_socUsable: c->soc_usable_pct = v; break;
     case SIG_chargeMaxKw: c->charge_max_kw = v; break;
     case SIG_chargeWhy: c->charge_why = LUT(kChargeWhy, ri(v)); break;
     case SIG_chargeLimit: c->charge_limit_pct = ri(v); break;
@@ -396,6 +407,7 @@ void car_forget(car_t *c, int64_t now) {
   c->tc_mode = c->charge_why = NULL;
   c->hands_on = c->follow_gap = c->charge_minutes = -1;
   c->cruise_set = c->precond_c = c->charge_kw = c->charge_max_kw = c->regen_max_kw = NUL;
+  c->charge_pack_kw = c->charge_line_kw = c->soc_usable_pct = NUL;
   c->speed = 0;
   c->front_kw = c->rear_kw = c->pedal_pct = c->pack_kw = c->p.pack_v = c->p.front_at = c->p.rear_at = NUL;
   c->other_kw = NUL;
@@ -483,6 +495,13 @@ void car_apply_bt(car_t *c, int64_t now) {
   if (at(c, 35, &v)) c->pack_kwh = v * 0.02 < 30 || v * 0.02 > 150 ? NUL : v * 0.02;
   if (at(c, 36, &v)) c->pack_left_kwh = v * 0.02 > 150 ? NUL : v * 0.02;
   if (at(c, 37, &v)) c->pack_buffer_kwh = v * 0.01 > 20 ? NUL : v * 0.01;
+  // The car's own % as its screen shows it, (left - buffer) / (full - buffer), rounded down: the Commander's 111 is
+  // left / full, the buffer counted in (a capture: 51.38 kWh left of 81.62, 3.67 buffer: the car 61 %, 111 said 62)
+  // (only from this push's three, each within the bounds above: an SNA in one leaves the Commander's own)
+  int64_t full, left, buf;
+  if (at(c, 35, &full) && at(c, 36, &left) && at(c, 37, &buf) && !isnan(c->pack_kwh) && !isnan(c->pack_left_kwh) &&
+      !isnan(c->pack_buffer_kwh) && c->pack_kwh > c->pack_buffer_kwh)
+    c->soc_pct = clampd(floor((c->pack_left_kwh - c->pack_buffer_kwh) / (c->pack_kwh - c->pack_buffer_kwh) * 100 + 1e-9), 0, 100);
   if (at(c, 43, &v)) c->cell_v_max = v * 0.002 > 5 ? NUL : v * 0.002;
   if (at(c, 44, &v)) c->cell_v_min = v * 0.002 > 5 ? NUL : v * 0.002;
   if (zz(c, 27, &v)) c->outside_c = (double)v;

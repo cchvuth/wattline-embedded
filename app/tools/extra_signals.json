@@ -1,5 +1,5 @@
 {
-  "_doc": "Dash-only rows, appended after kSignals by gen_signals.py. 0x273 UI_displayBrightnessLevel (docs/signals-and-actions.md, 'Screen brightness'; capture 54.5 %; 0x273 already streams for the dome light) for the backlight. 0x318 SystemTimeUTC for the clock (docs/signals-and-actions.md, 'Date and time (UTC)'). Streamed (3.8 Hz). The vector is a synthetic frame laid out as the doc says (2026-11-13 10:42:07 UTC), not a capture: the doc gives no raw bytes.",
+  "_doc": "Dash-only rows, appended after kSignals by gen_signals.py. 0x273 UI_displayBrightnessLevel (docs/signals-and-actions.md, 'Screen brightness'; capture 54.5 %; 0x273 already streams for the dome light) for the backlight. 0x318 SystemTimeUTC for the clock (docs/signals-and-actions.md, 'Date and time (UTC)'). Streamed (3.8 Hz). The vector is a synthetic frame laid out as the doc says (2026-11-13 10:42:07 UTC), not a capture: the doc gives no raw bytes. 0x264 PCS_chgInputPower (docs/signals-and-actions.md, 'AC charger input power'; capture 1.5 kW): the power drawn from the wall, as the car's charging screen shows it (the BMS's chargeKw, 0x212, is what reaches the pack, after the charger's losses); 0 or absent on DC. 0x33A UI_uSoe (27|7, 'Usable state of energy %'): logged beside soc (UI_soe) to see which the car's screen shows.",
   "signals": {
     "utcYear":    {"id": "0x318", "start": 0,  "len": 8, "offset": 2000},
     "utcMonth":   {"id": "0x318", "start": 8,  "len": 8},
@@ -7,9 +7,11 @@
     "utcHour":    {"id": "0x318", "start": 24, "len": 8},
     "utcDay":     {"id": "0x318", "start": 32, "len": 8},
     "utcMinutes": {"id": "0x318", "start": 40, "len": 8},
-    "displayBrightness": {"id": "0x273", "start": 32, "len": 8, "scale": 0.5, "sna": 255}
+    "displayBrightness": {"id": "0x273", "start": 32, "len": 8, "scale": 0.5, "sna": 255},
+    "chargeLineKw": {"id": "0x264", "start": 24, "len": 8, "scale": 0.1},
+    "socUsable":    {"id": "0x33A", "start": 27, "len": 7}
   },
-  "alwaysOn": ["0x318"],
+  "alwaysOn": ["0x318", "0x264"],
   "vectors": [
     {"sig": "utcYear",    "data": [26, 11, 7, 10, 13, 42, 0, 0], "expect": 2026},
     {"sig": "utcMonth",   "data": [26, 11, 7, 10, 13, 42, 0, 0], "expect": 11},
@@ -18,6 +20,8 @@
     {"sig": "utcMinutes", "data": [26, 11, 7, 10, 13, 42, 0, 0], "expect": 42},
     {"sig": "utcSeconds", "data": [26, 11, 7, 10, 13, 42, 0, 0], "expect": 7},
     {"sig": "displayBrightness", "data": [0, 0, 0, 0, 109, 0, 0, 0], "expect": 54.5},
-    {"sig": "displayBrightness", "data": [0, 0, 0, 0, 255, 0, 0, 0], "expect": null}
+    {"sig": "displayBrightness", "data": [0, 0, 0, 0, 255, 0, 0, 0], "expect": null},
+    {"sig": "chargeLineKw", "data": [0, 0, 0, 15, 0, 0], "expect": 1.5},
+    {"sig": "socUsable",    "data": [205, 172, 179, 219, 253, 255, 229, 104], "expect": 59}
   ]
 }

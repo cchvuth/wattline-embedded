@@ -148,6 +148,10 @@ void app_on_settings(int what, const dash_settings_t *st, void *ctx) {
     log_msg("settings: restart for the update");
     settings_reboot();
     break;
+  case DASH_EXTRA_START:   // the second projection button (shown only with its addition's files)
+    log_msg("settings: start the extra projection");
+    settings_aa_extra();
+    break;
   case DASH_RESTART:       // Advanced, the Restart button (a second tap within 3 s)
     log_msg("settings: restart");
     settings_reboot();
@@ -193,6 +197,7 @@ static int ready = 1, asks;
 void cmdr_hook_ask(void) { asks++; } void cmdr_hook_forget(void) {}
 void settings_aa(bool start) { (void)start; }
 void settings_aa_forget(void) {}
+void settings_aa_extra(void) {}
 void settings_ota(const char *what) { (void)what; }
 void settings_nor(const char *what) { (void)what; }
 void settings_reboot(void) {}

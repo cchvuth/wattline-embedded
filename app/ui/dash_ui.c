@@ -409,6 +409,31 @@ static struct {
 	uint32_t c;
 } link_w, link_b;
 static lv_obj_t *car_panel, *aa_btn;   /* bottom-right: the car panel, and the Android Auto start/stop (cert-gated) */
+/* the second projection button left of AA, NULL without its addition's files (dash_ui.h): read once, at the start */
+static lv_obj_t *x_btn;
+const char *dash_ui_extra_hook = "/data/hooks/extra-start", *dash_ui_extra_icon = "/data/hooks/extra-icon",
+	   *dash_ui_extra_up = "/run/dash-aa.extra";
+static lv_image_dsc_t ic_x;
+static bool extra_icon(void) /* its hook there and its icon exactly AA's size (A8): else no button */
+{
+	if (access(dash_ui_extra_hook, X_OK) != 0) return false;
+	size_t n = (size_t)ic_aa.header.w * ic_aa.header.h, got = 0;
+	uint8_t *px = malloc(n + 1);
+	FILE *f = px ? fopen(dash_ui_extra_icon, "rb") : NULL;
+	if (f) got = fread(px, 1, n + 1, f), fclose(f);
+	if (got != n) { free(px); return false; }
+	ic_x = ic_aa, ic_x.data = px;
+	return true;
+}
+/* AA (and the second button left of it) a gap to the car panel's left, a little lower than it (2 dp: their glyphs fill
+ * their box, the car's sits low in its own; level, they looked higher) */
+static void aa_place(int car_x, int y)
+{
+	int x = car_x - ri(PL(16)) - (int)ic_aa.header.w;
+	y += ri(PL(2));
+	lv_obj_set_pos(aa_btn, x, y);
+	if (x_btn) lv_obj_set_pos(x_btn, x - ri(PL(16)) - (int)ic_aa.header.w, y);
+}
 
 /* left: lights row, the car */
 static lv_obj_t *lights_row;
@@ -1297,10 +1322,12 @@ void dash_ui_init(lv_obj_t *scr)
 		/* Android Auto on demand, a gap to the car panel's left: the Android Auto logo, outline (gen/aa_icon.c, from
 		 * assets/android_auto.svg), a 36 px button as ic_car_panel, level with it. Cert-gated. */
 		aa_btn = icon(root, &ic_aa, WHITE);
-		lv_obj_set_pos(aa_btn, car_x - ri(PL(16)) - (int)ic_aa.header.w, car_y);
+		if (extra_icon()) x_btn = icon(root, &ic_x, WHITE);
+		aa_place(car_x, car_y);
 		show(aa_btn, false);
-		/* the phone layout's route pill ends at the AA button's 40 dp box (the app's Maps IconButton), shown or not */
-		car_bar_r = car_x - ri(PL(16)) - ic_aa.header.w / 2.0f - PL(20);
+		/* the phone layout's route pill ends at the AA button's 40 dp box (the app's Maps IconButton), shown or not
+		 * (the second button's, where there is one) */
+		car_bar_r = car_x - ri(PL(16)) - ic_aa.header.w / 2.0f - PL(20) - (x_btn ? ri(PL(16)) + ic_aa.header.w : 0);
 	}
 
 	/* Left: the lights row over the car. */
@@ -1549,6 +1576,8 @@ const char *dash_ui_pj_marker = "/run/dash-project"; /* the shots harness points
 const char *dash_ui_aa_cert = "/etc/wattline/aa.crt", *dash_ui_aa_up = "/run/dash-aa", *dash_ui_pj_fps = PJ_FPS;
 static const char *aa_start_lock = "/run/dash-aa.starting";   /* dash-aa start holds it until it ends, up or not */
 static bool aa_pending;    /* tapped start, waiting for /run/dash-aa to appear: shown on at once */
+static bool aa_pending_x;  /* that start is the second button's (dash-aa extra) */
+static bool extra_up(void) { return access(dash_ui_extra_up, F_OK) == 0; }
 static bool aa_stopping;   /* tapped stop (or Exit), waiting for /run/dash-aa to go: shown off at once */
 #define AA_STOP_MS 45000   /* dash-aa stop's longest: a sync, its hook 12 s, the receiver's goodbye and the kills 5 s, the
                              access point's 5 s, two bluetoothctl calls 5 s each, and a margin */
@@ -1770,11 +1799,17 @@ static void set_cabin(const dash_state_t *s, float cx, float top)
 		bool left = i % 2 == 0;
 		float axle = p->axles[i / 2] * cab.h, bw = cab.w * p->tyre_w;
 		float bx = left ? cab.w * p->tyre_l : cab.w - cab.w * p->tyre_r - bw;
-		if (isnan(s->tyre_psi[i])) set_text(cab.tyre[i], "—");
+		/* that wheel braking (WiFi's torque, NAN without it): its brake % in red instead, as the brake car's scale */
+		int bk = isnan(s->brake_nm[i]) ? 0 : (int)lroundf(wheel_pct(s->brake_nm[i]));
+		bool braked = bk >= 1;
+		if (braked) set_text(cab.tyre[i], "%d", bk);
+		else if (isnan(s->tyre_psi[i])) set_text(cab.tyre[i], "—");
 		else if (s->psi) set_text(cab.tyre[i], "%d", (int)lroundf(s->tyre_psi[i]));
 		else set_text(cab.tyre[i], "%.1f", s->tyre_psi[i] / 14.5038f);
-		set_text(cab.psi[i], "%s", s->psi ? "psi" : "bar"); /* at every frame (kept when the same): a change made while
-								      * the car was not shown (basic without its card) was missed */
+		set_text(cab.psi[i], "%s", braked ? "%" : s->psi ? "psi" : "bar"); /* at every frame (kept when the same): a change
+								      * made while the car was not shown (basic without its card) was missed */
+		text_color(cab.tyre[i], braked ? ALERT : WHITE);
+		text_color(cab.psi[i], braked ? ALERT : W60);
 		/* the pair (14 at a 1.1 line over 9 at 1.0) centred in a 30 dp box on the axle */
 		float h1 = cb(14) * 1.1f, h2 = cb(9), y0 = axle - cb(15) + (cb(30) - h1 - h2) / 2;
 		const lv_font_t *f1 = lv_obj_get_style_text_font(cab.tyre[i], 0), *f2 = lv_obj_get_style_text_font(cab.psi[i], 0);
@@ -2685,9 +2720,21 @@ static void aa_tap(lv_event_t *e)
 		if (lv_tick_elaps(focus_at) < 3000) return; /* asked a moment ago: aa takes it at its next ping tick */
 		unlink(PJ_AA_FOCUS); /* not taken: aa serve is gone (its session marker left behind): stop AA instead */
 	}
-	bool up = access(dash_ui_aa_up, F_OK) == 0;
+	bool up = access(dash_ui_aa_up, F_OK) == 0 && !extra_up(); /* the second button's up: AA takes its place */
 	save(up ? DASH_AA_STOP : DASH_AA_START);
-	aa_pending = !up, aa_pending_at = lv_tick_get();
+	aa_pending = !up, aa_pending_x = false, aa_pending_at = lv_tick_get();
+	if (up) aa_stopping = true, aa_stop_at = lv_tick_get();
+}
+/* the second projection button: its mode up, a stop; else its start (in AA's place if AA is up) */
+static void x_tap(lv_event_t *e)
+{
+	(void)e;
+	if (FRESH(dash_at, 700)) return;
+	if (aa_pending && aa_start_running()) return;
+	if (aa_stopping && lv_tick_elaps(aa_stop_at) < AA_STOP_MS) return;
+	bool up = access(dash_ui_aa_up, F_OK) == 0 && extra_up();
+	save(up ? DASH_AA_STOP : DASH_EXTRA_START);
+	aa_pending = !up, aa_pending_x = true, aa_pending_at = lv_tick_get();
 	if (up) aa_stopping = true, aa_stop_at = lv_tick_get();
 }
 
@@ -4613,6 +4660,7 @@ static void touch_init(void)
 		lv_obj_add_event_cb(root, swipe, LV_EVENT_GESTURE, NULL);
 	}
 	tappable(aa_btn, aa_tap, 0, PL(8)); /* half the gap to the car icon: AA sits on top, so it must not reach past it */
+	if (x_btn) tappable(x_btn, x_tap, 0, PL(8)); /* (and half the gap to AA) */
 	tip = box(root);
 	fill(tip, 0xE6616161); /* Tooltip: grey 700 at 90 % */
 	lv_obj_set_style_radius(tip, ri(PC(4)), 0);
@@ -4733,7 +4781,7 @@ static void cards_parts(bool basic)
 			show(dots[i][c], basic && (view != DASH_VIEW_PROJECT || (i == SPLIT_SLOT && c != DASH_CARD_BUTTONS)));
 	if (!basic) { /* the buttons back in the bar's corner */
 		lv_obj_set_pos(car_panel, car_at[0], car_at[1]);
-		lv_obj_set_pos(aa_btn, car_at[0] - ri(PL(16)) - (int)ic_aa.header.w, car_at[1]);
+		aa_place(car_at[0], car_at[1]);
 	}
 	lv_obj_invalidate(root);
 }
@@ -4872,7 +4920,7 @@ static void basic_layout(const dash_state_t *s)
 	/* the car panel and AA under the ring's right end, as the links under its left */
 	int car_x = ri(G.cx + G.D / 2 - PL(20) - PL(12));
 	lv_obj_set_pos(car_panel, car_x, car_at[1]);
-	lv_obj_set_pos(aa_btn, car_x - ri(PL(16)) - (int)ic_aa.header.w, car_at[1]);
+	aa_place(car_x, car_at[1]);
 	set_ring(s);
 	ring_dirty(s);
 	for (int c = 0; c < DASH_CARDS; c++)
@@ -5002,15 +5050,19 @@ void dash_ui_set(const dash_state_t *s)
 	 * on-demand bring-up is up, so a tap tears it down rather than leaving the Dash advertising all the time. */
 	bool aa_cert = access(dash_ui_aa_cert, F_OK) == 0 && access(PJ_AA_UNUSABLE, F_OK) != 0;
 	show(aa_btn, aa_cert);
-	if (aa_cert) {   /* on: AP up, a tap pending, or projecting */
-		bool up = access(dash_ui_aa_up, F_OK) == 0;
-		if (up || (aa_pending && !aa_start_running())) aa_pending = false;
+	if (x_btn) show(x_btn, true);
+	if (aa_cert || x_btn) {   /* on: AP up (in its mode), a tap pending, or projecting */
+		bool up = access(dash_ui_aa_up, F_OK) == 0, xup = up && extra_up();
+		if ((up && xup == aa_pending_x) || (aa_pending && !aa_start_running())) aa_pending = false;
 		/* (not while a start still holds its lock: Exit in a start's last moments finds no mark yet, and the start
 		 * then keeps one until that stop has ended: the button showed on, and a tap sent a second stop) */
 		if (aa_stopping && ((!up && access(aa_start_lock, F_OK) != 0) || lv_tick_elaps(aa_stop_at) > AA_STOP_MS)) aa_stopping = false;
 		/* off: white, as the other icons; on: Android Auto's blue. Off at once on the tap that stops it (dash-aa stop
 		 * takes a few seconds to take the AP and its processes down) */
-		icon_color(aa_btn, !aa_stopping && (projecting || up || aa_pending) ? AA_BLUE : WHITE);
+		bool aa_on = aa_pending ? !aa_pending_x : !xup && (projecting || up); /* (a pending start: its button alone) */
+		bool x_on = aa_pending ? aa_pending_x : xup;
+		icon_color(aa_btn, !aa_stopping && aa_on ? AA_BLUE : WHITE);
+		if (x_btn) icon_color(x_btn, !aa_stopping && x_on ? AA_BLUE : WHITE);
 	}
 
 	/* Under the settings' dialog the dash's middle (the ring, the car, the figures, the route, the g-meter) is left as

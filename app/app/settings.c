@@ -39,6 +39,7 @@ static void run(const char *cmd, const char *arg, const char *arg2) {
 }
 
 void settings_aa(bool start) { run(settings_aa_cmd, start ? "start" : "stop", NULL); }
+void settings_aa_extra(void) { run(settings_aa_cmd, "extra", NULL); }
 void settings_aa_restore(void) { run(settings_aa_cmd, "restore", NULL); }
 void settings_aa_forget(void) { run(settings_aa_cmd, "forget", NULL); }
 void settings_ota(const char *what) { run("/usr/sbin/dash-update", what, NULL); }

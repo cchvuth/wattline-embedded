@@ -26,6 +26,7 @@ void settings_load(dash_settings_t *st, const conf_t *cf);   // what was saved, 
 // list -> settings_wifi_cmd, SSH -> on/off cmd). Clears the typed passes in st. 0 ok, -1 a write failed (logged).
 int settings_save(dash_settings_t *st);
 void settings_refresh(dash_settings_t *st);   // as the screen opens: SSH on if Dropbear runs (the pairing turns it on)
+void settings_aa_extra(void);         // the second projection button: settings_aa_cmd extra (its stop: settings_aa(false))
 void settings_aa(bool start);         // the AA button: run settings_aa_cmd start|stop (wireless Android Auto on demand)
 // Android Auto left on (dash-aa writes <root>/aa-on once it is up, stop removes it): brought up again at the next start
 bool settings_aa_kept(void);
