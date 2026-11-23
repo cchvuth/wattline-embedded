@@ -1771,7 +1771,8 @@ static int reg_profile(GDBusConnection *bus, GDBusNodeInfo *ni, const char *obj_
 	return 0;
 }
 
-// aa bt <ip> <ssid> <key> <bssid>: register the AA + HFP profiles and serve connections until killed
+// aa bt <ip> <ssid> <key> <bssid>: register the AA + HFP profiles and serve connections until killed (AA_BT_EXTRA_ONLY
+// set: HFP and BT_EXTRA's profiles only, for dash-aa extra: another projection's session, no Android Auto)
 // every 5 s, for each "dial" profile: open it once per Bluetooth connection of each connected device that offers it.
 // Once only: the device may close it itself and reopen it from its side; a redial would start it over. A dial that
 // fails (other than AlreadyConnected/InProgress) is tried again at the next tick.
@@ -1909,7 +1910,10 @@ static int aa_bt_serve(const char *ip, const char *ssid, const char *key, const 
 	if (!ni) { fprintf(stderr, "aa: node info: %s\n", e->message); return -1; }
 	if (reg_agent(bus)) return -1;
 
-	// the AA wireless profile (we drive the creds handshake on connect)
+	// the AA wireless profile (we drive the creds handshake on connect); not in another projection's session: a phone
+	// sent to that AP would find no receiver
+	const char *xo = getenv("AA_BT_EXTRA_ONLY");
+	gboolean aa_on = !(xo && *xo);
 	GVariantBuilder ao; g_variant_builder_init(&ao, G_VARIANT_TYPE("a{sv}"));
 	g_variant_builder_add(&ao, "{sv}", "Name", g_variant_new_string("Android Auto"));
 	g_variant_builder_add(&ao, "{sv}", "Role", g_variant_new_string("server"));
@@ -1917,7 +1921,9 @@ static int aa_bt_serve(const char *ip, const char *ssid, const char *key, const 
 	// a paired link only: this channel hands out the AP's passphrase, so an unpaired device must not get it
 	g_variant_builder_add(&ao, "{sv}", "RequireAuthentication", g_variant_new_boolean(TRUE));
 	g_variant_builder_add(&ao, "{sv}", "RequireAuthorization", g_variant_new_boolean(FALSE));
-	if (reg_profile(bus, ni, PROFILE_PATH, AA_BT_UUID, g_variant_builder_end(&ao), &cr)) return -1;
+	GVariant *aov = g_variant_builder_end(&ao);
+	if (aa_on && reg_profile(bus, ni, PROFILE_PATH, AA_BT_UUID, aov, &cr)) return -1;
+	if (!aa_on) g_variant_unref(g_variant_ref_sink(aov));
 
 	// the HFP Hands-Free profile so the phone treats us as a car and keeps the connection
 	GVariantBuilder ho; g_variant_builder_init(&ho, G_VARIANT_TYPE("a{sv}"));
@@ -1928,8 +1934,10 @@ static int aa_bt_serve(const char *ip, const char *ssid, const char *key, const 
 	if (reg_profile(bus, ni, HFP_PATH, HFP_HF_UUID, g_variant_builder_end(&ho), &cr)) return -1;
 
 	int nx = extras_register(bus, ni, &cr);
-	fprintf(stderr, "aa: profiles up (AA %s ch %d + HFP%s%.0d%s); waiting for the phone\n",
+	if (aa_on) fprintf(stderr, "aa: profiles up (AA %s ch %d + HFP%s%.0d%s); waiting for the phone\n",
 		AA_BT_UUID, AA_BT_RFCOMM_CHANNEL, nx ? " + " : "", nx, nx ? " more" : "");
+	else fprintf(stderr, "aa: profiles up (HFP%s%.0d%s, no Android Auto); waiting for the phone\n",
+		nx ? " + " : "", nx, nx ? " more" : "");
 	g_main_loop_run(g_main_loop_new(NULL, FALSE));
 	return 0;
 }

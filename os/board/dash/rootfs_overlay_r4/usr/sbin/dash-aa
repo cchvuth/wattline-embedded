@@ -1,7 +1,12 @@
 #!/bin/sh
-# dash-aa start|restore|stop|forget : wireless Android Auto on demand, from the dash's AA button (forget: the paired
-# phones). It stays on across restarts: /data/aa-on is written once it is up and removed by stop, and the dash runs
-# `restore` at its start while the file is there: as start, but without the 2-minute pairing window (nobody tapped).
+# dash-aa start|extra|restore|stop|forget : wireless Android Auto on demand, from the dash's AA button (forget: the
+# paired phones). It stays on across restarts: /data/aa-on is written once it is up (its line: the mode) and removed by
+# stop, and the dash runs `restore` at its start while the file is there: as start (or extra), but without the 2-minute
+# pairing window (nobody tapped).
+# extra: the same AP for an addition kept outside this repository instead of Android Auto (the dash's second button,
+# shown only with /data/hooks/extra-start and its icon there): its hook, and aa bt with the extra profiles and HFP but
+# not Android Auto's; no receiver; on a network of its own (SSID WattlineAA; Android Auto's is Wattline).
+# /run/dash-aa.extra marks that mode up. Either mode started while the other is up takes its place.
 # Brings up the 5 GHz AP, the RFCOMM + HFP profiles that hand the phone the AP creds,
 # and the receiver (TCP 5288 + TLS + video -> the decode/blit sink). Started by the on-screen
 # button (and restored at boot when left on), so the Dash advertises AA only while the user wants it -- a phone set
@@ -10,7 +15,13 @@
 # The head-unit certificate is user-supplied at /etc/wattline/aa.{crt,key}; without it the
 # phone rejects the TLS handshake, so start refuses when it is missing (and the Network
 # tab hides the button). /run/dash-aa marks it running, for that button's on/off label.
-SSID=${SSID:-WattlineAA}
+MODE=aa   # (or extra: start's case below)
+[ "$1" = extra ] && MODE=extra
+[ "$1" = restore ] && [ "$(head -n 1 /data/aa-on 2>/dev/null)" = extra ] && MODE=extra
+[ "$MODE" = extra ] && [ ! -x /data/hooks/extra-start ] && MODE=aa   # its addition gone: Android Auto
+if [ "$MODE" = extra ]; then SSID=${SSID:-WattlineAA}; else SSID=${SSID:-Wattline}; fi
+XMARK=/run/dash-aa.extra
+up_mode() { [ -e $XMARK ] && echo extra || echo aa; }
 # A fresh random passphrase each session: a fixed one would be in this public repo. The phone needs no setup for it:
 # it gets the passphrase over Bluetooth (the paired AA channel) every time it connects.
 PSK=${PSK:-$(od -An -tx1 -N10 /dev/urandom 2>/dev/null | tr -d ' \n')}   # 20 hex digits
@@ -32,16 +43,17 @@ btc() {
 	wait $_bp; _br=$?; kill $_bk 2>/dev/null; return $_br
 }
 # Hooks for additions kept outside this repository (absent on a plain image), output in /data/log/hook-<name>.log:
-#  - /data/hooks/aa-start: once the access point is up, before the pairing window and aa bt (which offers the extra
-#    Bluetooth profiles of /etc/wattline/bt-profiles whose helper's socket exists by then). Gets IFACE, SSID, PSK and IP.
-#  - /data/hooks/aa-stop: at every stop (also after a failed start, or with no session up), so it must be safe to
+#  - /data/hooks/extra-start: extra's, once the access point is up, before the pairing window and aa bt (which offers
+#    the extra Bluetooth profiles of /etc/wattline/bt-profiles whose helper's socket exists by then); Android Auto's
+#    start runs none. Gets IFACE, SSID, PSK and IP. Its button's icon: /data/hooks/extra-icon (the dash's).
+#  - /data/hooks/extra-stop: at every stop (also after a failed start, or with no session up), so it must be safe to
 #    repeat. Gets IFACE and IP.
 # Each has 10 s, then SIGTERM, and SIGKILL 2 s later (the hook's own process: a daemon it started lives on). A helper's
 # socket belongs in a root-only directory such as /run; the profile's socket reaches it in blocking mode.
 hook() {
 	[ -x "/data/hooks/$1" ] || return 0
 	HL=/data/log; ( : >> "$HL/hook-$1.log" ) 2>/dev/null || HL=/run   # (/data read-only: the hook all the same)
-	if [ "$1" = aa-start ]; then IFACE=$IFACE SSID=$SSID PSK=$PSK IP=$IP "/data/hooks/$1" >"$HL/hook-$1.log" 2>&1 & _hp=$!
+	if [ "$1" = extra-start ]; then IFACE=$IFACE SSID=$SSID PSK=$PSK IP=$IP "/data/hooks/$1" >"$HL/hook-$1.log" 2>&1 & _hp=$!
 	else IFACE=$IFACE IP=$IP "/data/hooks/$1" >"$HL/hook-$1.log" 2>&1 & _hp=$!; fi
 	( sleep 10; kill $_hp; sleep 2; kill -9 $_hp ) >/dev/null 2>&1 & _hk=$!
 	wait $_hp; kill $_hk 2>/dev/null; return 0
@@ -52,7 +64,7 @@ stop() {
 	# session up, first tells the phone the session ends (its ShutdownRequest, up to 2 s): the AP stays until it is gone
 	rm -f /run/aa-keep   # (first: the start's loops would start them again)
 	killall aa spike-vdec 2>/dev/null
-	hook aa-stop
+	hook extra-stop
 	[ -f /run/aa-pair-timer ] && kill "$(cat /run/aa-pair-timer)" 2>/dev/null; rm -f /run/aa-pair-timer   # an old window's end
 	killall aa spike-vdec 2>/dev/null   # both at once: aa checks its stop flag before its dead decoder, so it still
 	                                    # says goodbye to the phone
@@ -80,18 +92,20 @@ stop() {
 	btc pairable off >/dev/null 2>&1 || true   # no new pairings once AA is off
 	# Reconnect the Wi-Fi link to the Commander/home that start dropped (SSH/OTA/WiFi-CAN return); if wpa_supplicant is
 	# gone, bring Wi-Fi up from scratch (S45wifi-auto only knows "start")
-	rm -f "$MARK" /run/dash-aa-radio   # before Wi-Fi comes back (S45wifi-auto waits while they are there); the button off
+	rm -f $XMARK "$MARK" /run/dash-aa-radio   # before Wi-Fi comes back (S45wifi-auto waits while they are there); the button off
 	if [ -e /run/wifi-auto.pending ]; then   # saved meanwhile (and the network picked, if one was)
 		J=$(head -n 1 /run/wifi-auto.pending); rm -f /run/wifi-auto.pending; /etc/init.d/S45wifi-auto start "$J" >/dev/null 2>&1
 	else wpa_cli -i wlan0 reconnect >/dev/null 2>&1 || /etc/init.d/S45wifi-auto start >/dev/null 2>&1; fi
 }
 
 case "$1" in
-start|restore)
-	[ -f "$CERT" ] || { echo "dash-aa: no head-unit certificate at $CERT" >&2; exit 1; }
-	aa certcheck "$CERT" "${CERT%.crt}.key" || exit 1   # self-signed, or its key missing/another's: no session (it says why)
+start|extra|restore)
+	if [ $MODE = aa ]; then   # (Android Auto's own: extra's addition has its own credentials)
+		[ -f "$CERT" ] || { echo "dash-aa: no head-unit certificate at $CERT" >&2; exit 1; }
+		aa certcheck "$CERT" "${CERT%.crt}.key" || exit 1   # self-signed, or its key missing/another's: no session (it says why)
+	fi
 	[ ${#PSK} -ge 8 ] || { echo "dash-aa: could not make the AP passphrase" >&2; exit 1; }
-	[ -f "$MARK" ] && exit 0   # already up
+	[ -f "$MARK" ] && [ "$(up_mode)" = $MODE ] && exit 0   # already up
 	# one start at a time (a boot restore, or a tap once the UI stops waiting on this one at 90 s): the lock
 	# holds its start's pid; one whose start died (no such process) is taken over. Not by age: the clock jumps at boot.
 	L=/run/dash-aa.starting
@@ -102,7 +116,12 @@ start|restore)
 	fi
 	echo $$ > $L/pid
 	trap 'rm -rf /run/dash-aa.starting' EXIT
-	[ -f "$MARK" ] && exit 0   # up by the start that held the lock
+	if [ -f "$MARK" ]; then
+		[ "$(up_mode)" = $MODE ] && exit 0   # up by the start that held the lock
+		# the other mode: down first (its marks with it), this one in its place; not on again at the next start
+		# until this one is up (a switch that fails, or a power cut in it, leaves nothing to restore)
+		rm -f /data/aa-on; sync; stop
+	fi
 	BSSID=$(cat /sys/class/net/"$IFACE"/address)
 	# Prepare for AA: drop the Wi-Fi link to the Commander/home so the radio is free for the AP's own channel (single
 	# radio can't host the AP on the station's channel, esp. a DFS one). During AA the car link rides the Commander's
@@ -127,35 +146,41 @@ start|restore)
 	# The AP carries live video: keep the radio out of power save for the session (latency, not a correctness fix).
 	iw dev "$IFACE" set power_save off 2>/dev/null; iw dev wlan0 set power_save off 2>/dev/null
 	btc system-alias Wattline >/dev/null 2>&1 || true   # the name the phone sees (not the default BlueZ x.y)
-	hook aa-start   # before the pairing window: a pairing while it runs (up to 12 s) would find no agent yet
+	[ $MODE = extra ] && hook extra-start   # before the pairing window: a pairing while it runs (up to 12 s) would find no agent yet
 	# The receiver (listening before aa bt sends any phone to it) and the Bluetooth start (its pairing agent up before
-	# the window opens), each started again if it dies while the session is on (/run/aa-keep: stop removes it first), 20
-	# times at most. A receiver that died mid-session left its markers: the split showed its last picture for good, and
+	# the window opens), each started again if it dies while the session is on (/run/aa-keep, holding this start's pid:
+	# stop removes it first; a session that took the place of this one writes its own, so this one's loops, asleep
+	# through that stop, end rather than start Android Auto in it), 20 times at most. extra: no receiver, and aa bt
+	# without Android Auto's profile (AA_BT_EXTRA_ONLY). A receiver that died mid-session left its markers: the split showed its last picture for good, and
 	# a phone found nothing listening; they go with it.
-	: > /run/aa-keep
+	echo $$ > /run/aa-keep
+	keep() { [ "$(cat /run/aa-keep 2>/dev/null)" = $$ ]; }   # ($$: this start's, in its subshells too)
+	XO=; [ $MODE = extra ] && XO=1
 	# (each in a subshell: /data read-only must not end the start here)
 	( : > /data/log/aa-serve.log ) 2>/dev/null; ( : > /data/log/aa-bt.log ) 2>/dev/null
-	( n=0; while [ -e /run/aa-keep ] && [ $n -lt 20 ]; do
+	[ $MODE = aa ] && ( n=0; while keep && [ $n -lt 20 ]; do
 		L=/data/log; ( : >> $L/aa-serve.log ) 2>/dev/null || L=/run   # (/data read-only: not without the receiver)
 		AA_LISTEN=$IP aa serve >>$L/aa-serve.log 2>&1
 		rm -f /run/dash-project /run/dash-aa-session /run/dash-aa-focus /run/dash-pj-fps
-		[ -e /run/aa-keep ] && sleep 1; n=$((n + 1))
+		keep && sleep 1; n=$((n + 1))
 	done ) &
-	( n=0; while [ -e /run/aa-keep ] && [ $n -lt 20 ]; do
+	( n=0; while keep && [ $n -lt 20 ]; do
 		L=/data/log; ( : >> $L/aa-bt.log ) 2>/dev/null || L=/run
-		printf '%s\n' "$PSK" | aa bt "$IP" "$SSID" - "$BSSID" >>$L/aa-bt.log 2>&1
-		[ -e /run/aa-keep ] && sleep 2; n=$((n + 1))
+		printf '%s\n' "$PSK" | AA_BT_EXTRA_ONLY=$XO aa bt "$IP" "$SSID" - "$BSSID" >>$L/aa-bt.log 2>&1
+		keep && sleep 2; n=$((n + 1))
 	done ) &
 	# New phones can pair only in the first 2 minutes after the button (someone at the Dash), not for the whole session;
 	# a phone paired before connects at any time. The AA channel itself needs a paired link (aa.c).
-	if [ "$1" = start ]; then   # someone at the Dash tapped it (not a restore at boot)
+	if [ "$1" != restore ]; then   # someone at the Dash tapped it (not a restore at boot)
 		btc discoverable on >/dev/null 2>&1 || true
 		btc pairable on     >/dev/null 2>&1 || true
 		( sleep 120; btc pairable off; btc discoverable off; rm -f /run/aa-pair-timer ) >/dev/null 2>&1 &
 		echo $! > /run/aa-pair-timer
 	fi
-	touch /data/aa-on 2>/dev/null && sync   # up: on again at the next start (the dash restores it), until stopped
-	# (touch, not `: >`: a failed redirect on a special builtin would end the script before the marker)
+	# up: on again at the next start, in this mode (the dash restores it), until stopped. (printf, not `: >`: a failed
+	# redirect on a special builtin would end the script before the marker)
+	printf '%s\n' $MODE > /data/aa-on 2>/dev/null && sync
+	[ $MODE = extra ] && touch $XMARK
 	touch "$MARK"
 	# A stop that came meanwhile (the split's Exit, a phone already on it; the pairing calls and the sync above are the
 	# slow steps) took it all down and its marks away: not left marked up after it, nor on at the next start, nor with
@@ -167,7 +192,7 @@ start|restore)
 		[ -f /run/aa-pair-timer ] && kill "$(cat /run/aa-pair-timer)" 2>/dev/null; rm -f /run/aa-pair-timer
 		btc pairable off >/dev/null 2>&1; btc discoverable off >/dev/null 2>&1
 		i=0; while [ -e /run/dash-aa-radio ] && [ $i -lt 90 ]; do sleep 0.5; i=$((i + 1)); done
-		rm -f "$MARK"; exit 0
+		rm -f $XMARK "$MARK"; exit 0
 	fi
 	;;
 stop)   # the owner's stop (the button, the split's Exit): off, and off at the next start too (first: a power cut
@@ -181,5 +206,5 @@ forget)   # every phone paired with the Dash (each gets the AP's passphrase when
 		case "$a" in ??:??:??:??:??:??) btc remove "$a" >/dev/null 2>&1 && echo "dash-aa: forgot $a" ;; esac
 	done ;;
 *)
-	echo "usage: dash-aa start|restore|stop|forget" >&2; exit 2 ;;
+	echo "usage: dash-aa start|extra|restore|stop|forget" >&2; exit 2 ;;
 esac
