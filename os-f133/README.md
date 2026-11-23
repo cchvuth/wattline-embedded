@@ -22,8 +22,7 @@ The certificate goes to `/data/wattline/` as on the Dash. The image's SSH server
 Docker and about 15 GB of disk. In the repository root:
 
 1. LVGL, vendored but not committed: `git clone --depth 1 -b v9.6.0 https://github.com/lvgl/lvgl app/third_party/lvgl-9.6.0`.
-2. `make -C app -f app.mk build/signals_gen.h` (needs the Flutter app checked out as `wattline/`; see the top README).
-3. `os-f133/build.sh`
+2. `os-f133/build.sh`
 
 The first run builds the toolchain too, which takes about an hour. The Buildroot tree and its output stay in the
 Docker volume `wattline-f133`, and the images land in `out-f133/`:

@@ -5,8 +5,7 @@
 #   ./build.sh linux-rebuild    one package again, then `./build.sh` for the images (a whole build makes the
 #                               programs from this checkout again by itself, and the kernel when its inputs changed)
 #   VOL=... OUT=... APP=...     another volume, images directory, or app checkout
-# The dash, the Android Auto receiver and its decoder are built from the app checkout ($APP, mounted at /native):
-# generate its build/signals_gen.h first (README.md).
+# The dash, the Android Auto receiver and its decoder are built from the app checkout ($APP, mounted at /native).
 set -euo pipefail
 H=$(cd "$(dirname "$0")" && pwd)
 APP=${APP:-$(cd "$H/../app" && pwd)}

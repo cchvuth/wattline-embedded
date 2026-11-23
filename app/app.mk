@@ -34,10 +34,12 @@ BLE_SO_SRC := port/linux/ble_bluez.c core/cmdr.c core/sec1.c core/pb.c core/cmdr
 APP_SRC := $(patsubst port/linux/ble_bluez.c,port/linux/ble_dl.c,$(APP_SRC))
 endif
 
-# the Flutter app (cchvuth/wattline), its signal table: inside the checkout (CI: wattline/) or beside it
+# the Flutter app (cchvuth/wattline), its signal table: inside the checkout or beside it
 WATTLINE ?= $(firstword $(wildcard ../wattline ../../wattline) ../wattline)
+# committed (Makefile): regenerated when the Flutter app is there
 build/signals_gen.h: tools/gen_signals.py tools/extra_signals.json $(wildcard $(WATTLINE)/lib/signals.dart $(WATTLINE)/lib/panda.dart)
-	python3 -I tools/gen_signals.py $(WATTLINE) build
+	@if [ -f $(WATTLINE)/lib/signals.dart ]; then python3 -I tools/gen_signals.py $(WATTLINE) build; \
+	else echo "signals: the committed $@ (no Flutter app at $(WATTLINE))"; touch $@; fi
 
 # --- host (Mac): LVGL and UI objects shared with ui.mk (same flags, same $(BUILD)/host/), the app's with sanitizers
 HOST_CC ?= cc

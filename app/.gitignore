@@ -1,2 +1,5 @@
-build/
+build/*
+# the signal table and its decode vectors, generated from the Flutter app (make regenerates them when it is beside)
+!build/signals_gen.h
+!build/test_decode.c
 third_party/lvgl-9.6.0/

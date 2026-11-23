@@ -1,10 +1,13 @@
 CC ?= cc
-# the Flutter app (cchvuth/wattline), its signal table: inside the checkout (CI: wattline/) or beside it
+# the Flutter app (cchvuth/wattline), its signal table: inside the checkout or beside it. Its build/signals_gen.h
+# and build/test_decode.c are committed: regenerated here when the app is there, used as they are when not
 WATTLINE ?= $(firstword $(wildcard ../wattline ../../wattline) ../wattline)
+GEN_SIGNALS = if [ -f $(WATTLINE)/lib/signals.dart ]; then python3 -I tools/gen_signals.py $(WATTLINE) build; \
+	else echo "signals: the committed build/signals_gen.h (no Flutter app at $(WATTLINE))"; fi
 HOSTFLAGS = -std=gnu11 -Wall -Wextra -fsanitize=address,undefined
 
 test:
-	python3 -I tools/gen_signals.py $(WATTLINE) build
+	@$(GEN_SIGNALS)
 	$(CC) $(HOSTFLAGS) -Ibuild -o build/test_decode build/test_decode.c -lm && build/test_decode
 	$(CC) $(HOSTFLAGS) -o build/test_panda test/test_panda.c core/panda.c && build/test_panda
 	$(CC) $(HOSTFLAGS) -Ibuild -o build/test_derive test/test_derive.c core/derive.c core/sched.c core/panda.c -lm && build/test_derive

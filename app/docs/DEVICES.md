@@ -39,7 +39,7 @@ T113, as before:
 F133:
 
 - the device: the F133 image builds it (`os-f133/build.sh`, its `dashapp` package). By hand, with that image's
-  toolchain (`build/signals_gen.h` made first: `make -f app.mk build/signals_gen.h`):
+  toolchain:
 
   ```
   make -f app.mk -j8 DEVICE=f133 ARM_CC=<buildroot>/host/bin/riscv64-buildroot-linux-gnu-gcc CMDR=1 arm

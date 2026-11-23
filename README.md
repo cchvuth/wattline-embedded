@@ -32,7 +32,7 @@ No certificate ships with the Dash, and none is generated: the on-screen **Andro
 
 ### Dash app (`app/`)
 
-1. The signal tables are generated from the Flutter app ([cchvuth/wattline](https://github.com/cchvuth/wattline)): clone it as `wattline/` in the repo root (next to `app/`, as CI does), then `make -C app -f app.mk build/signals_gen.h`.
+1. The signal tables (`app/build/signals_gen.h`, `app/build/test_decode.c`) are generated from the Flutter app ([cchvuth/wattline](https://github.com/cchvuth/wattline)) and committed. With the app cloned as `wattline/` in the repo root or next to this checkout, `make` regenerates them from it; a signal is changed there, then the regenerated files are committed here.
 2. LVGL is fetched, not committed: `git clone --depth 1 -b v9.6.0 https://github.com/lvgl/lvgl app/third_party/lvgl-9.6.0`.
 3. Host: `mkdir -p app/build && make -C app test` (unit tests) and `make -C app -f app.mk host` (the UI on the desktop).
 4. ARM, with the firmware's Buildroot toolchain: `make -C app -f app.mk ARM_CC=<buildroot>/host/bin/arm-buildroot-linux-gnueabihf-gcc CMDR=1 arm` → `app/build/arm-app-cmdr/dash` (and `dash.stripped`). Use the toolchain of the tree that built it: a copied/relocated Buildroot host tree fails to link libc, even with `--sysroot`.
@@ -50,7 +50,7 @@ cc -O2 -Wall -DAA_BT $(pkg-config --cflags gio-2.0 gio-unix-2.0) -o aa app/aa/aa
 
 Buildroot 2026.02 in a Docker container (`debian:stable`), with a persistent volume for the Buildroot tree and its output. Container packages: `build-essential make rsync pkg-config file bc cpio python3 git wget unzip` (plus `libssl-dev libglib2.0-dev` for host builds of the receiver).
 
-Mounts the build expects: `os/` at `/ext` (the `BR2_EXTERNAL` tree), `app/` at `/native` (the dash program and the Android Auto receiver are built from it; generate `app/build/signals_gen.h` first), and `os/radio/` at `/radio` (the RTL8733BS Wi-Fi driver source, Realtek's vendor driver, GPL-2.0: see [os/radio/README.md](os/radio/README.md)). CI builds and tests the app and the firmware's tools, not the image (a full Buildroot build).
+Mounts the build expects: `os/` at `/ext` (the `BR2_EXTERNAL` tree), `app/` at `/native` (the dash program and the Android Auto receiver are built from it), and `os/radio/` at `/radio` (the RTL8733BS Wi-Fi driver source, Realtek's vendor driver, GPL-2.0: see [os/radio/README.md](os/radio/README.md)). CI builds and tests the app and the firmware's tools, not the image (a full Buildroot build).
 
 ```
 make O=<output dir> BR2_EXTERNAL=/ext dash_r4_defconfig

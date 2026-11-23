@@ -4,10 +4,8 @@ name: CI
 # The full firmware IMAGES (os/, os-f133/) are Buildroot builds (toolchain + kernel + packages, ~1-2 h);
 # they are not built here yet — see "Firmware image" in the README.
 #
-# The app's signal tables are generated from the Flutter app repo (cchvuth/wattline:
-# lib/signals.dart, test/obd_test.dart). CI checks that out next to the repo so app/'s
-# `../wattline` path resolves. If that repo is private, add a repo secret WATTLINE_TOKEN
-# (a PAT with read access); if it is public the default token is enough.
+# The app's signal tables (app/build/signals_gen.h, test_decode.c) are generated from the Flutter app
+# (cchvuth/wattline) on the Mac and committed: CI builds and tests with them as they are.
 
 on:
   push:
@@ -21,12 +19,6 @@ jobs:
     steps:
       - name: Checkout (os/, os-f133/, app/)
         uses: actions/checkout@v5
-      - name: Checkout signal source (cchvuth/wattline)
-        uses: actions/checkout@v5
-        with:
-          repository: cchvuth/wattline
-          path: wattline              # app/ Makefile reads ../wattline/lib/signals.dart
-          token: ${{ secrets.WATTLINE_TOKEN || github.token }}
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential python3 pkg-config libglib2.0-dev
       - name: Fetch vendored LVGL (gitignored in the repo)
