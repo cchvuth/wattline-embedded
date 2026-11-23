@@ -215,7 +215,8 @@ int main(int argc, char **argv)
 		dash_settings_t bs = {.minor_figures = true, .basic = true,
 				      .cards = {DASH_CARD_BUTTONS, DASH_CARD_CAR, DASH_CARD_ENERGY, DASH_CARD_G}};
 		const char *names[][2] = {{"highway-cruise", "basic-highway"}, {"city-turn", "basic-city"},
-					  {"charging", "basic-charging"}, {"bluetooth-only", "basic-bluetooth"}};
+					  {"charging", "basic-charging"}, {"plugged-at-limit", "basic-plugged"},
+					  {"bluetooth-only", "basic-bluetooth"}};
 		dash_ui_settings(&bs);
 		for (size_t k = 0; k < sizeof names / sizeof names[0]; k++)
 			for (int i = 0; i < scene_count; i++)

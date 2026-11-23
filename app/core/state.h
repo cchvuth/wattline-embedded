@@ -30,7 +30,7 @@ typedef struct {
   double pedal_pct, brake_pct, steer_deg;
   double brake_wheel_nm[4];     // each wheel's brake torque (FL FR RL RR), Nm; NUL unknown
   double soc_pct, range_mi, speed_limit;
-  double soc_usable_pct;        // 0x33A UI_uSoe beside soc_pct (UI_soe): logged, to see which the car's screen shows
+  double soc_soe_pct;           // 0x33A UI_soe beside soc_pct (UI_uSoe, as the car's screen): logged, up to 1 % ahead
   bool braking, kph;            // kph: the display's unit, the owner's pick (km_pick) else the car's; speeds come in it
   int km_pick;                  // the owner's distance unit: 1 km, 0 miles, -1 the car's (car_set_km_pick)
   const char *recirc, *autopilot, *dome_light, *tc_mode, *charge_why, *fan1, *fan2;
@@ -62,6 +62,8 @@ typedef struct {
   bool charging;
   double charge_kw, charge_max_kw;   // charge_kw: the wall's (charge_line_kw) on AC, else the pack's (0x212)
   double charge_pack_kw, charge_line_kw;   // 0x212 BMS (into the pack, after the charger), 0x264 PCS (from the wall)
+  double charge_line_v, charge_line_a, charge_limit_a;   // 0x264: the line's voltage, its current, the current allowed
+  int charge_ac_on;             // 0x264: AC at the port (plugged in, charging or at the limit); -1 unknown
   int charge_limit_pct, charge_minutes;
   // The Dash's own: the car's screen brightness, % (0x273 UI_displayBrightnessLevel, or Commander field 24).
   // NUL unknown or SNA; read it through car_display_brightness(now), which also drops a stale one.
@@ -75,6 +77,7 @@ typedef struct {
     bool comp_ok, lit_l, high_fn, high_lamp;
     double brake_nm[4];         // NUL: that wheel not in the last frame
     int64_t turned_at, steer_at, gear_at, edge_at, blink_off_at, grip_at, bt_motor_bad_at, line_at;   // line_at: 0x264
+    int phases;                 // the charger's phases from power / (V x A) while it draws; 0 unknown
     bool blink_lit;
     int was_lit, edge_lit, half_ms;
     uint8_t tp219;              // bits FL FR RL RR: 0x219 page 5 has given that wheel
@@ -115,6 +118,8 @@ bool car_unbuckled_at(const car_t *c, int seat);     // a SEAT_* bit
 bool car_any_belt_unbuckled(const car_t *c);
 double car_display_brightness(const car_t *c, int64_t now);   // %, NUL unknown, SNA or stale
 double car_climate_kw(const car_t *c);
+bool car_plugged(const car_t *c, int64_t now);   // AC at the port (0x264, fresh): charging or held at the limit
+double car_wall_max_kw(const car_t *c);          // what the plug gives: V x the current allowed x phases; NUL unknown
 double car_imbalance_mv(const car_t *c);
 double car_range(const car_t *c);
 double car_arrive_pct(const car_t *c);

@@ -456,6 +456,7 @@ static lv_timer_t *ap_blink;
 /* the energy column */
 static lv_obj_t *dial, *dial_temp, *dial_pct, *dial_range;
 static lv_obj_t *charge_box, *charge_head, *charge_to, *charge_when;
+static lv_obj_t *flow_n[3], *flow_v[3];   /* plugged in: the wall, the climate, the battery */
 static lv_obj_t *stats_box, *stat_lab[5], *stat_val[5];
 
 /* the g-meter */
@@ -486,6 +487,18 @@ static void glow_make(lv_image_dsc_t *d, bool right)
 #define DEG(a) ((a) * (float)M_PI / 180)
 static const float SEC_L0 = 124, SEC_R0 = -56, SEC_SWEEP = 112; /* 120° sectors less 4° each end */
 static const float HALF = 56, DROP = 15, MAX_KW = 160, MIN_KW = -60;
+/* Plugged in, in P (charging or at the limit): the two halves one ring over the top (the limit sign off), open 88° at
+ * the foot round the gear, filling with the wall's power out of what the plug gives (11 kW until that is known) */
+static const float PLUG_A0 = 134, PLUG_SWEEP = 272, PLUG_MAX_KW = 11;
+/* the Dash's full ring has its top above the screen (the two halves' gap, 236° to 304°): one ring there skips it, the
+ * left side filling first, then the right */
+static const float PLUG_GAP0 = 236, PLUG_GAP1 = 304;
+static bool plug_gap(void) { return G.cy < G.r; } /* (the arc's middle above the top: the Dash, not the phone layouts) */
+static bool speedo(void);
+static bool plug_ring(const dash_state_t *s)
+{
+	return s->wifi_live && s->plugged && s->gear == 'P' && !isnan(s->wall_kw) && !speedo();
+}
 
 /* An arc of the ring as it is drawn: whole degrees from a0 to a1 (not turned into 0..360), its outer edge's radius and
  * its width in pixels; c 0: none. Kept as drawn, so a change redraws only the degrees it moved (ring_dirty). */
@@ -543,6 +556,18 @@ static void ring_arcs(const dash_state_t *s, ring_arc_t a[2][2])
 {
 	float w = G.aw, zl = SEC_L0 + HALF - DROP, zr = SEC_R0 + HALF + DROP;
 	memset(a, 0, sizeof(ring_arc_t[2][2]));
+	if (plug_ring(s)) {
+		float max = isnan(s->wall_max_kw) || s->wall_max_kw <= 0 ? PLUG_MAX_KW : s->wall_max_kw;
+		float f = fminf(fmaxf(s->wall_kw, 0) / max, 1);
+		if (!plug_gap()) {
+			a[0][0] = arc_at(PLUG_A0, PLUG_SWEEP * f, REGEN, w);
+			return;
+		}
+		float left = PLUG_GAP0 - PLUG_A0, sw = f * (PLUG_SWEEP - (PLUG_GAP1 - PLUG_GAP0));
+		a[0][0] = arc_at(PLUG_A0, fminf(sw, left), REGEN, w);
+		a[1][0] = arc_at(PLUG_GAP1, sw - left, REGEN, w);
+		return;
+	}
 	if (!isnan(s->rear_kw)) a[0][0] = motor(s->rear_kw, zl, true);
 	float right = !s->rwd ? s->front_kw : s->brake_pct > 0 ? -s->brake_pct : s->pedal_pct;
 	if (!isnan(right)) {
@@ -655,8 +680,15 @@ static void ring_draw(lv_event_t *e)
 	}
 	const dash_state_t *s = &S;
 	float r = G.r, w = G.aw;
-	arc(layer, SEC_L0, SEC_SWEEP, W24, px(1.5)); /* the empty track: a hairline */
-	arc(layer, SEC_R0, SEC_SWEEP, W24, px(1.5));
+	bool plug = plug_ring(s);
+	if (plug && !plug_gap()) arc(layer, PLUG_A0, PLUG_SWEEP, W24, px(1.5)); /* one ring's track */
+	else if (plug) {
+		arc(layer, PLUG_A0, PLUG_GAP0 - PLUG_A0, W24, px(1.5));
+		arc(layer, PLUG_GAP1, PLUG_A0 + PLUG_SWEEP - PLUG_GAP1, W24, px(1.5));
+	} else {
+		arc(layer, SEC_L0, SEC_SWEEP, W24, px(1.5)); /* the empty track: a hairline */
+		arc(layer, SEC_R0, SEC_SWEEP, W24, px(1.5));
+	}
 	/* The app's brake in the ring's foot (a red arc and BRAKE APPLIED; WiFi's, two motors) is in the pedal's slot
 	 * under the g-meter on the Dash; the phone layout has it here, as the app. A rear-motor car's brake stays
 	 * on the ring's right arc. */
@@ -687,7 +719,7 @@ static void ring_draw(lv_event_t *e)
 	ring_arcs(s, arcs);
 	arc_draw(layer, arcs[0][0]), arc_draw(layer, arcs[1][0]); /* the motors, then the regen caps over them */
 	arc_draw(layer, arcs[0][1]), arc_draw(layer, arcs[1][1]);
-	for (int i = 0; i < 2; i++) { /* zero ticks */
+	for (int i = 0; i < 2 && !plug; i++) { /* zero ticks (not on the one ring) */
 		float a = DEG(i ? zr : zl), c = cosf(a), sn = sinf(a);
 		line(layer, G.cx + c * (r - w), G.cy + sn * (r - w), G.cx + c * (r + w * 0.4f), G.cy + sn * (r + w * 0.4f), W54, px(2), false);
 	}
@@ -1418,6 +1450,11 @@ void dash_ui_init(lv_obj_t *scr)
 	lv_label_set_text(charge_head, "CHARGE");
 	charge_to = label(charge_box, FS(REGULAR, 18, UI_S_FIG), WHITE);
 	charge_when = label(charge_box, FS(REGULAR, 18, UI_S_FIG), WHITE);
+	for (int i = 0; i < 3; i++) {   /* as the figures under them (stat_lab, stat_val): one table */
+		flow_n[i] = label(charge_box, FS(REGULAR, 12, UI_S_FIG), W70);
+		lv_obj_set_style_text_letter_space(flow_n[i], ri(PF(0.8)), 0);
+		flow_v[i] = label(charge_box, FS(REGULAR, 16, UI_S_FIG), WHITE);
+	}
 	stats_box = box(root);
 	for (int i = 0; i < 5; i++) {
 		stat_lab[i] = label(stats_box, FS(REGULAR, 12, UI_S_FIG), W70);
@@ -1994,10 +2031,13 @@ static void set_route(const dash_state_t *s, float x, float cy)
 static void set_ring(const dash_state_t *s)
 {
 	bool charge = s->wifi_live && s->charging && s->gear == 'P' && !isnan(s->charge_kw);
+	/* plugged in, not charging (at the limit): the wall's power, what the charger feeds in the background */
+	bool wall = !charge && s->wifi_live && s->plugged && s->gear == 'P' && !isnan(s->wall_kw);
 	/* The speed, scaled to the hole (0.5 x 0.4 of the ring) as the app's FittedBox does with its 200 sp text. */
 	char t[16];
-	bool known = charge || (s->live && !isnan(s->speed));
+	bool known = charge || wall || (s->live && !isnan(s->speed));
 	if (charge) snprintf(t, sizeof t, "%d", (int)lroundf(s->charge_kw));
+	else if (wall) snprintf(t, sizeof t, s->wall_kw < 9.95f ? "%.1f" : "%.0f", s->wall_kw);
 	else if (known) snprintf(t, sizeof t, "%d", (int)lroundf(s->speed));
 	else snprintf(t, sizeof t, "—");
 	bool sp = speedo();
@@ -2033,7 +2073,7 @@ static void set_ring(const dash_state_t *s)
 	base += dy;
 	ring_figs_geom(dy); /* size the limit sign and the motor readouts to the current ring (full or the strip) */
 	put_text(speed_l, 1, xc, base, G.D);
-	set_text(unit_l, "%s", charge ? "kW" : s->kph ? "km/h" : "mph");
+	set_text(unit_l, "%s", charge || wall ? "kW" : s->kph ? "km/h" : "mph");
 	float unit_base = top + bh + ascent(fu) + dy;
 	put_text(unit_l, 1, xc + PR(sp ? 2 : 3) / 2, unit_base, G.D);
 
@@ -2065,7 +2105,9 @@ static void set_ring(const dash_state_t *s)
 	if (s->live && !isnan(right)) set_text(front_v, "%d", (int)lroundf(s->rwd ? fabsf(right) : right));
 	else set_text(front_v, "—");
 	set_text(front_u, "%s", s->rwd ? (right < 0 ? "%\nBRAKE" : "%\nPEDAL") : "kW\nFRONT");
-	show(rear_v, !sp), show(front_v, !sp), show(rear_u, !sp), show(front_u, !sp); /* the power ring's alone */
+	bool one = plug_ring(s); /* plugged in: one ring, no motor readouts, no limit sign */
+	show(rear_v, !sp && !one), show(front_v, !sp && !one), show(rear_u, !sp && !one), show(front_u, !sp && !one); /* the power ring's alone */
+	show(limit_sign, !one);
 
 	/* The cue under the speed: charging, the cruise, or the washer fluid low. */
 	part_t p[8];
@@ -2083,6 +2125,11 @@ static void set_ring(const dash_state_t *s)
 			snprintf(a2, sizeof a2, "%s%s", !isnan(s->charge_max_kw) ? " · " : "", s->charge_why);
 			p[n] = TXT(fs15, WARN, a2), p[n++].ls = PR(1);
 		}
+		if (washer) p[n] = IMG(&ic_washer, WARN), p[n++].gap = PR(12);
+	} else if (wall) {   /* where it comes from, and what the plug gives */
+		if (isnan(s->wall_max_kw)) snprintf(a1, sizeof a1, "FROM THE WALL");
+		else snprintf(a1, sizeof a1, "FROM THE WALL · OF %d", (int)lroundf(s->wall_max_kw));
+		p[n] = TXT(fs15, W70, a1), p[n++].ls = PR(1);
 		if (washer) p[n] = IMG(&ic_washer, WARN), p[n++].gap = PR(12);
 	} else if (s->wifi_live && !isnan(s->cruise_set)) {
 		snprintf(a1, sizeof a1, "SET %d", (int)lroundf(s->cruise_set));
@@ -2182,6 +2229,9 @@ static void ring_dirty(const dash_state_t *s)
 	ring_arcs(s, now.a);
 	float R = G.r + G.aw, in = 0.5f * (G.r - G.aw), h = 0.83f * R;
 	bool both = first || CHANGED(live) || CHANGED(rwd) || memcmp(&now, &shown, 4 * sizeof(float));
+	static bool was_plug;   /* two halves to one ring or back: the tracks, the ticks, all of it */
+	if (plug_ring(s) != was_plug) was_plug = !was_plug, lv_obj_invalidate(ring);
+	else if (both && was_plug) lv_obj_invalidate(ring); /* the side boxes miss the one ring's top */
 	lv_area_t a;
 	for (int side = 0; side < 2; side++) {
 		if (both) {
@@ -2256,28 +2306,46 @@ static void set_energy(const dash_state_t *s, float cx)
 	bool known = !isnan(s->soc_pct);
 	uint32_t color = known && s->soc_pct < 20 ? ALERT : WHITE;
 	snprintf(pc, sizeof pc, known ? "%d" : "—", (int)lroundf(known ? s->soc_pct : 0));
-	part_t pp[2] = {TXT(font_px(REGULAR, ri(28 * q)), known ? color : W38, pc), TXT(font_px(REGULAR, ri(16 * q)), color, "%")};
-	run_set(dial_pct, pp, known ? 2 : 1);
+	/* the up arrow (A8) turned over, made once: the font has no arrows */
+	static lv_image_dsc_t ic_down;
+	static uint8_t *down_px;
+	if (!down_px && (down_px = malloc(ic_up_dial.data_size))) {
+		uint32_t st = ic_up_dial.header.stride, h = ic_up_dial.header.h;
+		for (uint32_t r = 0; r < h; r++) memcpy(down_px + r * st, ic_up_dial.data + (h - 1 - r) * st, st);
+		ic_down = ic_up_dial, ic_down.data = down_px;
+	}
+	part_t pp[3] = {TXT(font_px(REGULAR, ri(28 * q)), known ? color : W38, pc), TXT(font_px(REGULAR, ri(16 * q)), color, "%"),
+			IMG(&ic_down, ALERT)};
+	/* plugged in and the battery still going down (the charger short of the climate): its arrow */
+	bool down = known && s->wifi_live && s->plugged && !s->charging && !isnan(s->pack_kw) && s->pack_kw >= 0.3f;
+	if (down) pp[2].gap = q * 2;
+	run_set(dial_pct, pp, known ? (down && down_px ? 3 : 2) : 1);
 	align(dial_pct, LV_ALIGN_TOP_MID, 0, ri(34 * q + (36 * q - lv_obj_get_style_height(dial_pct, 0)) / 2));
 	show(dial_range, !isnan(s->range));
 	if (!isnan(s->range)) set_text(dial_range, "%d %s", (int)lroundf(s->range), s->kph ? "km" : "mi");
 	align(dial_range, LV_ALIGN_BOTTOM_MID, 0, ri(-(18 * q - lv_font_get_line_height(lv_obj_get_style_text_font(dial_range, 0))) / 2));
 
 	/* The charge card. */
-	bool card = charging && (s->charge_limit_pct >= 0 || s->charge_minutes >= 0);
+	/* plugged in (AC at the port), charging or not: where the power goes, the wall, the climate, the battery */
+	bool plug = s->wifi_live && s->plugged && !isnan(s->wall_kw);
+	bool card = (charging && (s->charge_limit_pct >= 0 || s->charge_minutes >= 0)) || plug;
 	float ch_h = 0;
 	show(charge_box, card);
 	if (card) {
 		const lv_font_t *fh = lv_obj_get_style_text_font(charge_head, 0), *fb = lv_obj_get_style_text_font(charge_to, 0);
 		float y = lv_font_get_line_height(fh) + PF(2), w = 0;
-		show(charge_to, s->charge_limit_pct >= 0);
-		if (s->charge_limit_pct >= 0) {
+		/* plugged in, not charging: the limit it holds at in the header (no sentence under the table) */
+		if (charging) set_text(charge_head, "CHARGE");
+		else if (s->charge_limit_pct >= 0) set_text(charge_head, "PLUGGED IN · LIMIT %d %%", s->charge_limit_pct);
+		else set_text(charge_head, "PLUGGED IN");
+		show(charge_to, charging && s->charge_limit_pct >= 0);
+		if (charging && s->charge_limit_pct >= 0) {
 			set_text(charge_to, "to %d %%", s->charge_limit_pct);
 			lv_obj_set_pos(charge_to, 0, ri(y));
 			y += lv_font_get_line_height(fb);
 		}
-		show(charge_when, s->charge_minutes >= 0);
-		if (s->charge_minutes >= 0) {
+		show(charge_when, charging && s->charge_minutes >= 0);
+		if (charging && s->charge_minutes >= 0) {
 			int m = s->charge_minutes;
 			char d[16];
 			if (m < 60) snprintf(d, sizeof d, "%d min", m);
@@ -2288,9 +2356,33 @@ static void set_energy(const dash_state_t *s, float cx)
 		}
 		lv_point_t sz;
 		for (lv_obj_t *l = charge_head; l; l = l == charge_head ? charge_to : l == charge_to ? charge_when : NULL) {
+			if (lv_obj_is_hidden(l)) continue;
 			lv_text_get_size(&sz, lv_label_get_text(l), lv_obj_get_style_text_font(l, 0),
 					 lv_obj_get_style_text_letter_space(l, 0), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
 			w = fmaxf(w, sz.x);
+		}
+		/* the flows, in the figures' columns (labels at 0, values at 104 dp) and their fonts: the card and the figures
+		 * read as one table; the battery red while it gives (it covers what the wall does not), green while it takes */
+		for (int i = 0; i < 3; i++) show(flow_n[i], plug), show(flow_v[i], plug);
+		if (plug) {
+			static const char *const nm[3] = {"WALL", "CLIMATE", "BATTERY"};
+			float pk = s->pack_kw, v[3] = {s->wall_kw, s->climate_kw, pk};
+			const lv_font_t *fl = lv_obj_get_style_text_font(flow_n[0], 0), *fv = lv_obj_get_style_text_font(flow_v[0], 0);
+			float row_h = fmaxf(lv_font_get_line_height(fl), lv_font_get_line_height(fv)), vw = 0;
+			for (int i = 0; i < 3; i++) {
+				set_text(flow_n[i], "%s", nm[i]);
+				if (isnan(v[i])) set_text(flow_v[i], "—");
+				else if (i == 2 && fabsf(pk) >= 0.05f) set_text(flow_v[i], "%s%.1f kW", pk > 0 ? "−" : "+", fabsf(pk));
+				else set_text(flow_v[i], "%.1f kW", fabsf(v[i]));
+				text_color(flow_v[i], i == 2 && !isnan(pk) && pk >= 0.05f ? ALERT : i == 2 && !isnan(pk) && pk <= -0.05f ? REGEN : WHITE);
+				lv_text_get_size(&sz, lv_label_get_text(flow_v[i]), fv, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+				vw = fmaxf(vw, sz.x);
+				float base = y + PF(4) + i * row_h + row_h / 2 + (ascent(fv) - fv->base_line) / 2.0f;
+				put_text(flow_n[i], 0, 0, base, 0);
+				put_text(flow_v[i], 0, PF(104), base, 0);
+			}
+			y += PF(4) + 3 * row_h;
+			w = fmaxf(w, PF(104) + vw);
 		}
 		lv_obj_set_size(charge_box, ri(w), ri(y));
 		ch_h = y;
@@ -2309,7 +2401,8 @@ static void set_energy(const dash_state_t *s, float cx)
 	/* the card (basic, the split; main.dart _basicRow) has them all whatever the switch says, the draws as dashes
 	 * without WiFi, the charge's lines in their place while charging */
 	bool in_card = G.phone && layout_key != 0, minor = s->minor_figures || in_card;
-	if (in_card ? !charging : s->wifi_live && s->draws) {
+	/* (not under the plugged-in card: its table has the climate, and the wall and the battery it is weighed against) */
+	if ((in_card ? !charging : s->wifi_live && s->draws) && !plug) {
 		KW_ROW("CLIMATE", s->climate_kw);
 		if (minor) {
 			KW_ROW("12 V", s->lv_kw);
@@ -2342,6 +2435,10 @@ static void set_energy(const dash_state_t *s, float cx)
 		vw = fmaxf(vw, sz.x);
 	}
 	float st_w = PF(104) + vw, st_h = rows * row_h;
+	if (plug && card) { /* the plugged-in card and the figures one width, so one left edge: one table */
+		st_w = fmaxf(st_w, lv_obj_get_style_width(charge_box, 0));
+		lv_obj_set_width(charge_box, ri(st_w));
+	}
 	lv_obj_set_size(stats_box, ri(st_w), ri(st_h));
 
 	/* The group in the column's middle, each piece 5 dp above and below (widgets.dart _SideColumn). */
@@ -2362,7 +2459,7 @@ static void set_energy(const dash_state_t *s, float cx)
 				lv_obj_set_pos(charge_box, ri(cx - lv_obj_get_style_width(charge_box, 0) / 2.0f), ri(y));
 				y += ch_h + px(12);
 			}
-		} else if (charging) {
+		} else if (charging || card) {   /* (plugged in, not charging: its card the same way) */
 			top = G.mt + (G.row_b - G.mt - (dh + (card ? ch_h + 2 * pad : 0) + st_h + 4 * pad)) / 2 + pad;
 			y = top + dh + 2 * pad;
 			if (card) {
@@ -2381,7 +2478,7 @@ static void set_energy(const dash_state_t *s, float cx)
 		return;
 	}
 	float eh = dh + pad + (card ? ch_h + 2 * pad : 0) + st_h;
-	bool g_on = (s->wifi_live && !s->charging) || bt_brakes(s); /* the g-meter's place, in P too (the last drive's peak); not charging (the app's charge column) */
+	bool g_on = (s->wifi_live && !s->charging && !s->plugged) || bt_brakes(s); /* the g-meter's place, in P too (the last drive's peak); not charging (the app's charge column) */
 	G.pair_top = G.H / 2 - fmaxf(eh, g_on ? g_height() : 0) / 2;
 	float y = G.pair_top - q; /* the arc's outer edge 1 unit into the box */
 	lv_obj_set_pos(dial, ri(cx - 52 * q), ri(y));
@@ -2458,7 +2555,7 @@ static void set_g(const dash_state_t *s, float cx)
  * it with WiFi alone (main.dart _basicRow: charging too). */
 static bool g_figures(const dash_state_t *s, bool card)
 {
-	bool on = card ? s->wifi_live : s->wifi_live && !s->charging && s->g_shown; /* in P too: the last drive's peak */
+	bool on = card ? s->wifi_live : s->wifi_live && !s->charging && !s->plugged && s->g_shown; /* in P too: the last drive's peak; not plugged in (the card's column) */
 	show(gball, on);
 	show(g_val, on);
 	show(g_peak, on);
@@ -2685,11 +2782,21 @@ static lv_obj_t *set_guard;
 static void close_tap(lv_event_t *e) { (void)e, dash_ui_show(DASH_VIEW_DASH); }
 static void panel_tap(lv_event_t *e) { if (!FRESH(panel_at, 500)) press((intptr_t)lv_event_get_user_data(e)); }
 static void open_tap(lv_event_t *e) { if (!FRESH(dash_at, 700)) dash_ui_show((intptr_t)lv_event_get_user_data(e)); }
+static uint32_t aa_pending_at;
+/* a start still running: just tapped (dash-aa takes its lock within moments), or its lock held (a start killed hard
+ * leaves it: AA_START_MS caps that) */
+static bool aa_start_running(void)
+{
+	uint32_t t = lv_tick_elaps(aa_pending_at);
+	return t < 5000 || (t < AA_START_MS && access(aa_start_lock, F_OK) == 0); /* (5 s: one core, a stop just ended) */
+}
 /* the split's Exit: end the Android Auto session (the marker would pull the view straight back otherwise) */
 static void pj_exit_tap(lv_event_t *e)
 {
 	(void)e;
 	if (pj_leaving) return; /* tapped already: the session is going */
+	if (aa_pending && aa_start_running() && access(dash_ui_aa_up, F_OK) == 0 && extra_up() != aa_pending_x)
+		return; /* a switch to the other mode is running: its stop is underway */
 	aa_pending = false, aa_stopping = true, aa_stop_at = lv_tick_get();
 	save(DASH_AA_STOP);
 	if (dash_ui_whole_frame) { /* the dash once the session has gone (dash_ui_set), whole: its last picture until then */
@@ -2701,14 +2808,6 @@ static void pj_exit_tap(lv_event_t *e)
 	dash_ui_set(&S); /* laid out at once: else one frame of the strip's ring on the dash */
 }
 /* the dash's Android Auto button (beside the car-panel icon): toggle the on-demand bring-up by its live state */
-static uint32_t aa_pending_at;
-/* a start still running: just tapped (dash-aa takes its lock within moments), or its lock held (a start killed hard
- * leaves it: AA_START_MS caps that) */
-static bool aa_start_running(void)
-{
-	uint32_t t = lv_tick_elaps(aa_pending_at);
-	return t < 5000 || (t < AA_START_MS && access(aa_start_lock, F_OK) == 0); /* (5 s: one core, a stop just ended) */
-}
 static void aa_tap(lv_event_t *e)
 {
 	(void)e;
@@ -5170,7 +5269,7 @@ void dash_state_blank(dash_state_t *s)
 	s->speed_hz = -1;
 	s->speed = s->front_kw = s->rear_kw = s->pack_kw = s->pedal_pct = s->brake_pct = s->regen_cap_kw = NAN;
 	for (int i = 0; i < 4; i++) s->brake_nm[i] = NAN;
-	s->speed_limit = s->cruise_set = s->outside_c = s->charge_kw = s->charge_max_kw = NAN;
+	s->speed_limit = s->cruise_set = s->outside_c = s->charge_kw = s->charge_max_kw = s->wall_kw = s->wall_max_kw = NAN;
 	s->follow_gap = s->charge_limit_pct = -1;
 	s->charge_minutes = s->nav_minutes = s->co2_ppm = -1;
 	s->soc_pct = s->range = s->pack_temp_c = s->precond_c = s->climate_kw = s->degradation_pct = NAN;

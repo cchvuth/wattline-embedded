@@ -80,6 +80,9 @@ typedef struct {
 	int8_t charge_limit_pct;         /* -1: unknown */
 	int16_t charge_minutes;          /* -1: unknown */
 	char charge_clock[12];           /* when it is done, "1:51 AM"; "" no clock */
+	/* AC at the port (0x264), charging or not (at the limit the charger still feeds the climate in the background) */
+	bool plugged;
+	float wall_kw, wall_max_kw;      /* from the wall; what the plug gives (V x A limit x phases); NAN unknown */
 
 	/* The battery dial and the figures under it. */
 	float soc_pct, range;            /* range in the car's unit; NAN unknown */

@@ -60,7 +60,7 @@ void car_init(car_t *c) {
   c->p.blink_off_at = c->p.line_at = NEVER;
   c->utc.at = NEVER;
   c->tp_fl = c->tp_fr = c->tp_rl = c->tp_rr = NUL;
-  c->soc_pct = c->range_mi = c->soc_usable_pct = NUL;
+  c->soc_pct = c->range_mi = c->soc_soe_pct = NUL;
   c->cell_v_max = c->cell_v_min = c->pack_kwh = c->pack_left_kwh = c->pack_buffer_kwh = c->pack_new_kwh = NUL;
   c->outside_c = c->pack_temp_c = NUL;
   c->charge_limit_pct = -1;
@@ -81,6 +81,11 @@ void car_set_steer(car_t *c, double v, int64_t now) {
   if (!isnan(v) && fabs(v) >= kSteerShowDeg) c->p.turned_at = now;
 }
 
+bool car_plugged(const car_t *c, int64_t now) { return c->charge_ac_on == 1 && now - c->p.line_at < 2000; }
+double car_wall_max_kw(const car_t *c) {
+  if (!c->p.phases || isnan(c->charge_line_v) || isnan(c->charge_limit_a)) return NUL;
+  return c->charge_line_v * c->charge_limit_a * c->p.phases / 1000;
+}
 double car_climate_kw(const car_t *c) {
   if (isnan(c->p.comp_kw) && isnan(c->p.heat_l_kw) && isnan(c->p.heat_r_kw)) return NUL;
   return or0(c->p.comp_kw) + or0(c->p.heat_l_kw) + or0(c->p.heat_r_kw);
@@ -337,10 +342,15 @@ void car_frame(car_t *c, uint16_t id, uint8_t bus, const uint8_t *d, uint8_t len
       c->charge_kw = c->charge_line_kw > 0.5 && now - c->p.line_at < 2000 ? c->charge_line_kw : v;
       break;
     case SIG_chargeLineKw:
+      if (now - c->p.line_at >= 2000) c->p.phases = 0; // back after a gap: maybe another charger, its phases unknown
       c->charge_line_kw = v, c->p.line_at = now;
       if (v > 0.5) c->charge_kw = v; else if (!isnan(c->charge_pack_kw)) c->charge_kw = c->charge_pack_kw;
       break;
-    case SIG_socUsable: c->soc_usable_pct = v; break;
+    case SIG_socSoe: c->soc_soe_pct = v; break;
+    case SIG_chargeLineV: c->charge_line_v = v; break;
+    case SIG_chargeLineA: c->charge_line_a = v; break;
+    case SIG_chargeLimitA: c->charge_limit_a = v; break;
+    case SIG_chargeAcOn: c->charge_ac_on = ri(v); break;
     case SIG_chargeMaxKw: c->charge_max_kw = v; break;
     case SIG_chargeWhy: c->charge_why = LUT(kChargeWhy, ri(v)); break;
     case SIG_chargeLimit: c->charge_limit_pct = ri(v); break;
@@ -355,6 +365,15 @@ void car_frame(car_t *c, uint16_t id, uint8_t bus, const uint8_t *d, uint8_t len
     case SIG_utcMinutes:
       utc[s - SIG_utcYear] = ri(v); utc_n++;
       break;
+    }
+  }
+  // the charger's phases, once its whole frame is read: the power over one line's (V x A), while it draws enough to
+  // tell 1 from 3 (2 A); kept while plugged in (a draw that drops, at the limit, leaves the plug as it was), gone unplugged
+  if (id == 0x264) {
+    if (c->charge_ac_on == 0) c->p.phases = 0;
+    else if (c->charge_line_a >= 2 && c->charge_line_v > 50 && c->charge_line_kw > 0.3) {
+      long ph = lround(c->charge_line_kw * 1000 / (c->charge_line_v * c->charge_line_a));
+      c->p.phases = ph < 1 ? 1 : ph > 3 ? 3 : (int)ph;
     }
   }
   if (id == 0x185) {   // the brake: the four wheels' sum, once the whole frame is read
@@ -407,7 +426,9 @@ void car_forget(car_t *c, int64_t now) {
   c->tc_mode = c->charge_why = NULL;
   c->hands_on = c->follow_gap = c->charge_minutes = -1;
   c->cruise_set = c->precond_c = c->charge_kw = c->charge_max_kw = c->regen_max_kw = NUL;
-  c->charge_pack_kw = c->charge_line_kw = c->soc_usable_pct = NUL;
+  c->charge_pack_kw = c->charge_line_kw = c->soc_soe_pct = NUL;
+  c->charge_line_v = c->charge_line_a = c->charge_limit_a = NUL;
+  c->charge_ac_on = -1, c->p.phases = 0;
   c->speed = 0;
   c->front_kw = c->rear_kw = c->pedal_pct = c->pack_kw = c->p.pack_v = c->p.front_at = c->p.rear_at = NUL;
   c->other_kw = NUL;

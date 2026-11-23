@@ -263,10 +263,10 @@ static void stats(const dash_t *d) {
   const link_t *l = &d->link;
   const car_t *c = &d->car;
   log_msg("wifi %s: %d frames/s, speed %d/s (gap %d ms), foreign %d/s; subscribes %d acks %d resubs %d sparse %d/%d; "
-          "sent ehllo %u clear %u add %u remove %u; speed %.0f gear %c soc %.0f usable %.0f; charge pack %.2f wall %.1f kW",
+          "sent ehllo %u clear %u add %u remove %u; speed %.0f gear %c soc %.0f soe %.0f; charge pack %.2f wall %.1f kW",
           link_word(l), l->frame_hz, l->speed_hz, l->speed_gap_ms, l->foreign_hz, l->subscribes, l->acks, l->resubscribes,
           l->sparse_ops, l->sparse_fixes, d->sent[0], d->sent[1], d->sent[2], d->sent[3], c->speed,
-          c->gear ? c->gear : '-', c->soc_pct, c->soc_usable_pct, c->charge_pack_kw, c->charge_line_kw);
+          c->gear ? c->gear : '-', c->soc_pct, c->soc_soe_pct, c->charge_pack_kw, c->charge_line_kw);
 }
 
 static dash_t D;

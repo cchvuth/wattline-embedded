@@ -140,6 +140,18 @@ static void charging(dash_state_t *s)
 	TEXT(s->fan[0], "LOW"), TEXT(s->fan[1], "OFF");
 }
 
+/* Plugged in at the charge limit, defrosting: the charger feeds part of it in the background, the battery the rest */
+static void plugged_at_limit(dash_state_t *s)
+{
+	charging(s);
+	s->charging = false, s->charge_kw = NAN, s->charge_max_kw = NAN, s->charge_why[0] = 0;
+	s->charge_minutes = -1, s->charge_clock[0] = 0, s->pack_heating = false;
+	s->soc_pct = 80, s->range = 250 * 1.609344f;
+	s->plugged = true, s->wall_kw = 3.2f, s->wall_max_kw = 11, s->climate_kw = 4.6f, s->pack_kw = 1.7f;
+	s->g_shown = true, s->g_peak_brake = 0.41f, s->g_peak_accel = 0.35f, s->g_peak_lat = 0.28f; /* after a drive: no g-meter */
+	s->cabin_c[0] = 24, TEXT(s->fan[0], "HIGH");
+}
+
 static void no_new_data(dash_state_t *s)
 {
 	car(s);
@@ -169,5 +181,6 @@ const scene_t scenes[] = {
 	{"cold-morning", cold_morning}, {"highway-cruise", highway_cruise}, {"city-turn", city_turn},
 	{"rear-motor-5-seats", rear_motor}, {"model-3", model_3}, {"model-y-l", model_y_l},
 	{"charging", charging}, {"no-new-data", no_new_data}, {"bluetooth-only", bluetooth_only},
+	{"plugged-at-limit", plugged_at_limit}, /* (new scenes last: port/sim/shots.c picks some by index) */
 };
 const int scene_count = sizeof scenes / sizeof scenes[0];

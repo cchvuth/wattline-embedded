@@ -378,7 +378,21 @@ static void test_held(void) {   // 'the newer stats: held, combined, over Blueto
   FR(0x264, 0, 0, 0, 0, 0, 0, 0); CHECK(C.charge_kw == 48 && C.charge_line_kw == 0);
   FR(0x264, 0, 0, 0, 0, 109, 0, 0); now += 3000;   // the wall's last frame 3 s old (unplugged, 0x264 quiet): the pack's
   FR(0x212, 0, 0x00, 0x18, 0xF0, 0x00, 0x00, 0xF8, 0x00, 0x00); CHECK(C.charge_kw == 48);
-  FR(0x33A, 0, 0xCD, 0xAC, 0xB3, 0xDB, 0xFD, 0xFF, 0xE5, 0x68); CHECK(C.soc_pct == 59 && C.soc_usable_pct == 59);
+  FR(0x33A, 0, 0xCD, 0xAC, 0xB3, 0xDB, 0xFD, 0xFF, 0xE5, 0x68); CHECK(C.soc_pct == 59 && C.soc_soe_pct == 59);
+  // the car's screen shows uSoe: 2026-11-23 14:35, soe 62 / uSoe 61, the car 61
+  FR(0x33A, 0, 0xC4, 0xF8, 0xE3, 0xEB, 0xFD, 0xFF, 0xE5, 0x68); CHECK(C.soc_pct == 61 && C.soc_soe_pct == 62);
+  // plugged in (the 2026-11-23 capture: 235 V, 16 A a line, 11.2 kW, 16 A allowed): 3 phases, the plug's 11.28 kW;
+  // held at the limit (a small draw) it stays plugged in and keeps them; unplugged, or 0x264 quiet: not
+  FR(0x264, 0, 0xD0, 0x1B, 0xA8, 0x70, 0xA0, 0x00);
+  CHECK(car_plugged(&C, now) && C.p.phases == 3 && car_wall_max_kw(&C) > 11.27 && car_wall_max_kw(&C) < 11.29);
+  FR(0x264, 0, 0xD0, 0x5B, 0x8B, 0x20, 0xA0, 0x00);   // at the limit: 3.2 kW, 4.5 A a line: still 3
+  CHECK(car_plugged(&C, now) && C.p.phases == 3 && C.charge_line_kw > 3.19 && C.charge_line_kw < 3.21);
+  FR(0x264, 0, 0xD0, 0x9B, 0x82, 0x07, 0xA0, 0x00);   // 0.7 kW, 1 A: too little to tell, the 3 kept
+  CHECK(car_plugged(&C, now) && C.p.phases == 3 && C.charge_line_a > 0.99 && C.charge_line_a < 1.01);
+  now += 2500; CHECK(!car_plugged(&C, now));
+  FR(0x264, 0, 0xD0, 0x9B, 0x82, 0x07, 0xA0, 0x00);   // back after the gap at 1 A: maybe another charger, phases unknown
+  CHECK(car_plugged(&C, now) && C.p.phases == 0 && isnan(car_wall_max_kw(&C)));
+  FR(0x264, 0, 0, 0, 0, 0, 0xA0, 0x00); CHECK(!car_plugged(&C, now) && C.p.phases == 0 && isnan(car_wall_max_kw(&C)));
   FR(0x347, 0, 0x20, 0x00, 0xB4, 0x00, 0x00, 0x00, 0x50, 0x13); CHECK(C.pack_heating && C.precond_c == 45);
   FR(0x399, 0, 0, 0, 0, 0, 0, 0x10, 0, 0); CHECK(C.hands_on == 4);
   FR(0x399, 0, 0, 0, 0, 0, 0, 0x3C, 0, 0); CHECK(C.hands_on == -1);
@@ -396,7 +410,7 @@ static void test_tables(void) {
   bool all = true;
   for (int i = 0; i < kSignalCount; i++) all &= sub_index(kSignals[i].id) >= 0;
   CHECK(all);
-  CHECK(kPhoneSignalCount == 111 && kPhoneSubscribeCount == 43);
+  CHECK(kPhoneSignalCount == 116 && kPhoneSubscribeCount == 44);   // (+ the charger, 0x264: five signals)
   // 'every subscribed id has one place: the stream or a polled group'
   bool one = true;
   for (int i = 0; i < kSubscribeCount; i++) one &= always_on(kSubscribeIds[i]) != (group_of(kSubscribeIds[i]) >= 0);

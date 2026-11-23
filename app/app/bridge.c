@@ -152,6 +152,10 @@ void bridge_fill(dash_state_t *s, const car_t *c, const link_t *l, const bt_view
   // Charging: the kW in the ring, the cue, the charge card (WiFi; the UI gates on wifi_live).
   s->charging = c->charging;
   s->charge_kw = c->charge_kw;
+  // plugged in (WiFi's 0x264), charging or held at the limit: the wall's power, and what the plug gives
+  s->plugged = wl && car_plugged(c, now);
+  s->wall_kw = s->plugged ? c->charge_line_kw : NAN;
+  s->wall_max_kw = s->plugged ? car_wall_max_kw(c) : NAN;
   s->charge_max_kw = c->charge_max_kw;
   text(s->charge_why, sizeof s->charge_why, c->charge_why);
   s->charge_limit_pct = (int8_t)c->charge_limit_pct;
