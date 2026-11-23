@@ -34,8 +34,10 @@ BLE_SO_SRC := port/linux/ble_bluez.c core/cmdr.c core/sec1.c core/pb.c core/cmdr
 APP_SRC := $(patsubst port/linux/ble_bluez.c,port/linux/ble_dl.c,$(APP_SRC))
 endif
 
-build/signals_gen.h: tools/gen_signals.py tools/extra_signals.json $(wildcard ../wattline/lib/signals.dart ../wattline/lib/panda.dart)
-	python3 -I tools/gen_signals.py ../wattline build
+# the Flutter app (cchvuth/wattline), its signal table: inside the checkout (CI: wattline/) or beside it
+WATTLINE ?= $(firstword $(wildcard ../wattline ../../wattline) ../wattline)
+build/signals_gen.h: tools/gen_signals.py tools/extra_signals.json $(wildcard $(WATTLINE)/lib/signals.dart $(WATTLINE)/lib/panda.dart)
+	python3 -I tools/gen_signals.py $(WATTLINE) build
 
 # --- host (Mac): LVGL and UI objects shared with ui.mk (same flags, same $(BUILD)/host/), the app's with sanitizers
 HOST_CC ?= cc

@@ -1,8 +1,10 @@
 CC ?= cc
+# the Flutter app (cchvuth/wattline), its signal table: inside the checkout (CI: wattline/) or beside it
+WATTLINE ?= $(firstword $(wildcard ../wattline ../../wattline) ../wattline)
 HOSTFLAGS = -std=gnu11 -Wall -Wextra -fsanitize=address,undefined
 
 test:
-	python3 -I tools/gen_signals.py ../wattline build
+	python3 -I tools/gen_signals.py $(WATTLINE) build
 	$(CC) $(HOSTFLAGS) -Ibuild -o build/test_decode build/test_decode.c -lm && build/test_decode
 	$(CC) $(HOSTFLAGS) -o build/test_panda test/test_panda.c core/panda.c && build/test_panda
 	$(CC) $(HOSTFLAGS) -Ibuild -o build/test_derive test/test_derive.c core/derive.c core/sched.c core/panda.c -lm && build/test_derive

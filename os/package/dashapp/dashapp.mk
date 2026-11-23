@@ -1,7 +1,7 @@
 ################################################################################
 #
 # dashapp: the dash program, built from the app checkout (app/, mounted at /native) with its app.mk.
-# build/signals_gen.h is generated on the Mac (make -f app.mk build/signals_gen.h, needs ../wattline): it comes
+# build/signals_gen.h is generated on the Mac (make -f app.mk build/signals_gen.h, needs the Flutter app beside the checkout, app.mk's WATTLINE): it comes
 # along and is never remade here; every other build output of the checkout stays behind.
 #
 ################################################################################

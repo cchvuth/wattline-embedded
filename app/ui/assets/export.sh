@@ -6,7 +6,8 @@
 # (device/*.mk), e.g. the F133 screen's PX=1.875 SIZES=ui/assets/sizes-f133.json GEN=ui/gen/f133 (aa_icon.py alike).
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-APP=${APP:-$(cd "$HERE/../../.." && pwd)/wattline}   # the Flutter app beside this checkout (app.mk: ../wattline)
+R=$(cd "$HERE/../../.." && pwd); [ -d "$R/wattline" ] || R=$(dirname "$R")   # the Flutter app inside the checkout (CI) or beside it
+APP=${APP:-$R/wattline}   # (app.mk: WATTLINE)
 SIZES=$(cd "$(dirname "${SIZES:-$HERE/sizes.json}")" && pwd)/$(basename "${SIZES:-$HERE/sizes.json}")   # read from $TMP
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 rsync -a --exclude build --exclude .git --exclude android/.gradle --exclude ios/Pods --exclude t113 "$APP"/ "$TMP"/
