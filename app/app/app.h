@@ -23,6 +23,7 @@ typedef struct {
   int set_clock;                // set the system clock from CAN 0x318, once per link
   char backlight[128];          // sysfs dir with brightness and max_brightness; "" none
   int bright_day, bright_night, bright_idle, bright_min, bright_max, away_min;   // % (away_min 0: never off)
+  int bright_no_car;   // %: following the car before its data comes (a slow WiFi join), readable in daylight
   double bright_floor;          // 0 %'s share of the full duty, %: the lowest that still shows a picture (0.05)
   int bright_follow_car;        // follow the car's own screen brightness when it is known (1)
   double bright_follow_scale, bright_follow_offset;   // backlight % = car % * scale + offset, then min..max

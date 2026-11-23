@@ -23,12 +23,13 @@ int main(void) {
   CHECK(cf.bright_follow_car == 1 && cf.bright_follow_scale == 1.0 && cf.bright_follow_offset == 0);
   car_init(&C);
   bright_init(&B, &cf, now);
-  CHECK(step(0) == 0 && B.src == BRIGHT_NO_CAR);  // no car data, following the car: the lowest, at once (no ramp)
+  CHECK(cf.bright_no_car == 20);
+  CHECK(step(0) == cf.bright_no_car && B.src == BRIGHT_NO_CAR);  // no car data, following the car: 20 %, at once (no ramp)
 
   C.wifi_live = true;                             // frames, but no 0x273 yet: where it is for a moment (the car's own
   lamps(2);                                       // level comes within its 500 ms), then the lamps' rule, day
-  CHECK(step(0) == 0 && step(1400) == 0 && B.src == BRIGHT_NO_CAR);
-  CHECK(step(100) == 0);                          // a change starts from where it is...
+  CHECK(step(0) == cf.bright_no_car && step(1400) == cf.bright_no_car && B.src == BRIGHT_NO_CAR);
+  CHECK(step(100) == cf.bright_no_car);                      // a change starts from where it is...
   int mid = step(150);
   CHECK(mid > 40 && mid < 70);                    // ...eases through the middle...
   CHECK(step(150) == 100);                        // ...and lands at 300 ms
@@ -85,7 +86,7 @@ int main(void) {
   C.wifi_live = false, car_from_bt(&C, NULL, now);
   CHECK(step(2000) == 30 && B.src == BRIGHT_LAMPS);
   step(cf.bright_stale_ms);
-  CHECK(B.src == BRIGHT_NO_CAR);                  // a loss that lasts: the lowest
+  CHECK(B.src == BRIGHT_NO_CAR);                  // a loss that lasts: the no-car level
   C.wifi_live = true;
   lamps(4);
   step(0), step(300);
@@ -108,9 +109,9 @@ int main(void) {
   cf.bright_follow_car = 1;
   bright_init(&B, &cf, now);
 
-  C.wifi_live = false;                            // the link gone: the lowest
+  C.wifi_live = false;                            // the link gone: the no-car level
   step(0);
-  CHECK(step(300) == 0 && B.src == BRIGHT_NO_CAR);
+  CHECK(step(300) == cf.bright_no_car && B.src == BRIGHT_NO_CAR);
   cf.bright_follow_car = 0;                       // not following: the idle level
   bright_init(&B, &cf, now);
   CHECK(step(0) == cf.bright_idle && B.src == BRIGHT_IDLE);
@@ -118,18 +119,18 @@ int main(void) {
   bright_init(&B, &cf, now);
   step(0);
 
-  // Following the car with no car data: 0 %, the lowest lit level, touched or not; a level set by hand, or following
+  // Following the car with no car data: bright_no_car, touched or not; a level set by hand, or following
   // switched off in dash.conf, stays as it was (above).
   now += 300;
-  CHECK(bright_step(&B, &cf, &C, now, 0) == 0 && B.src == BRIGHT_NO_CAR);
-  CHECK(bright_step(&B, &cf, &C, now, 600000) == 0 && B.src == BRIGHT_NO_CAR);
+  CHECK(bright_step(&B, &cf, &C, now, 0) == cf.bright_no_car && B.src == BRIGHT_NO_CAR);
+  CHECK(bright_step(&B, &cf, &C, now, 600000) == cf.bright_no_car && B.src == BRIGHT_NO_CAR);
   C.wifi_live = true, brightness(160);            // car data back: its level
   step(0);
   CHECK(step(300) == 80 && B.src == BRIGHT_CAR);
-  C.wifi_live = false, car_from_bt(&C, NULL, now); // and gone again: held for the settle, then the lowest
+  C.wifi_live = false, car_from_bt(&C, NULL, now); // and gone again: held for the settle, then the no-car level
   CHECK(step(1000) == 80);
   step(cf.bright_stale_ms + cf.bt_settle_ms + 3000);
-  CHECK(step(300) == 0 && B.src == BRIGHT_NO_CAR);
+  CHECK(step(300) == cf.bright_no_car && B.src == BRIGHT_NO_CAR);
 
   // Away (dark), then car data without its brightness yet: lit at once, at the lowest (not dark for that moment)
   cf.away_min = 1;
@@ -141,7 +142,7 @@ int main(void) {
   CHECK(bright_step(&B, &cf, &C, now, 61300) == 0 && B.src == BRIGHT_AWAY);
   C.wifi_live = true, lamps(2);
   now += 33;
-  CHECK(bright_step(&B, &cf, &C, now, 61333) == 0 && B.src == BRIGHT_NO_CAR);
+  CHECK(bright_step(&B, &cf, &C, now, 61333) == 0 && B.src == BRIGHT_NO_CAR);   // the lowest: the car's level is near
   cf.away_min = 0;
   C.wifi_live = false, car_from_bt(&C, NULL, now);
   bright_init(&B, &cf, now);

@@ -48,9 +48,10 @@ set_clock = 1             # set the system clock from 0x318 once per link (logs 
 backlight = /sys/class/backlight/backlight   # holds brightness and max_brightness; empty: leave it alone
 bright_day = 100
 bright_night = 30
-bright_idle = 10          # no car data, where nothing sets the level: following the car's screen (below) no car data
-                          # is 0 %, the lowest, as the car's own screen then; not following, the level is the
-                          # settings' slider's, with or without car data
+bright_idle = 10          # no car data, where nothing sets the level: following the car's screen (below), see
+                          # bright_no_car; not following, the level is the settings' slider's, with or without car data
+bright_no_car = 20        # following the car's screen before its data comes (a slow WiFi join, a start): readable in
+                          # daylight, eased to the car's level once it comes
 bright_min = 0            # 0 % is not off: the lowest level that still shows a picture (bright_floor)
 bright_floor = 0.05       # that level, in % of the backlight's full duty: one step of its 2000 (below 10 % the
                           # steps grow with the square from it)

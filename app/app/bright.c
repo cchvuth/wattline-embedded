@@ -1,6 +1,6 @@
 // The backlight's level: the car's own screen brightness while it is known (0x273, or the Commander's field 24),
-// scaled into bright_min..bright_max; else day or night from the car's lamps; without car data the lowest (0 %) while
-// following the car, as the car's own screen is then, else bright_idle; off when away. 0 % is not off: it is the
+// scaled into bright_min..bright_max; else day or night from the car's lamps; without car data bright_no_car (20 %) while
+// following the car (a slow WiFi join: readable in daylight, not glaring at night), else bright_idle; off when away. 0 % is not off: it is the
 // lowest level at which the panel still shows its picture (bright_floor, bright_raw): one step of the backlights' 2000
 // (both screens'). The F133's is lit, and its picture read, down to that last step while it is on (its driver keeps a
 // minimum of its own), and dark only off. Every change eases (smoothstep over bright_ease_ms) so the panel never steps visibly.
@@ -9,7 +9,7 @@
 #include <string.h>
 
 static const char *const kSrc[] = {"follows the car's screen", "day/night from the lamps", "idle: no car data", "away: off", "set by hand",
-                                   "no car data: the lowest, as the car's screen"};
+                                   "following the car: no car data yet (bright_no_car)"};
 
 enum { JUST_LIVE_MS = 1500 };   // car data this new: its own brightness is waited for before the lamps' rule
 
@@ -61,15 +61,16 @@ int bright_step(bright_t *b, const conf_t *cf, const car_t *c, int64_t now, int6
   if ((live || held) && b->follow && !isnan(car)) t = car * cf->bright_follow_scale + cf->bright_follow_offset + b->offset, src = BRIGHT_CAR;
   // Car data just came, the car's own level not yet in it (0x273 comes every 500 ms): where it is for that moment,
   // not up to the lamps' day level and down again (a flash in a dark cabin at every start and reconnect)
-  // (a dash started on live data has no level yet: the lowest for that moment)
+  // (a dash started on live data, or coming back from away, has no level yet: the lowest for that moment)
   else if (b->follow && live && now - b->live_since < JUST_LIVE_MS) {
     // (nor the away rule's dark: car data ends it at once, at the lowest)
     if (b->src >= 0 && b->src != BRIGHT_AWAY) t = b->target, src = b->src;
-    else t = 0, src = BRIGHT_NO_CAR;
+    else t = 0, src = BRIGHT_NO_CAR;   // the lowest, not bright_no_car: the car's level is < 500 ms away (up to 20 % and
+                                     // down again would flash a dark cabin, coming back from away)
   }
   else if (b->manual >= 0) t = b->manual, src = BRIGHT_MANUAL;   // a level set by hand: held with or without car data
   else if (live || held) t = b->night ? cf->bright_night : cf->bright_day, src = BRIGHT_LAMPS;
-  else if (b->follow) t = 0, src = BRIGHT_NO_CAR;   // following the car, no car data: the lowest, as its own screen then
+  else if (b->follow) t = cf->bright_no_car, src = BRIGHT_NO_CAR;   // following the car, no car data yet
   else t = cf->bright_idle, src = BRIGHT_IDLE;
   t = t < cf->bright_min ? cf->bright_min : t > cf->bright_max ? cf->bright_max : t;
   int64_t away = (int64_t)cf->away_min * 60000;

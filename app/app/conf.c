@@ -22,6 +22,7 @@ void conf_defaults(conf_t *c) {
   c->set_clock = 1;
   snprintf(c->backlight, sizeof c->backlight, "/sys/class/backlight/backlight");
   c->bright_day = 100, c->bright_night = 30, c->bright_idle = 10, c->bright_min = 0, c->bright_max = 100;
+  c->bright_no_car = 20;
   c->bright_floor = 0.05;
   c->bright_follow_car = 1, c->bright_follow_scale = 1.0, c->bright_follow_offset = 0;
   c->bright_ease_ms = 300, c->bright_stale_ms = 5000;
@@ -58,7 +59,7 @@ static const key_t_ kKeys[] = {
   K_I("sparse", sparse), {"car", KCAR, offsetof(conf_t, car), 1}, K_S("tz", tz), K_I("hour12", hour12),
   K_I("minor_figures", minor_figures), K_I("set_clock", set_clock),
   K_S("backlight", backlight), K_I("bright_day", bright_day), K_I("bright_night", bright_night),
-  K_I("bright_idle", bright_idle), K_I("bright_min", bright_min), K_I("bright_max", bright_max),
+  K_I("bright_idle", bright_idle), K_I("bright_no_car", bright_no_car), K_I("bright_min", bright_min), K_I("bright_max", bright_max),
   K_D("bright_floor", bright_floor),
   K_I("bright_follow_car", bright_follow_car), K_D("bright_follow_scale", bright_follow_scale),
   K_D("bright_follow_offset", bright_follow_offset), K_I("bright_ease_ms", bright_ease_ms),
