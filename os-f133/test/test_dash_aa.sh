@@ -104,13 +104,13 @@ EOF
 chmod +x /stub/* /etc/init.d/S45wifi-auto
 
 hooks() {   # the start hook gets the passphrase in its environment, kept aside; the stop hook HANG=1: ignores TERM
-	cat > /data/hooks/aa-start <<EOF
+	cat > /data/hooks/extra-start <<EOF
 #!/bin/sh
-echo "hook aa-start IFACE=\$IFACE SSID=\$SSID IP=\$IP" >> $T/calls; printf %s "\$PSK" > $T/cap/hook-psk
+echo "hook extra-start IFACE=\$IFACE SSID=\$SSID IP=\$IP" >> $T/calls; printf %s "\$PSK" > $T/cap/hook-psk
 EOF
-	cat > /data/hooks/aa-stop <<EOF
+	cat > /data/hooks/extra-stop <<EOF
 #!/bin/sh
-echo "hook aa-stop IP=\$IP PSK=\${PSK:-}" >> $T/calls; echo \$\$ > $T/cap/hook.pid
+echo "hook extra-stop IP=\$IP PSK=\${PSK:-}" >> $T/calls; echo \$\$ > $T/cap/hook.pid
 [ -n "${HANG:-}" ] && { trap '' TERM; while :; do /bb/sleep 1; done; }
 exit 0
 EOF
@@ -137,7 +137,8 @@ secret() {   # the passphrase: 20 hex digits; on aa mcu's stdin and in the hook'
 	echo "$P" | grep -qxE '[0-9a-f]{20}' && [ "$(cat $T/cap/ap.mode)" = 600 ] && ok "passphrase: 20 hex digits, its file 600" ||
 		no "passphrase '$P', mode $(cat $T/cap/ap.mode)"
 	[ "$(cat $T/cap/mcu-stdin 2>/dev/null)" = "$P" ] && ok "aa mcu got the passphrase on its stdin" || no "aa mcu's stdin"
-	[ "$(cat $T/cap/hook-psk 2>/dev/null)" = "$P" ] && ok "the aa-start hook got it in its environment" || no "hook's PSK"
+	! has "hook extra-start IFACE=$(cat /run/aa-ap.iface) SSID=Wattline IP=192.168.53.1" && ok "Android Auto's start: no hook" ||
+		no "a hook in Android Auto's start"
 	for f in /proc/[0-9]*/cmdline; do tr '\0' ' ' < $f; echo; done > $T/cmdlines 2>/dev/null
 	! grep -qF "$P" $T/cmdlines $T/calls $T/out && [ "$(grep -rlF "$P" /run /data /tmp/*.log 2>/dev/null)" = /run/aa-ap.conf ] &&
 		ok "the passphrase in no command line or log, in /run, /data and the logs only the AP's config" ||
@@ -152,14 +153,13 @@ has 'wpa_cli -i wlan0 disconnect' && has 'iw reg set DE' && has 'iw dev wlan0 in
 	grep -q '^wpa_supplicant -B -i ap0 -D nl80211 -c /run/aa-ap.conf -P /run/aa-ap.pid ' $T/calls &&
 	kill -0 $STA && ! grep -q 'wpa_supplicant sta stopped' $T/calls &&
 	ok "the AP on ap0, the station kept (its link dropped), the country set" || no "ap0"
-for l in ctrl_interface=/run/aa-ap ap_isolate=1 '	mode=2' '	ssid=576174746c696e654141' '	frequency=5180' \
+for l in ctrl_interface=/run/aa-ap ap_isolate=1 '	mode=2' '	ssid=576174746c696e65' '	frequency=5180' \
 	'	key_mgmt=WPA-PSK' '	proto=RSN' '	pairwise=CCMP'; do grep -qxF "$l" $T/cap/ap.conf || no "AP config: $l"; done
 has 'ip addr add 192.168.53.1/24 dev ap0' && grep -qx 'interface ap0' /run/aa-udhcpd.conf &&
 	has 'udhcpd -f -a 100 /run/aa-udhcpd.conf' && [ "$(cat /run/aa-ap.iface)" = ap0 ] &&
 	ok "the AP's address and DHCP on ap0" || no "address/DHCP"
-before 'hook aa-start IFACE=ap0 SSID=WattlineAA IP=192.168.53.1' 'aa serve' && before \
-	'hook aa-start IFACE=ap0 SSID=WattlineAA IP=192.168.53.1' 'aa mcu 192.168.53.1 WattlineAA - 02:aa:bb:cc:dd:01' &&
-	ok "the hook, then aa serve and aa mcu (the passphrase as -)" || no "hook/aa serve/aa mcu"
+has 'aa serve' && has 'aa mcu 192.168.53.1 Wattline - 02:aa:bb:cc:dd:01' && [ "$(cat /data/aa-on)" = aa ] &&
+	! [ -e /run/dash-aa.extra ] && ok "aa serve and aa mcu (the passphrase as -); the mode kept: aa" || no "aa serve/aa mcu"
 has 'mcud ctl 121: AT#CA' && has 'mcud ctl 1: AT#KA' && ok "the pairing window: AT#CA, the request accepted (AT#KA)" ||
 	no "pairing window"
 secret
@@ -176,7 +176,7 @@ echo "-- its stop"
 run stop && down && kill -0 $STA && ! kill -0 "$W" 2>/dev/null && ok "stop: down, the window ended, the station kept" ||
 	no "stop"
 before 'aa serve stopped' "wpa_cli -p /run/aa-ap -i ap0 all_sta" && has 'spike-vdec stopped' &&
-	before 'hook aa-stop IP=192.168.53.1 PSK=' "wpa_cli -p /run/aa-ap -i ap0 all_sta" &&
+	before 'hook extra-stop IP=192.168.53.1 PSK=' "wpa_cli -p /run/aa-ap -i ap0 all_sta" &&
 	ok "aa, the decoder and the hook before the AP" || no "stop's start"
 before "wpa_cli -p /run/aa-ap -i ap0 deauthenticate $STA1" "wpa_cli -p /run/aa-ap -i ap0 deauthenticate $STA2" &&
 	before "wpa_cli -p /run/aa-ap -i ap0 deauthenticate $STA2" 'usleep 2000000' &&
@@ -192,13 +192,13 @@ fresh; : > $T/noap0; : > $T/nosta
 run restore && up && ok "restore: up" || no "restore ($?)"
 before 'wpa_supplicant sta stopped' 'wpa_supplicant -B -i wlan0 -D nl80211 -c /run/aa-ap.conf -P /run/aa-ap.pid -f /tmp/aa-ap.log' &&
 	has 'ip addr add 192.168.53.1/24 dev wlan0' && [ "$(cat /run/aa-ap.iface)" = wlan0 ] &&
-	has 'aa mcu 192.168.53.1 WattlineAA - 02:00:00:00:00:01' && ok "the station stopped, the AP on wlan0" || no "wlan0"
+	has 'aa mcu 192.168.53.1 Wattline - 02:00:00:00:00:01' && ok "the station stopped, the AP on wlan0" || no "wlan0"
 ! grep -q '^mcud' $T/calls && ! [ -e /run/aa-pair.pid ] && ok "no pairing window" || no "a window on restore"
 secret
 echo Home > /run/wifi-auto.pending
-rm /data/hooks/aa-stop; HANG=1 hooks
+rm /data/hooks/extra-stop; HANG=1 hooks
 run stop && down && ! [ -e /run/wifi-auto.pending ] && ok "stop: down" || no "stop"
-p=$(cat $T/cap/hook.pid); ! kill -0 $p 2>/dev/null && has 'aa serve stopped' && ok "a hanging aa-stop hook: killed" ||
+p=$(cat $T/cap/hook.pid); ! kill -0 $p 2>/dev/null && has 'aa serve stopped' && ok "a hanging extra-stop hook: killed" ||
 	no "the hook's limit"
 before 'ip addr del 192.168.53.1/24 dev wlan0' 'S45wifi-auto start Home' && ! grep -q 'usleep 2000000' $T/calls &&
 	! has 'wpa_cli -i wlan0 reconnect' && ok "no phone, no wait; the save made during AA applied, after the marks" ||
@@ -232,32 +232,52 @@ printf 'Home\nsecret123\n' | WIFI_CONF=/tmp/wc.conf WIFI_CARD_CONF=/nonexistent 
 	ok "no wpa_supplicant ended or started, the join left for AA's stop" || no "wifi-connect under AA: $(cat $T/calls | tr '\n' '|')"
 rm -f /run/dash-aa-radio
 
-echo "-- a passphrase kept on the unit is the AP's; one that is not 8 to 63 letters and digits is passed over"
+echo "-- extra: the kept passphrase on its own network, its hook, no Android Auto; one not 8 to 63 letters and digits passed over"
 fresh; mkdir -p /data/wattline; printf '0123456789abcde\n' > /data/wattline/ap-psk
-run start && up && [ "$(psk)" = 0123456789abcde ] && [ "$(cat $T/cap/mcu-stdin 2>/dev/null)" = 0123456789abcde ] &&
-	ok "the kept passphrase, to the AP and to aa mcu" || no "the kept passphrase: '$(psk)'"
+run start && up && psk | grep -qxE '[0-9a-f]{20}' && ok "Android Auto's start: a fresh passphrase, the kept one not used" ||
+	no "Android Auto with the kept passphrase: '$(psk)'"
+W=$(cat /run/aa-pair.pid)
+run extra && up && [ "$(psk)" = 0123456789abcde ] && [ "$(cat $T/cap/hook-psk 2>/dev/null)" = 0123456789abcde ] &&
+	grep -qxF '	ssid=576174746c696e654141' $T/cap/ap.conf && has 'hook extra-start IFACE=ap0 SSID=WattlineAA IP=192.168.53.1' &&
+	[ "$(cat /data/aa-on)" = extra ] && [ -e /run/dash-aa.extra ] &&
+	ok "extra while Android Auto is up: in its place, the kept passphrase on WattlineAA, to its hook" || no "extra: '$(psk)'"
+[ "$(grep -c '^aa mcu 192' $T/calls)" = 1 ] && [ "$(grep -c '^aa serve$' $T/calls)" = 1 ] && has 'aa serve stopped' &&
+	before 'aa serve stopped' 'hook extra-start IFACE=ap0 SSID=WattlineAA IP=192.168.53.1' && ! kill -0 "$W" 2>/dev/null &&
+	ok "Android Auto down first (its window too), and not started again" || no "the switch to extra"
+run extra; [ "$(grep -c '^hook extra-start' $T/calls)" = 1 ] && ok "a second extra while up: nothing" || no "second extra"
+: > $T/ap0dead; : > $T/noap0; HANG=; mv /stub/wpa_supplicant /stub/wpa_supplicant.ok
+printf '#!/bin/sh\ncase "$*" in *aa-ap*) exit 1 ;; esac\nexec /stub/wpa_supplicant.ok "$@"\n' > /stub/wpa_supplicant; chmod +x /stub/wpa_supplicant
+run start; ! [ -e /data/aa-on ] && ! [ -e /run/dash-aa ] && ! [ -e /run/dash-aa.extra ] &&
+	ok "a switch whose AP fails: nothing up, nothing to restore" || no "failed switch: aa-on '$(cat /data/aa-on 2>/dev/null)'"
+mv -f /stub/wpa_supplicant.ok /stub/wpa_supplicant; rm -f $T/ap0dead $T/noap0
+run extra && up && ok "extra again" || no "extra again"
+run stop && down && ! [ -e /run/dash-aa.extra ] && ok "stop" || no "stop"
+echo extra > /data/aa-on; run restore && up && [ "$(grep -c '^hook extra-start' $T/calls)" = 3 ] && [ -e /run/dash-aa.extra ] &&
+	ok "restore after extra: extra" || no "restore extra"
+run start && up && ! [ -e /run/dash-aa.extra ] && [ "$(cat /data/aa-on)" = aa ] && psk | grep -qxE '[0-9a-f]{20}' &&
+	[ "$(grep -c '^aa mcu 192' $T/calls)" = 2 ] && ok "Android Auto while extra is up: in its place" || no "the switch to AA"
+run stop && down && ok "stop" || no "stop"
+rm /data/hooks/extra-start; echo extra > /data/aa-on
+run restore && up && ! [ -e /run/dash-aa.extra ] && [ "$(grep -c '^aa mcu 192' $T/calls)" = 3 ] &&
+	ok "restore after extra, its hook gone: Android Auto" || no "restore without the hook"
 run stop && down && ok "stop" || no "stop"
 fresh; mkdir -p /data/wattline; printf 'a"b c\\d\n' > /data/wattline/ap-psk
-run start && up && psk | grep -qxE '[0-9a-f]{20}' && ok "other characters: a fresh one" || no "a kept one of other characters: '$(psk)'"
+run extra && up && psk | grep -qxE '[0-9a-f]{20}' && ok "other characters: a fresh one" || no "a kept one of other characters: '$(psk)'"
 run stop && down && ok "stop" || no "stop"
 fresh; mkdir -p /data/wattline; printf 'short\n' > /data/wattline/ap-psk
-run start && up && psk | grep -qxE '[0-9a-f]{20}' && ok "too short: a fresh one" || no "a short kept one: '$(psk)'"
+run extra && up && psk | grep -qxE '[0-9a-f]{20}' && ok "too short: a fresh one" || no "a short kept one: '$(psk)'"
 run stop && down && ok "stop" || no "stop"
 nocb
 
 echo "-- a stop in a start's last moments (the split's Exit): all of it down, and not on at the next start"
-# the start held just before it writes /data/aa-on; the stop's first sync made slow, so the start goes on inside it
-cat > /stub/touch <<EOT
-#!/bin/sh
-[ "\$1" = /data/aa-on ] && [ -e $T/hold ] && { : > $T/touchwait; while ! [ -e $T/go ]; do /bb/usleep 50000; done; }
-exec /bb/touch "\$@"
-EOT
+# the start held in the sync right after it writes /data/aa-on; the stop's first sync made slow, so the start goes on inside it
 cat > /stub/sync <<EOT
 #!/bin/sh
+[ -e /data/aa-on ] && [ -e $T/hold ] && { rm -f $T/hold; : > $T/touchwait; while ! [ -e $T/go ]; do /bb/usleep 50000; done; }
 [ -e $T/slow ] && { rm -f $T/slow; /bb/sleep 1.5; }
 exec /bb/sync
 EOT
-chmod +x /stub/touch /stub/sync
+chmod +x /stub/sync
 fresh; : > $T/hold; rm -f $T/go $T/touchwait
 /bb/sh "$D" start >> $T/out 2>&1 & SP=$!
 i=0; while ! [ -e $T/touchwait ] && [ $i -lt 200 ]; do /bb/usleep 50000; i=$((i + 1)); done
@@ -266,7 +286,7 @@ i=0; while ! [ -e $T/touchwait ] && [ $i -lt 200 ]; do /bb/usleep 50000; i=$((i 
 /bb/usleep 500000; : > $T/go
 wait $SP; wait $TP; /bb/usleep 300000
 down && ! [ -e /run/aa-keep ] && ok "the start's marks taken back: nothing left up, nor on at the next start" || no "a stop during a start"
-rm -f /stub/touch /stub/sync $T/hold $T/go $T/touchwait
+rm -f /stub/sync $T/hold $T/go $T/touchwait
 kill $STA 2>/dev/null   # (the station this case kept: left running, it holds a pipe this test's output goes through)
 
 [ $bad -eq 0 ] && echo "dash-aa: ok" || { echo "dash-aa: $bad failed"; exit 1; }
