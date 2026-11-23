@@ -1799,9 +1799,10 @@ static void set_cabin(const dash_state_t *s, float cx, float top)
 		bool left = i % 2 == 0;
 		float axle = p->axles[i / 2] * cab.h, bw = cab.w * p->tyre_w;
 		float bx = left ? cab.w * p->tyre_l : cab.w - cab.w * p->tyre_r - bw;
-		/* that wheel braking (WiFi's torque, NAN without it): its brake % in red instead, as the brake car's scale */
+		/* that wheel braking while moving (WiFi's torque, NAN without it): its brake % in red instead, as the brake
+		 * car's scale; at a standstill the held brake would hide the pressures */
 		int bk = isnan(s->brake_nm[i]) ? 0 : (int)lroundf(wheel_pct(s->brake_nm[i]));
-		bool braked = bk >= 1;
+		bool braked = bk >= 1 && s->speed > 0; /* (NAN speed: false) */
 		if (braked) set_text(cab.tyre[i], "%d", bk);
 		else if (isnan(s->tyre_psi[i])) set_text(cab.tyre[i], "—");
 		else if (s->psi) set_text(cab.tyre[i], "%d", (int)lroundf(s->tyre_psi[i]));
@@ -1939,8 +1940,12 @@ static void set_route(const dash_state_t *s, float x, float cy)
 			lv_obj_set_size(dest_name, ri(nw), lv_font_get_line_height(nf));
 			l1 = fmaxf(l1, lv_font_get_line_height(nf));
 		}
-		float h = 2 * pv + l1 + rh, x = (w - hs.x - (s->dest[0] ? after + nw : 0)) / 2;
-		place(dest_card, G.bar_l, G.bar_cy - h / 2, w, h);
+		/* the pill as wide as what it holds (the wider line, 20 dp each side), centred where the bar's room is */
+		float row_w = tot + (rows > 1 ? (rows - 1) * gap : 0), head_w = hs.x + (s->dest[0] ? after + nw : 0);
+		float cw = fminf(w, fmaxf(row_w, head_w) + 2 * PN(20)), cl = G.bar_l + (w - cw) / 2;
+		w = cw;
+		float h = 2 * pv + l1 + rh, x = (w - head_w) / 2;
+		place(dest_card, cl, G.bar_cy - h / 2, w, h);
 		lv_obj_set_pos(dest_head, ri(x), ri(pv + (l1 - lv_font_get_line_height(hf)) / 2));
 		if (s->dest[0]) {
 			lv_obj_set_pos(dest_pin, ri(x + hs.x + PN(10)), ri(pv + (l1 - PN(15)) / 2));
