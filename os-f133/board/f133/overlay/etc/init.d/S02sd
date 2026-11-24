@@ -33,11 +33,15 @@ start)
 	# end, the CPU at 100 % and the picture frozen for good
 	if grep -q " /data ext4 " /proc/mounts; then (
 		f=/data/swapfile
-		if [ ! -f $f ]; then
-			rm -f $f.new
-			dd if=/dev/zero of=$f.new bs=1M count=64 2>/dev/null && chmod 600 $f.new && sync && mv $f.new $f || { rm -f $f.new; exit 0; }
+		if ! grep -q "^$f " /proc/swaps && ! swapon $f 2>/dev/null && ! { mkswap $f >/dev/null 2>&1 && swapon $f 2>/dev/null; }; then
+			# none, or one swapon refuses even made again (cut short to nothing, with holes): written anew, with room
+			# for it (a card full of recordings is not filled to the brim), at the lowest priority beside the dash's start
+			rm -f $f $f.new
+			set -- $(df -k /data | tail -1)
+			[ "${4:-0}" -gt 131072 ] || exit 0
+			nice -n 19 dd if=/dev/zero of=$f.new bs=1M count=64 2>/dev/null && chmod 600 $f.new && sync && mv $f.new $f &&
+				mkswap $f >/dev/null && swapon $f || { rm -f $f.new; exit 0; }
 		fi
-		swapon $f 2>/dev/null || { mkswap $f >/dev/null && swapon $f; }
 		echo 10 > /proc/sys/vm/swappiness
 	) & fi
 	[ -n "$logs" ] || exit 0
