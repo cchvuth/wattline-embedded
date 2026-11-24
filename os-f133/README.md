@@ -10,9 +10,9 @@ Linux and the Wattline dash for the SRNUBI T313D, an 11.26" aftermarket car scre
 
 The dash is the same program as the T113 Dash's ([app/](../app), device profile `app/device/f133.mk`). It gets the
 car's data from the Commander over Wi-Fi or Bluetooth LE, and runs wireless Android Auto with your own Google-signed
-head-unit certificate (see the top README). Android Auto's Bluetooth is the MCU's: a phone paired for it is dropped
-while Android Auto is off (it would retry Android Auto for as long as it stays connected) and called back when
-Android Auto starts. Over-the-air updates come from this repository's releases (below).
+head-unit certificate (see the top README). Android Auto's Bluetooth is the MCU's, and it is on only while a session
+is on or starting: a paired phone that could reach the screen with Android Auto off would keep trying to start it
+("connecting to Android Auto" on the phone, again and again). The phone comes back when Android Auto starts. Over-the-air updates come from this repository's releases (below).
 
 The certificate goes to `/data/wattline/` as on the Dash. The image's SSH server has no SFTP, so copy the files with
 `scp -O` or `ssh root@<screen> 'cat > /data/wattline/aa.crt' < aa.crt` (and the same for `aa.key`).

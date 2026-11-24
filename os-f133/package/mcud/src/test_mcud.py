@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """mcud against a pty that plays the MCU (no device needed): the hold at start, ctl lines and AT# commands, the AA and
 data channels opened by SW/SV and closed by IA, 240-byte paced frames towards the phone, clients that stop reading
-dropped while the others are served, the release on SIGUSR1, that a phone's address never reaches the log, and that a
-phone opening the AA channel while Android Auto is off is disconnected (AT#CD), and never while it is on or starting.
+dropped while the others are served, the release on SIGUSR1, that a phone's address never reaches the log, and the
+MCU's Bluetooth: on (AT#CA) with a session on or starting, off (AT#CB) without one, a client's AT#CB always refused.
   cc -O2 -Wall -o /tmp/mcud mcud.c && python3 -I test_mcud.py /tmp/mcud
 """
 import os, pty, select, signal, socket, subprocess, sys, tempfile, time
@@ -82,50 +82,21 @@ def main(binary):
     log = open(os.path.join(d, 'log'), 'w+')
     run_d, data_d = os.path.join(d, 'run'), os.path.join(d, 'data')
     os.mkdir(run_d); os.mkdir(data_d)
-    env = dict(os.environ, MCUD_RUN=run_d, MCUD_DATA=data_d, MCUD_AA_GRACE_MS='300', MCUD_AA_KEPT_MS='600000')
-    p = subprocess.Popen([binary, path, sock], stdout=subprocess.DEVNULL, stderr=log, env=env)
-    try:
-        run(p, m, sock, log)
-    finally:
-        if p.poll() is None:
-            p.kill()
-    p = subprocess.Popen([binary, path, sock], stdout=subprocess.DEVNULL, stderr=log, env=env)
-    try:
-        aa_off(p, m, sock, run_d, data_d)
-    finally:
-        if p.poll() is None:
-            p.kill()
-    # a phone connected under an earlier mcud (its mark left in /run): this one knows it, and drops it with no session on
-    open(os.path.join(run_d, 'mcud.phone'), 'w').close()
-    p = subprocess.Popen([binary, path, sock], stdout=subprocess.DEVNULL, stderr=log, env=env)
-    try:
-        mcu = Mcu(m)
-        mcu.pump(1.2)
-        assert CD in [x for _, x in mcu.got], 'a phone connected before mcud started was not dropped'
-        p.terminate(); p.wait(3)
-        print('mcud: a phone connected before it: ok')
-    finally:
-        if p.poll() is None:
-            p.kill()
-    assert not os.path.exists(os.path.join(run_d, 'mcud.phone')), 'dropped: mcud.phone left (dash-aa would not call it back)'
-    # a phone that reopens its channel every 2.2 s (each a new opening, no IA between) is still dropped once AA has been
-    # off for the grace (3 s here): the reopening must not start the count again
-    p = subprocess.Popen([binary, path, sock], stdout=subprocess.DEVNULL, stderr=log, env=dict(env, MCUD_AA_GRACE_MS='3000'))
-    try:
-        mcu = Mcu(m)
-        for _ in range(50):
-            if os.path.exists(sock):
-                break
-            time.sleep(0.05)
-        mcu.pump(0.3); mcu.got.clear()
-        for _ in range(4):
-            mcu.send(frame(0xD4, b'SW\r\n')); mcu.pump(2.2)
-        assert [x for _, x in mcu.got].count(CD) >= 1, 'a phone reopening its channel every 2.2 s was not dropped'   # (no IA here: again 3 s on)
-        p.terminate(); p.wait(3)
-        print('mcud AA off, reopened channel: ok')
-    finally:
-        if p.poll() is None:
-            p.kill()
+    env = dict(os.environ, MCUD_RUN=run_d, MCUD_DATA=data_d, MCUD_AA_GRACE_MS='300', MCUD_AA_KEPT_MS='1500')
+    def with_mcud(test, *args):
+        p = subprocess.Popen([binary, path, sock], stdout=subprocess.DEVNULL, stderr=log, env=env)
+        try:
+            test(p, m, sock, *args)
+        finally:
+            if p.poll() is None:
+                p.kill()
+    open(os.path.join(run_d, 'dash-aa'), 'w').close()   # a session on: Bluetooth on, no AT#CB of mcud's own in run()
+    with_mcud(run, log)
+    os.unlink(os.path.join(run_d, 'dash-aa'))
+    with_mcud(bt, run_d)
+    with open(os.path.join(data_d, 'aa-on'), 'w') as f:
+        f.write('extra\n')
+    with_mcud(bt_kept)
 
 def run(p, m, sock, log):
     mcu = Mcu(m)
@@ -225,101 +196,75 @@ def run(p, m, sock, log):
     assert '0123456789ab' not in text and 'bt AD (12 bytes)' in text and 'data channel aa open' in text, text
     print('mcud: ok')
 
-CD = frame(0xD4, b'AT#CD\r\n', 0x80)
-MH = frame(0xD4, b'AT#MH\r\n', 0x80)
+CA = frame(0xD4, b'AT#CA\r\n', 0x80)
+CB = frame(0xD4, b'AT#CB\r\n', 0x80)
 
-def aa_off(p, m, sock, run_d, data_d):
-    mcu = Mcu(m)
+def ready(mcu, sock):
     for _ in range(50):
         if os.path.exists(sock):
             break
         time.sleep(0.05)
-    mcu.pump(0.3)
-    def cds(t):
+
+def bt(p, m, sock, run_d):
+    """No session at the start: Bluetooth off at once; on with a session (its marks, a client), off the grace after."""
+    mcu = Mcu(m)
+    ready(mcu, sock)
+    def sent(t):
         mcu.got.clear(); mcu.pump(t)
-        return [x for _, x in mcu.got].count(CD)
-    def channel(open_):
-        mcu.send(frame(0xD4, b'SW\r\n' if open_ else b'IA\r\n')); mcu.pump(0.05)
+        return [x for _, x in mcu.got if x in (CA, CB)]
     def touch(*names):
         for n in names:
             open(os.path.join(run_d, n), 'w').close()
     def rm(*names):
         for n in names:
             os.unlink(os.path.join(run_d, n))
-    def reset_cap():   # an AA start (an aa client) clears the cap
-        a = socket.socket(socket.AF_UNIX); a.connect(sock); a.sendall(b'aa\n'); mcu.pump(0.1); a.close(); mcu.pump(0.1)
-
-    channel(True)
-    assert cds(0.15) == 0, 'dropped before the grace'
-    assert cds(0.8) == 1, 'AA off: the phone was not disconnected once'
+    mcu.pump(0.25)   # (inside the grace: off at the start does not wait for it)
     got = [x for _, x in mcu.got]
-    assert MH in got and got.index(MH) < got.index(CD), 'auto-connect not off (AT#MH) before the drop'
-    channel(False)
-    touch('dash-aa.starting')   # (a session starting: the connected phone is wanted)
-    mcu.send(frame(0xD4, b'IB\r\n')); mcu.pump(0.2)   # a phone connected: marked for dash-aa (no call back needed)
+    assert got.count(CB) == 1 and CA not in got, 'no session at the start: Bluetooth not turned off at once'
+    assert sent(1.0) == [], 'AT#CB sent again'
+    touch('dash-aa.starting')                 # the AA button: on at once
+    assert sent(0.8) == [CA], 'a session starting: Bluetooth not on'
+    touch('dash-aa'); rm('dash-aa.starting')  # up
+    assert sent(0.8) == [], 'Bluetooth told again while the session is on'
+    rm('dash-aa')                             # stopped: off, the grace after
+    assert sent(0.15) == [], 'Bluetooth off before the grace'
+    assert sent(1.0) == [CB], 'the session stopped: Bluetooth not off'
+    touch('dash-aa', 'dash-aa.extra')         # the other mode: on as well
+    assert sent(0.8) == [CA], 'extra mode: Bluetooth not on'
+    rm('dash-aa'); touch('dash-aa.starting')  # a switch to the other mode inside the grace: stays on
+    assert sent(0.2) == [] , 'Bluetooth told during a switch'
+    touch('dash-aa'); rm('dash-aa.starting')
+    assert sent(0.8) == [], 'Bluetooth off during a switch of modes'
+    ctl = socket.socket(socket.AF_UNIX); ctl.connect(sock); ctl.sendall(b'ctl\nAT#CB\nAT#cb\n')
+    assert sent(0.5) == [], "a client's AT#CB reached the MCU"
+    ctl.close()
+    rm('dash-aa', 'dash-aa.extra')
+    assert sent(1.2) == [CB], 'extra stopped: Bluetooth not off'
+    for kind in (b'aa\n', b'sv\n'):           # a receiver (or an addition's helper) waiting for its channel: on
+        a = socket.socket(socket.AF_UNIX); a.connect(sock); a.sendall(kind)
+        assert sent(0.8) == [CA], 'a data client: Bluetooth not on'
+        a.close()
+        assert sent(1.2) == [CB], 'the data client gone: Bluetooth not off'
+    touch('dash-aa'); mcu.pump(0.8)
+    mcu.send(frame(0xD4, b'IB\r\n')); mcu.pump(0.2)   # a phone connected: marked for dash-aa (no call needed)
     assert os.path.exists(os.path.join(run_d, 'mcud.phone')), 'IB: no mcud.phone'
-    channel(False)
+    mcu.send(frame(0xD4, b'IA\r\n')); mcu.pump(0.2)
     assert not os.path.exists(os.path.join(run_d, 'mcud.phone')), 'IA: mcud.phone left'
-    rm('dash-aa.starting')
-
-    touch('dash-aa'); channel(True)   # AA on: the phone stays
-    assert cds(0.8) == 0, 'disconnected with AA on'
-    rm('dash-aa')                     # AA stopped while the channel stays open: dropped after the grace
-    assert cds(1.0) == 1, 'not disconnected after AA stopped with the channel open'
-    channel(False)
-
-    touch('dash-aa', 'dash-aa.extra'); channel(True)   # the other mode up: no Android Auto behind the channel
-    assert cds(1.0) == 1, 'extra mode counted as Android Auto'
-    channel(False); rm('dash-aa', 'dash-aa.extra')
-    reset_cap()
-
-    touch('dash-aa.starting'); channel(True)
-    assert cds(0.8) == 0, 'disconnected while AA was starting'
-    channel(False); rm('dash-aa.starting')
-    with open(os.path.join(data_d, 'aa-on'), 'w') as f:
-        f.write('aa\n')               # kept on, inside mcud's first minutes: the restore's turn
-    channel(True)
-    assert cds(0.8) == 0, 'disconnected with AA kept on, before its restore'
-    channel(False)
-    with open(os.path.join(data_d, 'aa-on'), 'w') as f:
-        f.write('extra\n')
-    channel(True)
-    assert cds(1.0) == 1, 'kept-on extra mode counted as Android Auto'
-    channel(False); os.unlink(os.path.join(data_d, 'aa-on'))
-
-    a = socket.socket(socket.AF_UNIX); a.connect(sock); a.sendall(b'aa\n'); mcu.pump(0.1)   # a receiver waiting
-    channel(True)
-    assert cds(0.8) == 0, 'disconnected with an aa client there'
-    a.close(); channel(False)
-    channel(True); channel(False)
-    assert cds(0.8) == 0, 'disconnected after the channel had closed by itself'
-
-    for i in range(3):   # the cap: three drops (the aa client above cleared it), then the phone is left alone
-        channel(True); n = cds(1.0); channel(False)
-        assert n == 1, 'drop %d not sent' % (i + 1)
-    channel(True)
-    assert cds(1.2) == 0, 'a fourth drop within 10 minutes'
-    channel(False)
-    reset_cap(); channel(True)
-    assert cds(1.0) == 1, 'an AA start did not clear the cap'
-    channel(False); reset_cap()
-
-    def phone(on):
-        mcu.send(frame(0xD4, b'IB\r\n' if on else b'IA\r\n')); mcu.pump(0.05)
-    phone(True)   # connected with no session on (the MCU dials it at every start): dropped, no AA channel needed
-    assert cds(0.15) == 0, 'a connected phone dropped before the grace'
-    assert cds(0.8) == 1, 'a phone connected with no session on was not dropped'
-    phone(False)
-    touch('dash-aa', 'dash-aa.extra'); phone(True)   # extra mode up: its addition's phone stays
-    assert cds(0.8) == 0, 'a connected phone dropped in extra mode'
-    channel(True)                                     # ... but one holding Android Auto's channel there goes
-    assert cds(1.0) == 1, 'a phone retrying Android Auto in extra mode was not dropped'
-    channel(False); rm('dash-aa', 'dash-aa.extra'); reset_cap()
-    touch('dash-aa'); phone(True)                     # Android Auto up: the phone stays
-    assert cds(0.8) == 0, 'a connected phone dropped with Android Auto on'
-    phone(False); rm('dash-aa')
+    rm('dash-aa')
     p.terminate(); p.wait(3)
-    print('mcud AA off: ok')
+    print('mcud Bluetooth on and off: ok')
+
+def bt_kept(p, m, sock):
+    """A session kept on (aa-on, either mode) at the start: Bluetooth on for the dash's restore; none came: off."""
+    mcu = Mcu(m)
+    ready(mcu, sock)
+    mcu.pump(0.6)
+    got = [x for _, x in mcu.got if x in (CA, CB)]
+    assert got == [CA], 'a session kept on at the start: Bluetooth not on (or turned off)'
+    mcu.got.clear(); mcu.pump(2.2)   # the kept window (1.5 s here) and the grace over, no session started
+    assert [x for _, x in mcu.got if x in (CA, CB)] == [CB], 'the restore never came: Bluetooth not off after its window'
+    p.terminate(); p.wait(3)
+    print('mcud Bluetooth, a session kept on: ok')
 
 if __name__ == '__main__':
     main(sys.argv[1] if len(sys.argv) > 1 else '/tmp/mcud')

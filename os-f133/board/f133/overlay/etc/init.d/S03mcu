@@ -63,9 +63,9 @@ start)
 		rm -f $S
 	) &
 	echo $! > $S
-	# the Bluetooth name phones see is the MCU's (stock set CAR-BT_XXXX at each MCU start): ours, every boot; and its
-	# Bluetooth on (AT#CA), on by default while testing (dash-aa's pairing window no longer turns it off)
-	( sleep 2; ( sleep 1; printf 'AT#MMWattline\r\nAT#CA\r\n' ) | mcud ctl 3 > /dev/null 2>&1 ) &
+	# the Bluetooth name phones see is the MCU's (stock set CAR-BT_XXXX at each MCU start): ours, every boot. Its
+	# Bluetooth itself is mcud's: on for a session, off without one
+	( sleep 2; ( sleep 1; printf 'AT#MMWattline\r\n' ) | mcud ctl 3 > /dev/null 2>&1 ) &
 	# a warm reset can also leave the chip enumerated but dead: no wlan0 a minute in (the modules load after this
 	# script: S05wifi) is the same; wlan0 there clears the count. Past 3 in a row mcud goes on holding.
 	(

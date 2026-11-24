@@ -13,9 +13,9 @@
 # view's region through spike-vdec) and the Bluetooth start (aa mcu). This screen's classic Bluetooth is its power MCU,
 # whose firmware owns the Android Auto RFCOMM service: mcud (S03mcu) hands aa the channel when the phone opens it, and aa
 # gives the phone the AP's address and credentials there. The phone has to be paired with the screen's Bluetooth: start
-# opens a 2-minute window for that. A phone paired before is dropped while Android Auto is off (mcud: it would retry
-# Android Auto for as long as it stays on the MCU's Bluetooth; auto-connect goes off with it) and called back at the
-# next start (auto-connect on, AT#MG; AT#CC, the last device, when no phone is connected: mcud's /run/mcud.phone).
+# opens a 2-minute window for that. The MCU's Bluetooth is on only for a session (mcud: off without one, or a paired
+# phone would keep retrying Android Auto), so a phone paired before comes back at the start; one that has not by
+# itself is called (AT#CC, the MCU's last device).
 #
 # The radio, as the T113: the station's link is dropped for the session (wpa_cli disconnect, reconnect at stop) so the
 # one radio serves the AP alone on its channel; the car link rides the Commander's Bluetooth meanwhile. The AP gets an
@@ -122,8 +122,9 @@ ap_down() {   # the AP's wpa_supplicant and DHCP gone (<= 5 s), its address, and
 	[ -e /sys/class/net/ap0 ] && iw dev ap0 del 2>/dev/null
 }
 # New phones pair only in the 2 minutes after the button (someone at the screen), not for the whole session: Bluetooth
-# on (AT#CA; S03mcu also sends it at boot), each pairing request it reports (AP<code>) accepted (AT#KA). Never AT#CB: it
-# turns the MCU's Bluetooth off (the phone dropped, the screen gone from its list), not just hidden.
+# on (AT#CA; mcud sends it too, as the session starts), each pairing request it reports (AP<code>) accepted (AT#KA).
+# Never AT#CB at its end: that is the MCU's Bluetooth off (the phone dropped, the screen gone from its list), mcud's
+# to send once no session is on.
 # Its own process group: stop ends all of it.
 pair_on() {
 	setsid sh -c '{ echo "AT#CA"; sleep 120; } | mcud ctl 121 |
@@ -252,12 +253,11 @@ start|extra|restore)
 		printf '%s\n' "$PSK" | aa mcu "$IP" "$SSID" - "$BSSID" >> $LOG/aa-mcu.log 2>&1
 		keep && sleep 2; n=$((n + 1))
 	done ) &
-	# the MCU's auto-connect on again (mcud turns it off when it drops a phone while Android Auto is off, and the MCU may
-	# keep it off across starts) and, for Android Auto with no phone connected (mcud's /run/mcud.phone), the phone called
-	# back (the MCU's last device) once aa mcu is waiting for it. Not for extra: the last device is likely the Android
-	# phone, not the one extra's addition wants
-	cc=; [ $MODE = aa ] && [ ! -e /run/mcud.phone ] && cc='AT#CC'
-	( sleep 1; printf 'AT#MG\n%s\n' "$cc" | mcud ctl 1 >> $LOG/aa-mcu.log 2>&1 ) &
+	# the MCU's Bluetooth came on with the session (mcud) and the phone usually comes back by itself: for Android Auto,
+	# one that has not (no /run/mcud.phone, mcud's) $DASH_AA_CALL_S (8) seconds on is called (the MCU's last device).
+	# Not for extra: the last device is likely the Android phone, not the one extra's addition wants
+	# (its own output nowhere: nothing waits 8 s on this script's)
+	[ $MODE = aa ] && ( sleep ${DASH_AA_CALL_S:-8}; [ -e /run/mcud.phone ] || printf 'AT#CC\n' | mcud ctl 1 >> $LOG/aa-mcu.log 2>&1 ) >/dev/null 2>&1 &
 	[ "$1" != restore ] && pair_on   # someone at the screen tapped it (not a restore at boot)
 	# up: on again at the next start, in this mode (the dash restores it), until stopped. (printf, not `: >`: a failed
 	# redirect on a special builtin would end the script before the marker)

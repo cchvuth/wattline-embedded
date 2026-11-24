@@ -146,6 +146,7 @@ secret() {   # the passphrase: 20 hex digits; on aa mcu's stdin and in the hook'
 }
 nocb() { ! grep -q 'AT#CB' $T/calls && ok "never AT#CB" || no "AT#CB sent"; }
 cc() { i=0; while ! has 'mcud ctl 1: AT#CC' && [ $i -lt 30 ]; do /bb/usleep 100000; i=$((i + 1)); done; has 'mcud ctl 1: AT#CC'; }
+export DASH_AA_CALL_S=1   # a phone not back by itself is called after this long (the screen's: 8 s)
 
 echo "-- start: the AP on ap0 beside the station; the pairing window"
 fresh; echo de > /data/wifi/country   # no phone connected (no /run/mcud.phone): one is called back
@@ -163,8 +164,7 @@ has 'aa serve' && has 'aa mcu 192.168.53.1 Wattline - 02:aa:bb:cc:dd:01' && [ "$
 	! [ -e /run/dash-aa.extra ] && ok "aa serve and aa mcu (the passphrase as -); the mode kept: aa" || no "aa serve/aa mcu"
 has 'mcud ctl 121: AT#CA' && has 'mcud ctl 1: AT#KA' && ok "the pairing window: AT#CA, the request accepted (AT#KA)" ||
 	no "pairing window"
-cc && has 'mcud ctl 1: AT#MG' && before 'mcud ctl 1: AT#MG' 'mcud ctl 1: AT#CC' &&
-	ok "no phone connected: auto-connect on, then the last phone called back (AT#MG, AT#CC)" || no "AT#MG/AT#CC at the start"
+cc && ok "no phone back by itself: the last one called (AT#CC)" || no "AT#CC at the start"
 secret
 has 'aa listens on 192.168.53.1' && ok "the receiver listens on the AP's address only" || no "AA_LISTEN"
 # the receiver dying mid-session (killed, as a crash): its markers go (the split let go) and it is started again
@@ -197,9 +197,8 @@ before 'wpa_supplicant sta stopped' 'wpa_supplicant -B -i wlan0 -D nl80211 -c /r
 	has 'ip addr add 192.168.53.1/24 dev wlan0' && [ "$(cat /run/aa-ap.iface)" = wlan0 ] &&
 	has 'aa mcu 192.168.53.1 Wattline - 02:00:00:00:00:01' && ok "the station stopped, the AP on wlan0" || no "wlan0"
 ! grep -q 'AT#CA' $T/calls && ! [ -e /run/aa-pair.pid ] && ok "no pairing window" || no "a window on restore"
-/bb/usleep 1500000; ! has 'mcud ctl 1: AT#CC' && has 'mcud ctl 1: AT#MG' &&
-	ok "restore with a phone connected: auto-connect on (AT#MG), no AT#CC (the connected phone left as it is)" ||
-	no "AT#MG/AT#CC with a phone connected"
+/bb/usleep 2500000; ! has 'mcud ctl 1: AT#CC' && ok "restore with a phone connected: no AT#CC (left as it is)" ||
+	no "AT#CC with a phone connected"
 secret
 echo Home > /run/wifi-auto.pending
 rm /data/hooks/extra-stop; HANG=1 hooks
@@ -256,11 +255,11 @@ printf '#!/bin/sh\ncase "$*" in *aa-ap*) exit 1 ;; esac\nexec /stub/wpa_supplica
 run start; ! [ -e /data/aa-on ] && ! [ -e /run/dash-aa ] && ! [ -e /run/dash-aa.extra ] &&
 	ok "a switch whose AP fails: nothing up, nothing to restore" || no "failed switch: aa-on '$(cat /data/aa-on 2>/dev/null)'"
 mv -f /stub/wpa_supplicant.ok /stub/wpa_supplicant; rm -f $T/ap0dead $T/noap0
-n=$(grep -c 'AT#CC' $T/calls); g=$(grep -c 'AT#MG' $T/calls); rm -f /run/mcud.phone   # no phone connected
+n=$(grep -c 'AT#CC' $T/calls); rm -f /run/mcud.phone   # no phone connected
 run extra && up && ok "extra again" || no "extra again"
-/bb/usleep 1500000; [ "$(grep -c 'AT#CC' $T/calls)" = "$n" ] && [ "$(grep -c 'AT#MG' $T/calls)" = $((g + 1)) ] &&
-	ok "extra: auto-connect on (AT#MG), no AT#CC even with no phone connected (the last device is likely the Android phone)" ||
-	no "AT#MG/AT#CC in extra"
+/bb/usleep 2500000; [ "$(grep -c 'AT#CC' $T/calls)" = "$n" ] && ! grep -q 'AT#MG\|AT#MH\|AT#CD' $T/calls &&
+	ok "extra: no AT#CC even with no phone connected (the last device is likely the Android phone); never AT#MG, AT#MH, AT#CD" ||
+	no "AT#CC in extra"
 run stop && down && ! [ -e /run/dash-aa.extra ] && ok "stop" || no "stop"
 echo extra > /data/aa-on; run restore && up && [ "$(grep -c '^hook extra-start' $T/calls)" = 3 ] && [ -e /run/dash-aa.extra ] &&
 	ok "restore after extra: extra" || no "restore extra"
