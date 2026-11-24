@@ -3539,6 +3539,7 @@ static void panel_build(void)
 	lv_label_set_long_mode(panel_msg, LV_LABEL_LONG_DOT);
 	lv_obj_t *body = column(panel, PB(10));
 	place(body, left, top + line + PB(6), G.W - 2 * left, G.H - top - line - PB(6));
+	lv_obj_set_clickable(body, true); /* a drag on its background, a title or a gap scrolls it too, not only one on a button */
 	lv_obj_set_scrollable(body, true);
 	lv_obj_set_scroll_dir(body, LV_DIR_VER);
 	lv_obj_set_scrollbar_mode(body, LV_SCROLLBAR_MODE_AUTO);

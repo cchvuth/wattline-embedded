@@ -590,6 +590,15 @@ int main(int argc, char **argv)
 		lv_indev_set_type(finger, LV_INDEV_TYPE_POINTER);
 		lv_indev_set_read_cb(finger, finger_read);
 		lv_timer_pause(lv_indev_get_read_timer(finger));
+		{ /* the car panel's list: a drag on its background, off every button, scrolls it */
+			dash_ui_show(DASH_VIEW_CAR_PANEL);
+			lv_refr_now(d);
+			lv_obj_t *open = find_label(lv_screen_active(), "OPEN"), *list = open ? lv_obj_get_parent(open) : NULL;
+			swipe(W - W / 20, H * 3 / 4, W - W / 20, H / 4);
+			bad |= expect(list && lv_obj_get_scroll_y(list) > 0, "the car panel: a drag on its background scrolls the list");
+			if (list) lv_obj_scroll_to_y(list, 0, LV_ANIM_OFF);
+			dash_ui_show(DASH_VIEW_DASH);
+		}
 		dash_ui_set_settings_cb(on_save, NULL);
 		dash_ui_set_action_cb(on_press, NULL);
 		st = (dash_settings_t){.minor_figures = true, .cards = {DASH_CARD_BUTTONS, DASH_CARD_CAR, DASH_CARD_ENERGY, DASH_CARD_G}};
