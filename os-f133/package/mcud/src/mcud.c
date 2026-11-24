@@ -14,15 +14,17 @@
 //              both ways (towards the phone: D6 frames of at most 240 bytes, 10 ms apart, as the stock app sends
 //              them); the connection is closed when the channel closes.
 //   ctl        every MCU text line, one per line; a line it sends that starts with AT# goes to the MCU.
-// Android Auto off: a paired phone that holds the AA channel open finds nothing behind it and retries for as long as
-// its link stays up (the phone's "connecting to Android Auto", again and again). While the channel is open, once AA has
-// been neither on nor starting for $MCUD_AA_GRACE_MS (5 s) in a row, the MCU's auto-connect goes off (AT#MH: it pulled
+// Android Auto off: a paired phone stays on the MCU's Bluetooth for nothing (the MCU dials it back at every start) and
+// retries Android Auto for as long as its link stays up (the phone's "connecting to Android Auto", again and again).
+// Once, for $MCUD_AA_GRACE_MS (5 s) in a row, a phone is connected (IB, until IA) with no session on or starting, or
+// holds the AA channel open with Android Auto neither on nor starting (in extra mode: its addition keeps its own phone,
+// an Android phone retrying AA goes), the MCU's auto-connect goes off (AT#MH: it pulled
 // a dropped phone back within seconds, seen on the screen) and the phone is disconnected (AT#CD). Every dash-aa start
 // turns auto-connect on again (AT#MG: the MCU may keep it off across starts) and, for Android Auto with no phone
 // connected ($MCUD_RUN/mcud.phone, written here on the MCU's IB, removed on its IA), calls the phone back (AT#CC, the
 // last device). AA on or starting:
-// an aa client; $MCUD_RUN/dash-aa (not with dash-aa.extra: another mode, no Android Auto); $MCUD_RUN/dash-aa.starting;
-// or $MCUD_DATA/aa-on saying aa (kept on across starts) in mcud's first $MCUD_AA_KEPT_MS (2 min: the dash's restore
+// an aa client; $MCUD_RUN/dash-aa (for Android Auto's channel not with dash-aa.extra: another mode);
+// $MCUD_RUN/dash-aa.starting; or $MCUD_DATA/aa-on (for the channel saying aa) in mcud's first $MCUD_AA_KEPT_MS (2 min: the dash's restore
 // gets its chance; a restore that failed leaves the file). At most 3 drops in any 10 minutes (a phone that comes straight
 // back must not loop); an AA start clears the count. Never AT#CB: that is Bluetooth off until the MCU loses power.
 // Log on stderr: the MCU's lines (a phone's address and name only as their codes) and its key frames.
@@ -63,7 +65,8 @@ static const char *chname[] = { "none", "aa", "sv" };
 static int tty = -1;
 static volatile sig_atomic_t quit, release;
 static int chan = NONE;   // the data channel the MCU has open
-static int64_t aa_off_since = -1;   // the AA channel open and AA off since then (ms), -1 not so
+static int64_t aa_off_since = -1;   // a phone on with nothing to do since then (ms), -1 not so
+static int phone_on;               // a phone connected (the MCU's IB, until IA)
 static int64_t drops[3];           // the last three AT#CD (ms), for the cap
 static int64_t started;            // mcud's start (ms)
 
@@ -159,40 +162,45 @@ static int there(const char *dir, const char *name)
 	return access(p, F_OK) == 0;
 }
 
-// Android Auto on or starting (see the top)
-static int aa_wanted(int64_t now)
+// Android Auto on or starting ([any]: either mode, a session the Bluetooth link may serve; see the top)
+static int aa_wanted(int64_t now, int any)
 {
 	const char *run = env_or("MCUD_RUN", "/run"), *data = env_or("MCUD_DATA", "/data");
 	char p[256], first[8] = "";
 	for (int i = 0; i < MAXC; i++)
 		if (cl[i].fd >= 0 && cl[i].kind == AA) return 1;
-	if ((there(run, "dash-aa") && !there(run, "dash-aa.extra")) || there(run, "dash-aa.starting")) return 1;
+	if ((there(run, "dash-aa") && (any || !there(run, "dash-aa.extra"))) || there(run, "dash-aa.starting")) return 1;
 	if (now - started >= atoi(env_or("MCUD_AA_KEPT_MS", "120000"))) return 0;
 	snprintf(p, sizeof p, "%s/aa-on", data);
 	FILE *f = fopen(p, "r");
 	if (!f) return 0;
 	if (!fgets(first, sizeof first, f)) first[0] = 0;
 	fclose(f);
-	return strncmp(first, "extra", 5) != 0;   // (an empty line or "aa": Android Auto)
+	return any || strncmp(first, "extra", 5) != 0;   // (an empty line or "aa": Android Auto)
 }
 
-// the AA channel open: the phone dropped once AA has been off for the grace in a row (at most 3 in 10 minutes)
+// a phone on the MCU's Bluetooth for nothing: dropped once so for the grace in a row (at most 3 in 10 minutes)
 static void aa_watch(int64_t now)
 {
-	if (chan != AA) { aa_off_since = -1; return; }
-	if (aa_wanted(now)) { aa_off_since = -1; return; }
+	int channel = chan == AA && !aa_wanted(now, 0), idle = phone_on && !aa_wanted(now, 1);
+	if (!channel && !idle) { aa_off_since = -1; return; }
 	if (aa_off_since < 0) { aa_off_since = now; return; }
 	if (now - aa_off_since < atoi(env_or("MCUD_AA_GRACE_MS", "5000"))) return;
 	aa_off_since = -1;
 	if (drops[0] && now - drops[0] < 600000) {   // the third-last within 10 minutes: no more until AA starts
 		static int64_t said;
-		if (said != drops[0]) logf_("Android Auto is off, the phone keeps coming back: left connected (3 drops in 10 minutes)"), said = drops[0];
+		if (said != drops[0]) logf_("the phone keeps coming back: left connected (3 drops in 10 minutes)"), said = drops[0];
 		return;
 	}
 	drops[0] = drops[1], drops[1] = drops[2], drops[2] = now;
 	send_frame(F_AT, "AT#MH\r\n", 7);   // auto-connect off first, or the MCU dials the phone straight back
 	send_frame(F_AT, "AT#CD\r\n", 7);
-	logf_("Android Auto is off: the phone holding its channel disconnected, auto-connect off (AT#MH, AT#CD)");
+	phone_on = 0;   // gone (an IB says so if it comes back); dash-aa's next start calls one back
+	char p[256];
+	snprintf(p, sizeof p, "%s/mcud.phone", env_or("MCUD_RUN", "/run"));
+	unlink(p);
+	logf_("%s: the phone disconnected, auto-connect off (AT#MH, AT#CD)",
+	      channel ? "Android Auto is off, a phone held its channel" : "no session on, a phone was connected");
 }
 
 // a line from the MCU's Bluetooth
@@ -215,11 +223,13 @@ static void mcu_line(const char *l)
 		logf_("data channel %s open%s", chname[chan], again ? " again: its client dials anew" : "");
 		open_waiting();
 	} else if (!strcmp(l, "IB")) {   // a phone connected (HFP up): dash-aa's start need not call one back
+		phone_on = 1;
 		char p[256];
 		snprintf(p, sizeof p, "%s/mcud.phone", env_or("MCUD_RUN", "/run"));
 		int fd = open(p, O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
 		if (fd >= 0) close(fd);
 	} else if (!strcmp(l, "IA")) {
+		phone_on = 0;
 		char p[256];
 		snprintf(p, sizeof p, "%s/mcud.phone", env_or("MCUD_RUN", "/run"));
 		unlink(p);
@@ -391,6 +401,7 @@ int main(int argc, char **argv)
 	for (int i = 0; i < MAXC; i++) cl[i].fd = -1;
 
 	started = ms();
+	phone_on = there(env_or("MCUD_RUN", "/run"), "mcud.phone");   // a phone connected under the mcud before this one
 	hold();
 	int64_t next_hold = ms() + 60000, next_data = 0;
 	logf_("holding the power on %s; clients on %s", ttyp, sockp);
@@ -402,7 +413,7 @@ int main(int argc, char **argv)
 		for (int i = 0; i < MAXC; i++) pf[n++] = (struct pollfd){ cl[i].fd, POLLIN, 0 };
 		int64_t now = ms(), wait = next_hold - now;
 		if (oq_len && next_data - now < wait) wait = next_data - now;
-		if (chan == AA && wait > 500) wait = 500;   // aa_watch looks twice a second while the AA channel is open
+		if ((chan == AA || phone_on) && wait > 500) wait = 500;   // aa_watch looks twice a second while a phone is on
 		if (wait < 0) wait = 0;
 		struct timespec ts = { wait / 1000, (wait % 1000) * 1000000 };
 		if (ppoll(pf, (nfds_t)n, &ts, &wake) < 0 && errno != EINTR) break;

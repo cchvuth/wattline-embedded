@@ -95,6 +95,19 @@ def main(binary):
     finally:
         if p.poll() is None:
             p.kill()
+    # a phone connected under an earlier mcud (its mark left in /run): this one knows it, and drops it with no session on
+    open(os.path.join(run_d, 'mcud.phone'), 'w').close()
+    p = subprocess.Popen([binary, path, sock], stdout=subprocess.DEVNULL, stderr=log, env=env)
+    try:
+        mcu = Mcu(m)
+        mcu.pump(1.2)
+        assert CD in [x for _, x in mcu.got], 'a phone connected before mcud started was not dropped'
+        p.terminate(); p.wait(3)
+        print('mcud: a phone connected before it: ok')
+    finally:
+        if p.poll() is None:
+            p.kill()
+    assert not os.path.exists(os.path.join(run_d, 'mcud.phone')), 'dropped: mcud.phone left (dash-aa would not call it back)'
     # a phone that reopens its channel every 2.2 s (each a new opening, no IA between) is still dropped once AA has been
     # off for the grace (3 s here): the reopening must not start the count again
     p = subprocess.Popen([binary, path, sock], stdout=subprocess.DEVNULL, stderr=log, env=dict(env, MCUD_AA_GRACE_MS='3000'))
@@ -241,10 +254,13 @@ def aa_off(p, m, sock, run_d, data_d):
     assert cds(0.8) == 1, 'AA off: the phone was not disconnected once'
     got = [x for _, x in mcu.got]
     assert MH in got and got.index(MH) < got.index(CD), 'auto-connect not off (AT#MH) before the drop'
+    channel(False)
+    touch('dash-aa.starting')   # (a session starting: the connected phone is wanted)
     mcu.send(frame(0xD4, b'IB\r\n')); mcu.pump(0.2)   # a phone connected: marked for dash-aa (no call back needed)
     assert os.path.exists(os.path.join(run_d, 'mcud.phone')), 'IB: no mcud.phone'
     channel(False)
     assert not os.path.exists(os.path.join(run_d, 'mcud.phone')), 'IA: mcud.phone left'
+    rm('dash-aa.starting')
 
     touch('dash-aa'); channel(True)   # AA on: the phone stays
     assert cds(0.8) == 0, 'disconnected with AA on'
@@ -286,6 +302,22 @@ def aa_off(p, m, sock, run_d, data_d):
     channel(False)
     reset_cap(); channel(True)
     assert cds(1.0) == 1, 'an AA start did not clear the cap'
+    channel(False); reset_cap()
+
+    def phone(on):
+        mcu.send(frame(0xD4, b'IB\r\n' if on else b'IA\r\n')); mcu.pump(0.05)
+    phone(True)   # connected with no session on (the MCU dials it at every start): dropped, no AA channel needed
+    assert cds(0.15) == 0, 'a connected phone dropped before the grace'
+    assert cds(0.8) == 1, 'a phone connected with no session on was not dropped'
+    phone(False)
+    touch('dash-aa', 'dash-aa.extra'); phone(True)   # extra mode up: its addition's phone stays
+    assert cds(0.8) == 0, 'a connected phone dropped in extra mode'
+    channel(True)                                     # ... but one holding Android Auto's channel there goes
+    assert cds(1.0) == 1, 'a phone retrying Android Auto in extra mode was not dropped'
+    channel(False); rm('dash-aa', 'dash-aa.extra'); reset_cap()
+    touch('dash-aa'); phone(True)                     # Android Auto up: the phone stays
+    assert cds(0.8) == 0, 'a connected phone dropped with Android Auto on'
+    phone(False); rm('dash-aa')
     p.terminate(); p.wait(3)
     print('mcud AA off: ok')
 
