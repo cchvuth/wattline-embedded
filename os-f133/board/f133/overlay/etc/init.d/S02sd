@@ -26,12 +26,20 @@ start)
 		(while :; do bl off; usleep 125000; bl on; usleep 125000; done) &
 		exit 0
 	fi
-	# a swap file on /data, if one was made there (dd, 64 MiB): a safety net for memory spikes on 64 MiB, not working
-	# memory; swappiness 10 drops cached files before paging anything out (none while /data is in RAM)
-	if [ -f /data/swapfile ] && grep -q " /data ext4 " /proc/mounts; then
-		swapon /data/swapfile 2>/dev/null || { mkswap /data/swapfile >/dev/null && swapon /data/swapfile; }
+	# a swap file on /data (64 MiB): a safety net for memory spikes on 64 MiB, not working memory; swappiness 10 drops
+	# cached files before paging anything out (none while /data is in RAM). Made here when missing (once, in the
+	# background: 64 MiB written to the card): a card made from scratch had none, and Android Auto (the decoder, the AP,
+	# the receiver beside the dash) ran out of memory: the system's code dropped and read in again from the card without
+	# end, the CPU at 100 % and the picture frozen for good
+	if grep -q " /data ext4 " /proc/mounts; then (
+		f=/data/swapfile
+		if [ ! -f $f ]; then
+			rm -f $f.new
+			dd if=/dev/zero of=$f.new bs=1M count=64 2>/dev/null && chmod 600 $f.new && sync && mv $f.new $f || { rm -f $f.new; exit 0; }
+		fi
+		swapon $f 2>/dev/null || { mkswap $f >/dev/null && swapon $f; }
 		echo 10 > /proc/sys/vm/swappiness
-	fi
+	) & fi
 	[ -n "$logs" ] || exit 0
 	mkdir -p /data/log
 	n=$(cat /data/log/bootcount 2>/dev/null)

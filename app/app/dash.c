@@ -319,6 +319,7 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
   started = true;
 
   int64_t next_frame = now, next_stat = now + 10000;
+  int frames = 0;   // drawn since the last heartbeat
   link_state_t was = (link_state_t)-1;
   const char *why = NULL;
 #ifdef DASH_CMDR
@@ -383,6 +384,7 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
       was = d->link.state, why = d->link.why;
     }
     if (now >= next_frame) {
+      frames++;
       next_frame += d->frame_ms;
       if (next_frame <= now) next_frame = now + d->frame_ms;   // a long frame: no catching up
       clock_check(d, now);
@@ -416,9 +418,22 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
     if (now >= next_stat) {
       stats(d);
       next_stat = now + 10000;
-      // the heartbeat a watcher can take for "not hung" (the F133's S05dash): not the log, which may be off
-      int hb = open("/run/dash.alive", O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
-      if (hb >= 0) futimens(hb, NULL), close(hb);
+      // the heartbeat a watcher can take for "not hung" (the F133's S05dash): not the log, which may be off. Only for a
+      // loop that still draws (300 frames in 10 s at 33 ms): one crawling at a frame in seconds (a draw that long, or
+      // memory gone and the code read in again from the card) beat on, so it was never restarted (LVGL's cpu 100 %,
+      // fps 0, for good)
+      if (frames >= 10) {
+        int hb = open("/run/dash.alive", O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
+        if (hb >= 0) futimens(hb, NULL), close(hb);
+      } else {
+        long kb = -1;
+        FILE *m = fopen("/proc/meminfo", "r");
+        char ln[80];
+        while (m && fgets(ln, sizeof ln, m) && sscanf(ln, "MemAvailable: %ld", &kb) != 1) {}
+        if (m) fclose(m);
+        log_msg("slow: %d frames in 10 s, memory free %ld kB: no heartbeat", frames, kb);
+      }
+      frames = 0;
     }
   }
   stats(d);

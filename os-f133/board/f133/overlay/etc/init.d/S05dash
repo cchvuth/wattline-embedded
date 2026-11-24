@@ -11,7 +11,7 @@
 # The watchdog policy: a reset of the board loses the Wi-Fi chip until power off and on (S03mcu then has the MCU cycle
 # the power: a second boot, the screen dark for a minute or two), so the dash does not take the hardware watchdog
 # (dash.conf watchdog = 0; the kernel feeds it, for a kernel that hangs) and a hung dash is caught here instead: its
-# heartbeat (/run/dash.alive, touched every 10 s) unchanged for over a minute = hung: killed (TERM, then KILL) and so
+# heartbeat (/run/dash.alive, touched every 10 s while it still draws) unchanged for over a minute = hung: killed (TERM, then KILL) and so
 # restarted, the board and its Wi-Fi left as they are.
 D=/mnt/sd/dash O=/var/log/sd/dash.out S=/run/dash-supervise.pid
 # the card's dash (development: the newest build) if there is one, else the image's own
@@ -25,6 +25,9 @@ hung() {   # hung PID: watches the dash's heartbeat (/run/dash.alive, touched ev
 		if [ -n "$now" ] && [ "$now" != "$was" ]; then was=$now; n=0; continue; fi
 		n=$((n + 1)); [ $n -ge 5 ] && [ -n "$now" ] || [ $n -ge 8 ] || continue
 		echo "$(date) no heartbeat for over $([ -n "$now" ] && echo a minute || echo two minutes): hung, killed" >> $O
+		# what it was at (no command lines: wifi-connect's hold its passphrase): memory, load, the dash's own size
+		{ head -3 /proc/meminfo; grep -E "^Swap(Total|Free)" /proc/meminfo; cat /proc/loadavg
+		  grep -E "^(State|VmRSS)" /proc/$1/status; } >> $O 2>&1
 		kill $1; sleep 5; kill -9 $1 2>/dev/null
 		return
 	done
