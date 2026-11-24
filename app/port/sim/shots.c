@@ -6,6 +6,7 @@
  * The phone layout's swipes are a finger's touches read as the panel's are, through LVGL's gestures; the split's frames
  * after them must leave the picture's rectangle alone (the decoder draws it), and a swipe must not press a chip.
  * usage: shots <out dir> [width height]     exit 1 on a mismatch */
+#include <math.h>
 #include "lvgl.h"
 #include "../../ui/dash_ui.h"
 #include "../../ui/scenes.h"
@@ -230,6 +231,14 @@ int main(int argc, char **argv)
 		dash_state_t s;
 		scenes[1].fill(&s);
 		bad |= shot(d, out, "basic-route", &s, -1);
+		/* nothing to show (the stream gone, no route): the route and drive cards' skeletons, not empty slots */
+		for (int i = 0; i < scene_count; i++)
+			if (!strcmp(scenes[i].name, "no-new-data")) {
+				scenes[i].fill(&s);
+				s.wifi_live = s.live = false; /* no link at all */
+				for (int k = 0; k < 4; k++) s.brake_temp_c[k] = NAN;
+				bad |= shot(d, out, "basic-no-data", &s, -1);
+			}
 		dash_settings_t full = {.minor_figures = true, .cards = {DASH_CARD_BUTTONS, DASH_CARD_CAR, DASH_CARD_ENERGY, DASH_CARD_G}};
 		dash_ui_settings(&full);
 	}
@@ -312,26 +321,6 @@ int main(int argc, char **argv)
 			if (l) lv_obj_update_layout(l), lv_obj_scroll_by_bounded(l, 0, -100000, LV_ANIM_OFF); /* to the very end */
 			bad |= shot(d, out, ends[k].name, &s, DASH_VIEW_SETTINGS);
 			dash_ui_settings_tab(0); /* another tab: back at the top next time */
-		}
-		{ /* the built-in flash's row (the F133 run from its card: dash-nor's status), the Advanced page at its end */
-			char nor[600];
-			snprintf(nor, sizeof nor, "%s/.dash-nor.status", out);
-			FILE *f = fopen(nor, "w");
-			if (f) fputs("state=stock\nnote=\n", f), fclose(f);
-			dash_ui_nor_status = nor;
-			dash_ui_settings_tab(4);
-			clock_ms += 1000, dash_ui_set(&s); /* the row read in */
-			lv_obj_t *l = find_ui_label("Copy to flash");
-			if (!l) { printf("no label Copy to flash\n"); bad = 1; }
-			else {
-				do l = lv_obj_get_parent(l); while (l && !lv_obj_is_scrollable(l));
-				if (l) lv_obj_update_layout(l), lv_obj_scroll_by_bounded(l, 0, -100000, LV_ANIM_OFF);
-			}
-			bad |= shot(d, out, "touch-settings-advanced-flash", &s, DASH_VIEW_SETTINGS);
-			remove(nor);
-			clock_ms += 1000, dash_ui_set(&s); /* the row hidden again */
-			dash_ui_nor_status = "/run/dash-nor.status";
-			dash_ui_settings_tab(0);
 		}
 		static const struct { int tab; const char *label, *name; } rows[] = {   /* a group's title (unique) at its page's top */
 			{4, "Android Auto", "touch-settings-advanced-aa"}, {2, "Dash", "touch-settings-display-dash"}};

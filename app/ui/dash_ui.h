@@ -41,6 +41,7 @@ typedef struct {
 	bool wifi_first;          /* Bluetooth waits for the WiFi stream, no time limit */
 	bool ota_auto;            /* automatic updates: with internet, download + verify + arm for the next start */
 	bool aa_low_res;          /* Android Auto at 480p, scaled up: less for the phone and the WiFi (aa reads the file) */
+	bool save_logs;           /* logs on the card (the start scripts read the file: from the next start); off: none at all */
 	bool show_fps;            /* the frames a second (and the CPU's share, a frame's ms) in the screen's bottom right corner */
 	int unit_miles, unit_f, unit_psi; /* the owner's units, 1 / 0 once switched; -1: as before (the car's speed unit, °F with mph, psi) */
 	char tz[64];              /* POSIX TZ for the clocks (arrival, charge done) */
@@ -63,7 +64,6 @@ enum { DASH_SETTINGS_SAVE, DASH_CMDR_APPROVE, DASH_CMDR_FORGET, DASH_PAIR_START,
        DASH_AA_START, DASH_AA_STOP /* the on-screen button: bring wireless Android Auto up / tear it down */,
        DASH_OTA_CHECK, DASH_OTA_INSTALL, DASH_OTA_RESTART /* Advanced: software update (dash-update check / auto / reboot) */,
        DASH_AA_FORGET /* Advanced: forget the phones paired for Android Auto (dash-aa forget) */,
-       DASH_NOR_COPY /* Advanced: a card install copied to the built-in flash (dash-nor copy: the F133 screen) */,
        DASH_RESTART /* Advanced: restart the screen (the device's reboot: the F133's power cycle) */,
        DASH_EXTRA_START /* the second projection button: dash-aa extra (an addition kept outside this repository) */ };
 typedef void (*dash_settings_cb)(int what, const dash_settings_t *s, void *ctx);
@@ -88,4 +88,3 @@ extern const char *dash_ui_pj_fps;    /* PJ_FPS: the phone's pictures shown per 
  * left with its session gone. With it, the split's Exit keeps the picture until the session has gone (or 1.5 s), so
  * the dash comes back in one step instead of down the screen in strips. */
 extern void (*dash_ui_whole_frame)(void);
-extern const char *dash_ui_nor_status; /* "/run/dash-nor.status": a card install to copy to the built-in flash */

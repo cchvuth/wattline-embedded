@@ -6,9 +6,6 @@
 #include "actions.h"
 #include "pair.h"
 #include "record.h"
-#ifndef DASH_NO_RECORD   // a device profile with no room for drive recordings: never on, whatever the settings say
-#define DASH_NO_RECORD 0
-#endif
 #include "settings.h"
 #include "../core/panda.h"
 #include "../ui/project_region.h"
@@ -21,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -362,7 +360,7 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
       if (settings_save(&app_settings)) app_tell("Settings not saved: the card could not be written", now);
       apply_settings(d, now);
     }
-    record_sync(app_settings.record && !DASH_NO_RECORD, cf, now);   // the switch takes effect here, at once
+    record_sync(app_settings.record, cf, now);   // the switch takes effect here, at once
     {   // the WiFi join just ended (wlan0 has its address): the link tries now, not after its retry delay, in which
         // Bluetooth (waiting for WiFi to try) would dial; before cmdr_hook_sync, so it sees the try
       static int join_was = -1;
@@ -418,6 +416,9 @@ int dash_run(const conf_t *cf, const ui_hooks_t *ui, int64_t run_ms) {
     if (now >= next_stat) {
       stats(d);
       next_stat = now + 10000;
+      // the heartbeat a watcher can take for "not hung" (the F133's S05dash): not the log, which may be off
+      int hb = open("/run/dash.alive", O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
+      if (hb >= 0) futimens(hb, NULL), close(hb);
     }
   }
   stats(d);

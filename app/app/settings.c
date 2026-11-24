@@ -43,7 +43,6 @@ void settings_aa_extra(void) { run(settings_aa_cmd, "extra", NULL); }
 void settings_aa_restore(void) { run(settings_aa_cmd, "restore", NULL); }
 void settings_aa_forget(void) { run(settings_aa_cmd, "forget", NULL); }
 void settings_ota(const char *what) { run("/usr/sbin/dash-update", what, NULL); }
-void settings_nor(const char *what) { run("/usr/sbin/dash-nor", what, NULL); }
 // How the board restarts: the device profile's (device/<name>.mk; the F133 screen's power MCU cycles it, as a warm reboot
 // loses its Wi-Fi chip)
 #ifndef DASH_REBOOT
@@ -136,6 +135,7 @@ void settings_load(dash_settings_t *st, const conf_t *cf) {
         else if (!strcmp(k, "ota_auto")) st->ota_auto = v;   // S99ota reads it from the file too
         else if (!strcmp(k, "aa_low_res")) st->aa_low_res = v;   // aa reads it from the file at each connection
         else if (!strcmp(k, "show_fps")) st->show_fps = v;
+        else if (!strcmp(k, "save_logs")) st->save_logs = v;   // S02sd (F133) and S05data (T113) read it from the file
         else if (!strcmp(k, "unit_miles")) st->unit_miles = v < 0 ? -1 : !!v;
         else if (!strcmp(k, "unit_f")) st->unit_f = v < 0 ? -1 : !!v;
         else if (!strcmp(k, "unit_psi")) st->unit_psi = v < 0 ? -1 : !!v;
@@ -240,11 +240,11 @@ int settings_save(dash_settings_t *st) {
   snprintf(text, sizeof text,
            "minor_figures = %d\nclock_24h = %d\nbrightness_pct = %d\nfollow_car = %d\nfollow_offset = %d\nssh = %d\nrecord = %d\n"
            "car = %s\nsparse = %d\nwifi_first = %d\ntz = %s\npanda_host = %s\npanda_port = %d\nota_auto = %d\naa_low_res = %d\n"
-           "unit_miles = %d\nunit_f = %d\nunit_psi = %d\nshow_fps = %d\n",
+           "unit_miles = %d\nunit_f = %d\nunit_psi = %d\nshow_fps = %d\nsave_logs = %d\n",
            now.minor_figures, !now.hour12, now.brightness_pct, now.follow_car, now.follow_offset, now.dev_ssh, now.record,
            kCars[now.car >= 0 && now.car < CAR_COUNT ? now.car : CAR_FALLBACK].id, now.sparse, now.wifi_first,
            strchr(now.tz, '\n') ? "UTC0" : now.tz, strchr(now.panda_host, '\n') ? "192.168.4.1" : now.panda_host,
-           now.panda_port, now.ota_auto, now.aa_low_res, now.unit_miles, now.unit_f, now.unit_psi, now.show_fps);
+           now.panda_port, now.ota_auto, now.aa_low_res, now.unit_miles, now.unit_f, now.unit_psi, now.show_fps, now.save_logs);
   if (now.basic || memcmp(now.cards, kCards, sizeof kCards)) {   // the phone layout's, once off its full layout (the Dash
     size_t k = strlen(text);                                      // never moves them: its file as before)
     snprintf(text + k, sizeof text - k, "basic = %d\ncards = %d, %d, %d, %d\n", now.basic, now.cards[0], now.cards[1],

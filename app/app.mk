@@ -64,7 +64,7 @@ $(HA)/libdashble.so: $(patsubst %.c,$(HA)/so/%.o,$(BLE_SO_SRC))
 host: $(HA)/dash-host $(if $(BLE_SO_SRC),$(HA)/libdashble.so)
 test: host
 	python3 -I test/test_app_bench.py $(HA)/dash-host
-	$(if $(findstring DASH_NO_RECORD=1,$(DEVICE_DEFS)),@echo "test_record: skipped (this profile records no drives)",python3 -I test/test_record.py $(HA)/dash-host)
+	python3 -I test/test_record.py $(HA)/dash-host
 
 # --- the device (arm: the Dash's ARM, or the profile's CPU): its Buildroot toolchain (the profile's ARM_CC), LVGL and UI
 # objects shared with ui.mk ($(BUILD)/arm-ui/)

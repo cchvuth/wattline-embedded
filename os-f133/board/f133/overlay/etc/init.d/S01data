@@ -1,0 +1,28 @@
+#!/bin/sh
+# /data: the card's second partition (ext4, journaled: settings, Wi-Fi, SSH keys, the AA certificate, logs,
+# recordings), checked (fsck -p) and mounted at every start before anything reads it. A card fresh from its image has
+# its first partition only (FAT: the system): dash-mkdata adds p2 over the rest of the card, once. A p2 of Linux type
+# with no ext4 on it (its first start cut short in mkfs, or p2 not seen until a restart) is made here, unless e2fsck
+# finds one by a backup superblock. A p2 of any other type is not this screen's (a card laid out by hand): never
+# checked, made or mounted, as e2fsck would rebuild an ext4 over it from a stale backup superblock. No p2, one of
+# another type, or one fsck cannot fix: /data stays in the root's RAM overlay (lost at power-off) and everything still
+# runs.
+case "$1" in start|"") ;; *) exit 0;; esac
+D=${DATA_CARD:-/dev/mmcblk0}
+[ -b $D ] && [ ! -b ${D}p2 ] && dash-mkdata
+if [ -b ${D}p2 ] && [ "$(sfdisk --part-type $D 2 2>/dev/null)" != 83 ]; then
+	echo "data: ${D}p2 is not a Linux partition: left alone, /data in RAM"
+elif [ -b ${D}p2 ]; then
+	m=$(dd if=${D}p2 bs=2 skip=540 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+	if [ ${#m} = 4 ] && [ "$m" != 53ef ] && { e2fsck -fy ${D}p2 >/dev/null 2>&1; [ $? -ge 4 ]; }; then
+		mkfs.ext4 -F -q -E nodiscard,lazy_itable_init=1,lazy_journal_init=1 -L WATTDATA ${D}p2 </dev/null &&
+			echo "data: ${D}p2 had no filesystem: made one"
+	fi
+	fsck.ext4 -p ${D}p2; r=$?   # 0 clean, 1/2 fixed, 4+ not fixed by preen: then answered yes, else /data would stay
+	[ $r -ge 4 ] && { e2fsck -fy ${D}p2 </dev/null; r=$?; }   # in RAM at every start for good
+	if [ $r -lt 4 ] && mount -t ext4 -o noatime ${D}p2 /data; then echo "data: ${D}p2 on /data (fsck $r)"
+	else echo "data: ${D}p2 not mounted (fsck $r): /data in RAM"; fi
+else
+	echo "data: no ${D}p2: /data in RAM"
+fi
+exit 0

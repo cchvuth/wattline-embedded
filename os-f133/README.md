@@ -4,15 +4,15 @@ Linux and the Wattline dash for the SRNUBI T313D, an 11.26" aftermarket car scre
 
 - **SoC:** Allwinner F133 (D1s): one RISC-V C906 core, 64 MiB of DDR2.
 - **Panel:** 720x1920 MIPI DSI, shown as a 1920x720 landscape canvas, with the panel's touch controller.
-- **Storage:** 16 MiB SPI NOR flash.
+- **Storage:** an SD card, which the screen always starts from (its 16 MiB SPI NOR flash is not used).
 - **Radios:** an AIC8800D80 for Wi-Fi and Bluetooth LE (SDIO), and a Bluetrum MCU that holds the power and is also the
   classic Bluetooth.
 
 The dash is the same program as the T113 Dash's ([app/](../app), device profile `app/device/f133.mk`). It gets the
 car's data from the Commander over Wi-Fi or Bluetooth LE, and runs wireless Android Auto with your own Google-signed
-head-unit certificate (see the top README). The screen boots from its NOR in about five seconds. Over-the-air
-updates go through an SD card (below): a card install's own, or, for a screen running from its NOR, a card left in
-it; without a card such a screen is updated over SSH.
+head-unit certificate (see the top README). Android Auto's Bluetooth is the MCU's: a phone paired for it is dropped
+while Android Auto is off (it would retry Android Auto for as long as it stays connected) and called back when
+Android Auto starts. Over-the-air updates come from this repository's releases (below).
 
 The certificate goes to `/data/wattline/` as on the Dash. The image's SSH server has no SFTP, so copy the files with
 `scp -O` or `ssh root@<screen> 'cat > /data/wattline/aa.crt' < aa.crt` (and the same for `aa.key`).
@@ -27,131 +27,77 @@ Docker and about 15 GB of disk. In the repository root:
 The first run builds the toolchain too, which takes about an hour. The Buildroot tree and its output stay in the
 Docker volume `wattline-f133`, and the images land in `out-f133/`:
 
-| File | Where it goes |
+| File | What it is |
 |---|---|
-| `u-boot-sunxi-with-spl.bin` | the NOR's start, or 8 KiB into an SD card |
-| `kernel.itb` | the NOR's kernel partition: the kernel (gzip) and its device tree, checked by U-Boot |
-| `rootfs.sqfs` | the NOR's root partition, or the card |
-| `Image`, `f133.dtb` | a boot from the card |
-| `card/` | a card install's files, ready to copy (below) |
+| `wattline-f133-sdcard-<version>.img.xz` | the whole card, to flash with any imager (`board/f133/genimage.cfg`) |
+| `u-boot-sunxi-with-spl.bin` | the SPL, OpenSBI and U-Boot, 8 KiB into the card |
+| `Image`, `f133.dtb`, `rootfs.sqfs` | the kernel, its device tree and the root, on the card's first partition (and an update's bundle) |
 
 A whole build (`os-f133/build.sh` with no arguments) compiles the programs from this checkout again (the dash, the
-receiver, the decoder, `mcud`), and the kernel with its out-of-tree modules when its device tree, configuration
-(`board/f133/linux.fragment`), initramfs or patches changed: Buildroot would otherwise keep what it built first.
-To rebuild one package by hand, run e.g. `os-f133/build.sh dashapp-rebuild`; after a kernel change by hand, the
-modules too (`aic8800-dirclean g2drot-dirclean linux-dirclean`): modules built for another kernel load, but Wi-Fi
-stops working.
+receiver, the decoder, `mcud`), the kernel with its out-of-tree modules when its device tree, configuration
+(`board/f133/linux.fragment`), initramfs or patches changed, and U-Boot when its patches or `uboot.fragment` changed:
+Buildroot would otherwise keep what it built first. To rebuild one package by hand, run e.g.
+`os-f133/build.sh dashapp-rebuild`; after a kernel change by hand, the modules too
+(`aic8800-dirclean g2drot-dirclean linux-dirclean`): modules built for another kernel load, but Wi-Fi stops working.
 
-## NOR layout
+## The card
 
-| Partition | Offset | Size | Contents |
-|---|---|---|---|
-| boot | 0 | 0xf0000 | SPL, OpenSBI, U-Boot |
-| try | 0xf0000 | 0x10000 | `TRY1` while an update for the screen is on the card (U-Boot then looks there first) |
-| kernel | 0x100000 | 0x400000 | `kernel.itb` |
-| rootfs | 0x500000 | 0xa80000 | `rootfs.sqfs` (squashfs: zstd when it fits, else xz) |
-| data | 0xf80000 | 0x80000 | `/data` (JFFS2): settings, Wi-Fi networks, SSH keys, the AA certificate |
+| Part | Where | What |
+|---|---|---|
+| U-Boot | 8 KiB (raw) | the SPL, OpenSBI and U-Boot; at 2 MiB the area the SPL saves its log to when a start fails |
+| p1, FAT32 | 4 MiB, 4 GiB | `Image`, `f133.dtb`, `rootfs.sqfs`; an update's `.try` files and download (`ota/`); your own files (below) |
+| p2, ext4 | the rest | `/data`: settings, Wi-Fi networks, SSH keys, the AA certificate, logs, drive recordings |
 
-## First install: from an SD card
+The image holds U-Boot and p1. At the first start `dash-mkdata` adds p2 over the rest of the card (any card of
+8 GB or more; 256 MiB at least after p1), and every start checks it (`S01data`: `e2fsck -p`, journaled, so a power cut
+loses at most the last seconds). p1's FAT is checked and repaired before it is mounted at every start (`/init`,
+dosfstools' `fsck.fat -a`; about 0.6 s), as the power is always just cut and the kernel sets a damaged FAT read-only.
+A card flashed again keeps its `/data`: the image rewrites only U-Boot and p1, and the first start finds the earlier
+p2 where it was. Without a p2 (one that could not be made, or one that is not a Linux partition, which is never
+touched) `/data` stays in RAM.
 
-The boot ROM tries the SD card first, so a card boots Linux with the screen's own firmware untouched.
+## Install
 
-1. **Make the card.** An MBR partition table whose **fourth** primary partition is FAT32 and starts at 1 MiB or
-   later (U-Boot and `/init` look only there; partitions 1 to 3 can be small placeholders or hold anything else).
-   Write `u-boot-sunxi-with-spl.bin` 8 KiB into the card (`dd if=u-boot-sunxi-with-spl.bin of=/dev/sdX bs=1024 seek=8 conv=notrunc`). Then copy
-   everything in `out-f133/card/` onto that partition: the boot files, and `nor/` with the built-in flash's files. Add a `wpa_supplicant.conf` with your network, and your SSH public key as
-   `authorized_keys`.
-2. **Boot and back up.** Boot the screen with the card in and SSH in. Save the stock firmware first:
-   `tools/nor/nor.sh read /mnt/sd/stock.bin`. That command reads the chip twice and checks that both reads agree.
-   Copy `stock.bin` off the card and keep it.
-3. **Write the NOR.** Put the images in a directory on the card and run `nor.sh flash DIR` (it wants `DIR/stock.bin`
-   too, the same as the chip). Then `nor.sh seed`, which copies the card's Wi-Fi settings and SSH keys into the NOR's
-   `/data`. Remove the card and power-cycle: the screen now boots from its NOR.
+1. **Flash the card** with `wattline-f133-sdcard-<version>.img.xz` (balenaEtcher, or
+   `xzcat wattline-f133-sdcard-<version>.img.xz | dd of=/dev/sdX bs=4M`).
+2. **Optional, on p1 (`WATTLINE`)**: a `wpa_supplicant.conf` with your network and your SSH public key as
+   `authorized_keys`, for SSH before the dash's own settings have them; `splash.bgra.gz`, your own boot picture (the
+   panel's 720x1920 framebuffer, XRGB8888, gzipped); `dash/dash` with its `dash.conf`, a build of the dash to try in
+   place of the image's.
+3. **Put the card in and power on.** The boot ROM tries the card first; the screen's flash is never written.
 
-`nor.sh restore stock.bin` from a card boot puts the stock firmware back.
+A screen that ran from its flash with an earlier release starts from the card the same way: flash a card and put it
+in. Its flash's `/data` is not read any more, so its settings come from the dash again. New releases do not start
+from the flash, nor update a screen that does.
 
-`nor.sh flash` erases the NOR's `/data`. If that holds this system's settings (a screen that ran from its NOR), it is
-saved first to `nor-data.bin` beside `stock.bin` (a later copy's to `nor-data.2.bin`, `.3`...: none is written over), and `nor.sh restore nor-data.bin` puts it back, e.g. after a copy
-that should keep the settings, Wi-Fi networks and Bluetooth bonds made while running from the NOR.
-
-**From the dash instead:** a card install can copy itself to the built-in flash from **Settings → Advanced →
-Built-in flash** (`dash-nor`). It saves the stock firmware to the card first (`stock.bin`, the chip read twice) if it
-is still on the flash. It then writes the root, the kernel and U-Boot (each read back), and copies the card's
-settings, Wi-Fi networks and SSH keys into the flash's `/data` (the flash's own, if the screen ran from it, saved to
-the card first as `nor-data.bin`). While the card is in, the screen still starts from the card; without it, from the
-flash. Its log is `nor.txt` in the boot's log folder on the card.
-
-### A card with files only
-
-A card without U-Boot on it (nothing at 8 KiB) does not start the screen: the boot ROM goes on to the built-in flash,
-and the system there mounts the card's fourth partition. The boot's logs then go to the card instead of RAM
-(`log/<boot>/`), a `swapfile` there is used, `wpa_supplicant.conf` and `authorized_keys` are read, and a `dash/dash`
-there runs in place of the image's (for trying a build). If the flash's kernel cannot be started, its U-Boot falls
-back to an `Image`, `f133.dtb` and `rootfs.sqfs` on the card. Such a card also takes the screen's updates (below).
+With **Save logs** on (Settings, Advanced) each start's logs go to `/data/log/<start>/` (the 30 latest kept); off,
+the default, the screen keeps no logs at all, on the card or in RAM (each log a link to `/dev/null`: `nolog`), from
+the next start.
 
 ## Over-the-air updates
 
-Run from an SD card (the first install's step 1, without writing the NOR), the screen updates itself from this
-repository's releases: the dash's **Settings → Advanced → Software update**, or on its own with **Automatic updates**
-(internet only, never on the car's Wi-Fi: while the car's adapter is in range the screen stays on its network, so
-updates happen where it is not, or from Settings after picking another network). `dash-update` downloads a release's F133 bundle onto the card, checks its
-signature (the project's Ed25519 key, `board/f133/wattline-ota.pub.raw`) and puts its files there as `.try` files.
-Nothing restarts: at the next power-up U-Boot tries the new kernel once, with its new root (`/init` mounts that only on
-the tried boot), and `S98try` keeps them once the dash is on screen and the Wi-Fi works (the screen sees networks, or
-Android Auto's access point is up), with SSH listening if it is on with a key. The update replaces the card's `nor/`
-files too, so a later copy to the built-in flash writes the same version. A version that does not come up within 90 s
-is given up: the screen power-cycles into the old one, and automatic updates skip that version. A start that ends
-sooner (the power gone in the first minute and a half) is tried again at the next power-up, three starts at most.
+The screen updates itself from this repository's releases: the dash's **Settings → Advanced → Software update**, or
+on its own with **Automatic updates** (internet only, never on the car's Wi-Fi: while the car's adapter is in range
+the screen stays on its network, so updates happen where it is not, or from Settings after picking another network).
+`dash-update` downloads a release's F133 bundle onto the card, checks its signature (the project's Ed25519 key,
+`board/f133/wattline-ota.pub.raw`) and puts its files there as `.try` files. Nothing restarts: at the next power-up
+U-Boot tries the new kernel once, with its new root (`/init` mounts that only on the tried boot), and `S98try` keeps
+them once the dash is on screen and the Wi-Fi works (the screen sees networks, or Android Auto's access point is up),
+with SSH listening if it is on with a key. A version that does not come up within 90 s is given up: the screen
+power-cycles into the old one, and automatic updates skip that version. A start that ends sooner (the power gone in
+the first minute and a half) is tried again at the next power-up, three starts at most. An update never writes
+U-Boot.
 
-**A screen running from its NOR** updates the same way while a card is in it (any card whose fourth partition is the
-FAT one: the card it was installed from, or files only). The bundle's files go to the card as the `.try` files and
-`dash-update` marks the NOR's `try` partition; U-Boot, which starts the NOR's system otherwise, then tries the new
-version from the card, with the NOR's own `/data` (settings, networks, keys: `data=nor` in that boot's arguments). The
-NOR is not written until `S98try` has kept the version: then, from that same card boot, its root and kernel (the
-card's files checked against the download's checksums first) are written to the NOR and read back (`dash-update
-flash`, `nor.sh update`: about a minute, the dash running), the mark is cleared, and the next start is the NOR's
-again, on the new version. Until the mark is cleared the card starts the
-screen, so a write the power cuts goes on at the next start. A version given up never reaches the NOR: the screen
-power-cycles into the system there. A kept version that no longer starts from the card before it is on the NOR
-(its root damaged on the card since) is started once (`nor.once` on the card, removed by the last start script), then
-the NOR's system starts and gives it up. Without the card nothing changes: the NOR's system starts. An update never
-writes the boot loader, and this needs one that looks at the mark (`ota=flash` in a NOR boot's arguments: since
-0.1.2; an older one is replaced by copying a card install to the flash again, or with `flashcp` from a card boot):
-with an older one, or without a card, the settings page says that updates need the card install.
+`board/f133/mk-ota.sh` makes a release's bundle; each release carries the T113 Dash's bundle and both devices' card
+images as well (see the top README).
 
-`board/f133/mk-ota.sh` makes a release's bundle; each release carries the T113 Dash's bundle as well (see the top
-README).
-
-## Updates over SSH
-
-`tools/nor/norw.c` writes a partition of the NOR that the running system reads from. It works block by block: each
-block is compared, erased, written and read back. Build it static with the image's toolchain and run it from `/run`,
-so nothing it needs is read from the flash while it overwrites it.
-
-```
-# on the screen; images staged in /run (RAM)
-/etc/init.d/S05dash stop                    # frees the dash's memory: the image must fit in RAM with ~8 MB to spare
-/run/norw -n /run/kernel.itb /dev/mtd2 &&   # both images checked before either is written
-/run/norw -n /run/rootfs.sqfs /dev/mtd3 &&
-/run/norw /run/kernel.itb /dev/mtd2 &&      # the kernel partition (U-Boot's own partition stays read only)
-exec /run/norw -c /run/rootfs.sqfs /dev/mtd3
-```
-
-norw writes only a whole image to its own partition: a squashfs to the one named `rootfs`, a FIT to `kernel`, and
-no bigger than it. Anything else is refused, the whole chip (`mtd0`) and U-Boot's partition included. `-n` makes
-those checks and writes nothing, so a root that does not fit stops the update before the kernel is written (a new
-kernel with the old root leaves the screen without Wi-Fi or SSH after the power cycle).
-
-With `-c`, once every block matches, norw remounts `/data` read only and asks the MCU for a power cycle. A warm
-reboot is no use here: it leaves the Wi-Fi chip unusable until the power goes off. Check that the screen has enough
-free memory (`MemAvailable` at least the image's size plus 8 MB) before staging the image.
+Over SSH, a root of your own goes on p1 as `rootfs.sqfs.new`: `/init` puts it in place at the next start if it is a
+whole squashfs.
 
 ## Where a start's time goes
 
 Read off the screen itself: `/run/boot.times` has the moment each boot script starts (seconds since the kernel did; the
-dash is on the screen when `S05wifi` starts), `dmesg | grep init:` the first-stage init's steps, and `f133t=` in
-`/proc/cmdline` (a NOR boot) U-Boot's read of the kernel: its milliseconds, when it ended (milliseconds since the
-reset) and its clock.
+dash is on the screen when `S05wifi` starts), and `dmesg | grep init:` the first-stage init's steps.
 
 ## Notes on the hardware
 
@@ -165,7 +111,7 @@ reset) and its clock.
   firmware's is 528): measured on one board, with the reasons and the limits found, in the device tree
   (`board/f133/sun20i-d1s-srnubi-t313d.dts`) and U-Boot patches 0001 and 0002. Only on the first start since the power
   came on. A start after a reset (the watchdog's, a panic's, a `reboot`) runs at the stock clocks: the SPL leaves the
-  CPU's, sets the memory to 528 MHz and reads U-Boot from the flash at 24 MHz, and U-Boot takes the 1296 MHz operating
+  CPU's and sets the memory to 528 MHz, and U-Boot takes the 1296 MHz operating
   point out of the kernel's device tree; the power cycle such a start ends in (S03mcu: the Wi-Fi chip is lost with a
   reset) brings the higher clocks back. The memory is also at 528 MHz if it does not come up whole at 696. The
   watchdog runs from the SPL's first lines, through U-Boot and the kernel (16 s; the kernel feeds it): a hang at these

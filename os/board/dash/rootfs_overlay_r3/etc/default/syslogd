@@ -1,0 +1,4 @@
+# syslog (and the kernel's, by klogd) into /data/log/messages beside the other logs, not RAM: on the card with "Save
+# logs" on, else into /dev/null (S05data). Up to 256 KiB, then messages.0, one of them. Lines before S05data makes
+# /data/log are lost (busybox syslogd opens the file again each second it writes).
+SYSLOGD_ARGS="-O /data/log/messages -s 256 -b 1"

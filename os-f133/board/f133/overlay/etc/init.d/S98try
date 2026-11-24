@@ -6,7 +6,7 @@
 #   the Wi-Fi chip working: the station sees networks (any: no saved one need be in range), or Android Auto's access
 #   point is up (/run/dash-aa: AA left on holds the radio, and the station stays off);
 #   SSH listening, when it is on with a key (/run/ssh-keys/authorized_keys): with no console, the way back in.
-# Kept: the .try files take the old ones' places, the root and the built-in flash's files first, then the device tree
+# Kept: the .try files take the old ones' places, the root first, then the device tree
 # and Image.try, the try's mark, last (a keep cut short leaves Image.try beside the new root: dash-update confirm puts
 # it in place).
 # Not all within 90 s: given up: try.failed on the card for dash-update (the version goes on its failed list),
@@ -40,13 +40,11 @@ start)
 			sleep 2; i=$((i + 1))
 		done
 		if [ -n "$good" ]; then
-			for f in rootfs.sqfs nor/kernel.itb nor/u-boot-sunxi-with-spl.bin; do [ -f $C/$f.try ] && mv $C/$f.try $C/$f; done
+			[ -f $C/rootfs.sqfs.try ] && mv $C/rootfs.sqfs.try $C/rootfs.sqfs
 			sync
 			for f in f133.dtb Image; do [ -f $C/$f.try ] && mv $C/$f.try $C/$f; done
 			sync
-			# and a kernel.itb at the card's root: a card U-Boot from before (an update never rewrites the card's)
-			# boots it in place of Image, the old kernel under the root just kept
-			rm -f $C/try.boot $C/rootfs.try $C/kernel.itb
+			rm -f $C/try.boot $C/rootfs.try
 			sync
 			: > $R/run/try-judged   # (S01try lets the watchdog go)
 			echo "<5>S98try: the tried boot is kept" > $R/dev/kmsg

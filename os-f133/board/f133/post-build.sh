@@ -30,16 +30,19 @@ rm -f "$TARGET_DIR/etc/wpa_supplicant.sae"
 if grep -q 'SAE: Selecting supported ECC group' "$TARGET_DIR/usr/sbin/wpa_supplicant"; then
 	: > "$TARGET_DIR/etc/wpa_supplicant.sae"
 fi
-# nor.sh (tools/nor), for dash-nor: a card install copied to the built-in flash from the dash's settings
-install -D -m 0755 "$BR2_EXTERNAL_F133_PATH/tools/nor/nor.sh" "$TARGET_DIR/usr/sbin/nor.sh"
+# /data: a folder S01data mounts the card's second partition (ext4) on, no longer a link onto the card's FAT; nor.sh,
+# which wrote the built-in flash the screen no longer runs from (Buildroot never deletes a file from the target)
+[ -L "$TARGET_DIR/data" ] && rm -f "$TARGET_DIR/data"   # (the old link; a folder from an earlier build stays)
+rm -f "$TARGET_DIR/usr/sbin/nor.sh" "$TARGET_DIR/usr/sbin/dash-nor"
+mkdir -p "$TARGET_DIR/data"
 # /etc/wattline -> /data/wattline (the AA certificate) in the image itself: the dash starts before S06wattline, which
 # makes the same link, and looks for the certificate at its start
 ln -sfn /data/wattline "$TARGET_DIR/etc/wattline"
-# The dash in the image (/usr/lib/dash, package/dashapp): what S05dash runs when the card has none (a screen running
-# from the NOR), with the image's own settings
+# The dash in the image (/usr/lib/dash, package/dashapp): what S05dash runs unless the card has a development one,
+# with the image's own settings
 [ -x "$TARGET_DIR/usr/lib/dash/dash" ] && install -D -m 0644 "$B/dash/dash.conf" "$TARGET_DIR/usr/lib/dash/dash.conf"
-# Trims for the 16 MiB NOR: files nothing on the screen uses (Buildroot never deletes a file from the target, so also
-# the leftovers of packages turned off)
+# Trims: files nothing on the screen uses, less to read from the card and to hold in 64 MiB of RAM (Buildroot never
+# deletes a file from the target, so also the leftovers of packages turned off)
 T=$TARGET_DIR F=$T/lib/firmware/aic8800
 # the AIC8800D80 here is the "h" chip, rev u02 (its logs): its patch files and its fmac image with Bluetooth stay (the
 # driver is built with SDIO_BT, so aic_bsp_main.c loads fmacfwbt_8800d80_h_u02.bin for Wi-Fi and Bluetooth alike); the
@@ -52,6 +55,8 @@ rm -f $T/usr/bin/bluetoothctl $T/usr/bin/btmon
 grep -q '^BR2_PACKAGE_READLINE=y' "$BR2_CONFIG" || rm -f $T/usr/lib/libreadline.so* $T/usr/lib/libhistory.so*
 grep -q '^BR2_PACKAGE_NCURSES=y' "$BR2_CONFIG" || rm -f $T/usr/lib/libncurses.so* $T/usr/lib/libform.so* \
 	$T/usr/lib/libmenu.so* $T/usr/lib/libpanel.so*
+# dosfstools' programs (/init links its own fsck.fat: build.sh)
+grep -q '^BR2_PACKAGE_DOSFSTOOLS=y' "$BR2_CONFIG" || rm -f $T/sbin/fsck.fat $T/sbin/fsck.vfat $T/sbin/fsck.msdos $T/sbin/dosfsck
 # curl and the CA bundle once nothing selects them
 grep -q '^BR2_PACKAGE_LIBCURL=y' "$BR2_CONFIG" || rm -f $T/usr/bin/curl $T/usr/lib/libcurl.so*
 grep -q '^BR2_PACKAGE_CA_CERTIFICATES=y' "$BR2_CONFIG" || rm -rf $T/etc/ssl/certs $T/usr/share/ca-certificates

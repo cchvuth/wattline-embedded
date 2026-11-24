@@ -17,11 +17,10 @@ BLE_DL := 1
 # the receiver's build has it); each frame from the panel's vertical blank, rotated into the framebuffer by the G2D's
 # rotation unit (the OS's g2drot module), else by the CPU in tiles (DASH_FB_ROT: port/linux/fb_rot.c; LVGL's own rotate
 # took ~70 ms a scrolled frame on the C906); draw buffers of 120 panel rows (DASH_FB_ROWS: 2 x 338 KiB of the module's
-# CMA with the unit, else LVGL's one); no drive recordings (DASH_NO_RECORD: no room in the 512 KiB data partition);
-# software updates only with the card install (dash-update says so from the NOR); a restart is the power MCU's power
-# cycle (S03mcu: a warm reboot loses the Wi-Fi chip).
+# CMA with the unit, else LVGL's one); a restart is the power MCU's power cycle (S03mcu: a warm reboot loses the Wi-Fi
+# chip).
 DEVICE_DEFS := -DDASH_PHONE_LAYOUT=1 -DPJ_PANEL_H=720 -DPJ_RGN_X=0 -DPJ_RGN_Y=180 -DPJ_RGN_W=960 -DPJ_RGN_H=540 \
-  -DDASH_VSYNC=1 -DDASH_FB_ROT=1 -DDASH_FB_ROWS=120 -DDASH_NO_RECORD=1 \
+  -DDASH_VSYNC=1 -DDASH_FB_ROT=1 -DDASH_FB_ROWS=120 \
   -DDASH_REBOOT='"/etc/init.d/S03mcu"' -DDASH_REBOOT_ARG='"power-cycle"' \
   -DDASH_RESTART_NOTE='"The screen goes dark for about a minute (its power cut and restored), then starts again; settings and pairings stay"'
 UI_GEN := ui/gen/f133

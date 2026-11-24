@@ -10,7 +10,7 @@ mkdir -p /data/wattline
 # aa certcheck: 1 self-signed (a property of the certificate: set aside, renamed), 2 its key missing / another's /
 # passphrase-protected, 3 no readable certificate (perhaps a read error, or a version that cannot load it: files kept,
 # the button only hidden for this start); other codes (aa cannot run) prove nothing
-# In the background: aa loads OpenSSL from the flash (~2.4 s cold), beside the Wi-Fi driver's load (S05wifi), so
+# In the background: aa loads OpenSSL from the card (~2.4 s cold), beside the Wi-Fi driver's load (S05wifi), so
 # wpa_supplicant finds it loaded when the join starts (S45wifi-auto); the dash, up already (S05dash), looks for the
 # certificate and /run/dash-aa-unusable at each screen update.
 rm -f /run/dash-aa-unusable
@@ -26,8 +26,8 @@ rm -f /run/dash-aa-unusable
 ) &
 # BlueZ's own files stay in RAM (/var/lib/bluetooth, in the root's overlay): nothing of them needs keeping on this
 # screen (the Commander's link does not bond and keeps its identity in /data itself; Android Auto's pairings are the
-# MCU's). On /data BlueZ's cache of every named device it ever heard (a car park's) filled the NOR's 512 KiB until
-# settings could not be saved; and a card's FAT cannot hold its folders at all (a ":" in their names).
+# MCU's). On /data BlueZ's cache of every named device it ever heard (a car park's) only grows: it filled the 512 KiB
+# /data of the flash this screen once ran from until settings could not be saved.
 rm -rf /data/bluetooth
 mount -t tmpfs -o size=256k,mode=700 tmpfs /var/lib/bluetooth   # (bounded there too: 64 MiB of RAM)
 exit 0

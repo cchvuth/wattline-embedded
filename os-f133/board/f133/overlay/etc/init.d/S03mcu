@@ -6,15 +6,15 @@
 # B0 [CE 00 00 00 00] releases the hold: the MCU then cuts the power ~40 s later and restores it ~3 s after, a real
 # power cycle (mcud sends it on SIGUSR1, and exits). A warm reset (the watchdog, a panic) leaves the Wi-Fi chip unusable
 # until one, so a boot that finds no Wi-Fi chip on mmc1 releases the hold to get it: at most 3 times in a row
-# (/mnt/sd/mcu-cycles, else /data's; a boot with the chip clears the count), then it stays up without Wi-Fi.
+# (/data/mcu-cycles; a boot with the chip clears the count), then it stays up without Wi-Fi.
 #   S03mcu power-cycle    the same on purpose (the release from mcud, or straight to the line without it)
 # mcud's end is the hold's, and so the power's: it is started again 2 s after it dies (a crash, a failed poll), and the
 # OOM killer never picks it (oom_score_adj -1000). Not after an exit 0 (asked to go: SIGTERM, or SIGUSR1 once the
-# release is sent) nor a SIGKILL (the release's fallback here and in norw; never the OOM killer's at -1000).
+# release is sent) nor a SIGKILL (the release's fallback here; never the OOM killer's at -1000).
 P=/var/run/mcud.pid
 S=/var/run/mcud-supervise.pid
-C=/mnt/sd/mcu-cycles
-grep -q " /mnt/sd " /proc/mounts || C=/data/mcu-cycles   # no card (running from the NOR): the NOR's /data
+C=/data/mcu-cycles
+grep -q '^[^ ]* /data ext4 ' /proc/mounts || C=/mnt/sd/mcu-cycles   # /data in RAM: the count kept on the card, or 3 in a row would never end
 release() { printf '\002\200\260\005\316\000\000\000\000\373' > /dev/ttyS1; }
 # the release: SIGUSR1 to mcud (it sends it, whole, and exits: no hold after it); straight to the line if mcud is not
 # running or does not go within 2 s. Its supervisor first, so no mcud starts again after it.

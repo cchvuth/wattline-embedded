@@ -7,7 +7,7 @@ start)
 	# redirection fails, and this is the one place the driver is loaded: no Wi-Fi for the drive)
 	L=/var/log/sd; ( : >> $L/wifi.txt ) 2>/dev/null || L=/run
 	# in the background, as soon as the dash is up (S05dash waits for it; beside the dash's start, the two slowed each
-	# other on the one flash): the driver and the chip's firmware take ~5 s, and what needs wlan0 waits for it
+	# other on the one card): the driver and the chip's firmware take ~5 s, and what needs wlan0 waits for it
 	# (S45wifi-auto, dash-aa). The only modules the boot loads (S10mdev has no coldplug here). It was S40wifi, after the
 	# daemons: the Wi-Fi came ~10 s later.
 	{

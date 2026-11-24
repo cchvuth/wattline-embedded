@@ -42,6 +42,7 @@ JOIN=$2   # start SSID: join that network now (the settings' Connect): it goes f
 		[ -n "$found" ] && set -- "$JS" "$JK" "$@"
 	fi
 	# the pairs on wifi-connect's stdin, never in its arguments (ps shows those); printf is the shell's own: no process
-	while [ $# -gt 1 ]; do printf '%s\n%s\n' "$1" "$2"; shift 2; done | wifi-connect - > /run/wifi-auto.log 2>&1
+	L=/data/log; ( : >> $L/wifi-auto.log ) 2>/dev/null || L=/run   # (/data read-only: the join all the same)
+	while [ $# -gt 1 ]; do printf '%s\n%s\n' "$1" "$2"; shift 2; done | wifi-connect - > $L/wifi-auto.log 2>&1
 ) &
 exit 0

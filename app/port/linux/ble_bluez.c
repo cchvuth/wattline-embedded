@@ -67,11 +67,12 @@ typedef struct {
 
 static GVariant *call(bz *t, const char *path, const char *iface, const char *method, GVariant *args,
                       const char *ret, int ms) {
+  static unsigned fails;   // in a row: a working controller's failures each said (a call that answers resets it)
   GError *e = NULL;
   GVariant *r = g_dbus_connection_call_sync(t->bus, BLUEZ, path, iface, method, args, ret ? G_VARIANT_TYPE(ret) : NULL,
                                             G_DBUS_CALL_FLAGS_NONE, ms, NULL, &e);
-  if (!r) {   // said a few times, then one in a hundred: with no controller every 5 s look fails, for as long as it is up
-    static unsigned fails;
+  if (r) fails = 0;
+  else {   // said a few times, then one in a hundred: with no controller every 5 s look fails, for as long as it is up
     if (fails++ < 10 || fails % 100 == 0) fprintf(stderr, "ble: %s %s: %s (failure %u)\n", method, path, e->message, fails);
     g_error_free(e);
   }
@@ -321,13 +322,21 @@ static int io_connect(void *ctx, const char *addr) {
   forget_link(t);
   int n = snprintf(t->dev, sizeof t->dev, "%s/dev_%s", t->adapter, addr);
   for (char *c = t->dev + n - strlen(addr); *c; c++) if (*c == ':') *c = '_';
-  int64_t end = now_ms() + 15000;
-  if (ok(call(t, t->dev, DEV_IF, "Connect", NULL, NULL, 15000))) return -1;
+  // each step's time in the log: a link that sits in LINK and fails says where (connect, services, names)
+  int64_t t0 = now_ms(), end = t0 + 15000;
+  if (ok(call(t, t->dev, DEV_IF, "Connect", NULL, NULL, 15000)))
+    return fprintf(stderr, "ble: connect failed after %lld ms\n", (long long)(now_ms() - t0)), -1;
+  int64_t t1 = now_ms();
   while (!prop_bool(t, t->dev, DEV_IF, "ServicesResolved")) {
-    if (now_ms() >= end || !prop_bool(t, t->dev, DEV_IF, "Connected")) return -1;
+    if (now_ms() >= end || !prop_bool(t, t->dev, DEV_IF, "Connected"))
+      return fprintf(stderr, "ble: connected in %lld ms, services not resolved after %lld ms (%s)\n", (long long)(t1 - t0),
+                     (long long)(now_ms() - t1), now_ms() >= end ? "timed out" : "link dropped"), -1;
     g_usleep(100 * 1000);
   }
+  int64_t t2 = now_ms();
   int has = map_chars(t);
+  fprintf(stderr, "ble: connected in %lld ms, services %lld ms, names %lld ms (has %d)\n", (long long)(t1 - t0),
+          (long long)(t2 - t1), (long long)(now_ms() - t2), has);
   if (has < 0) return -1;
   for (int k = 0; k < 3 && !t->mtu; k++) {
     GVariant *v = t->chr[k][0] ? prop(t, t->chr[k], CHR_IF, "MTU") : NULL;

@@ -1,12 +1,13 @@
 #!/bin/sh
-# The card's F133 partition (p4, FAT): the logs, the Wi-Fi settings and the SSH key. No console is wired out, so
-# everything worth knowing goes to log/<boot>/ there, every 5 s.
-# If the partition can't be mounted, the backlight (PG15) flashes at 4 Hz for good. Booted from the SPI NOR
-# (root=mtd:), the card is optional: no wait for one (a card that is in was found seconds before this runs), and
-# without it the logs stay in RAM (/tmp/log).
-# The card's room for logs is capped: the 30 latest boots' folders are kept, and in the running boot's the files
-# others append to (dash.out, wpa.txt, wifi.txt, mcu.txt) are copied to <name>.1 and emptied once past 1 MiB. syslog has its own
-# rotation (/etc/default/syslogd), the dash's log (/data/log) and drive recordings (/data/rec) theirs (dash.conf).
+# The logs and the swap file, once /data is there (S01data: the card's ext4 partition). No console is wired out, so
+# with "Save logs" on (Settings, Advanced; save_logs in /data/settings.conf) everything worth knowing goes to
+# /data/log/<boot>/ (/var/log/sd links there), every 5 s; the 30 latest boots' folders are kept, and in the running
+# boot's the files others append to (dash.out, wpa.txt, wifi.txt, mcu.txt) are copied to <name>.1 and emptied once past
+# 1 MiB. syslog has its own rotation (/etc/default/syslogd), the dash's log and drive recordings (/data/rec) theirs
+# (dash.conf). Off, the default: no logs at all, on the card or in RAM: /var/log/sd and /data/log are nolog's read-only
+# folder of links to /dev/null, no boot folder, no kernel log copy, no state every 5 s. A change counts from the next
+# start. The card's first partition (FAT: the system) is the initramfs's, checked and repaired before it is mounted
+# (/init's card_fsck); should it be gone, the backlight (PG15) flashes at 4 Hz for good.
 bl() {
 	v=$(devmem 0x02000130 32 2>/dev/null) && [ -n "$v" ] || return 0
 	if [ "$1" = on ]; then devmem 0x02000130 32 $((v | 0x8000)); else devmem 0x02000130 32 $((v & ~0x8000)); fi
@@ -15,42 +16,37 @@ sz() { set -- $(ls -ln "$1" 2>/dev/null) 0 0 0 0 0; echo $5; }   # a file's size
 
 case "$1" in
 start)
-	mkdir -p /mnt/sd
-	nor=; t=20
-	grep -q "root=mtd:" /proc/cmdline && nor=1 t=0
-	for i in $(seq 1 $t); do [ -b /dev/mmcblk0p4 ] && break; sleep 1; done
-	# the initramfs mounted it already (the root filesystem is rootfs.sqfs on it). Here only on a NOR boot, with files
-	# on the card (logs, a swapfile, an addition's). Not synchronous: that cost the boot 1.6 s (the dash's and the
-	# scripts' log lines each waited for the card); the loop below syncs it every 5 s, as the power just goes
-	if ! grep -q " /mnt/sd " /proc/mounts && ! mount -t vfat -o noatime,fmask=0077,dmask=0077 /dev/mmcblk0p4 /mnt/sd 2>/dev/null; then
-		if [ -n "$nor" ]; then
-			mkdir -p /tmp/log && ln -sfn /tmp/log /var/log/sd
-			exit 0
-		fi
+	# (only onto the card's ext4 /data: in RAM they would fill the 64 MiB, so none then)
+	logs=; grep -qE '^save_logs *= *1' /data/settings.conf 2>/dev/null && grep -q '^[^ ]* /data ext4 ' /proc/mounts && logs=1
+	if [ -z "$logs" ]; then
+		nolog /run/nolog && ln -sfn /run/nolog /var/log/sd
+		mkdir -p /data/log 2>/dev/null && mount -o bind /run/nolog /data/log   # (the dash's, Android Auto's)
+	fi
+	if ! grep -q " /mnt/sd " /proc/mounts; then
 		(while :; do bl off; usleep 125000; bl on; usleep 125000; done) &
 		exit 0
 	fi
-	n=$(cat /mnt/sd/bootcount 2>/dev/null)
-	case $n in ''|0?*|*[!0-9]*) n=0 ;; esac   # none, or garbage (a power cut mid-write): 0, not an arithmetic error
+	# a swap file on /data, if one was made there (dd, 64 MiB): a safety net for memory spikes on 64 MiB, not working
+	# memory; swappiness 10 drops cached files before paging anything out (none while /data is in RAM)
+	if [ -f /data/swapfile ] && grep -q " /data ext4 " /proc/mounts; then
+		swapon /data/swapfile 2>/dev/null || { mkswap /data/swapfile >/dev/null && swapon /data/swapfile; }
+		echo 10 > /proc/sys/vm/swappiness
+	fi
+	[ -n "$logs" ] || exit 0
+	mkdir -p /data/log
+	n=$(cat /data/log/bootcount 2>/dev/null)
+	case $n in ''|0?*|*[!0-9]*) n=0 ;; esac   # none, or garbage: 0, not an arithmetic error
 	n=$((n + 1))
-	echo $n > /mnt/sd/bootcount
-	L=/mnt/sd/log/$n
+	echo $n > /data/log/bootcount
+	L=/data/log/$n
 	mkdir -p $L
 	ln -sfn $L /var/log/sd
-	for d in /mnt/sd/log/*; do   # older than the 30 latest boots: gone
+	for d in /data/log/*; do   # older than the 30 latest boots: gone
 		b=${d##*/}; case $b in ''|*[!0-9]*) continue ;; esac
 		[ $b -le $((n - 30)) ] && rm -rf "$d"
 	done
-	# a swap file on the card, if one was made there (dd, 64 MiB): a safety net for memory spikes on 64 MiB, not working
-	# memory; swappiness 10 drops cached files before paging anything out
-	if [ -f /mnt/sd/swapfile ]; then
-		swapon /mnt/sd/swapfile 2>/dev/null || { mkswap /mnt/sd/swapfile >/dev/null && swapon /mnt/sd/swapfile; }
-		echo 10 > /proc/sys/vm/swappiness
-	fi
-	# The kernel's log: each record once, appended as it comes (/dev/kmsg). Rewritten whole every 5 s, as it and the
-	# state were, each pass freed and took clusters again on the FAT that also holds the system's files (and an
-	# addition's): a power cut in one of those updates can cross-link them, and the power is always just cut. The
-	# state (memory, addresses, processes) is in RAM, /run/state.txt, every 5 s, and on the card once a minute.
+	# The kernel's log: each record once, appended as it comes (/dev/kmsg). The state (memory, addresses, processes)
+	# is in RAM, /run/state.txt, every 5 s, and in the log folder once a minute.
 	# (one open file for every cat: after an overrun the next goes on from where the log still holds, not from its start)
 	( exec 3< /dev/kmsg; while :; do cat <&3; sleep 1; done >> $L/dmesg.txt 2>/dev/null ) &
 	(

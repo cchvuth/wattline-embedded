@@ -447,6 +447,7 @@ static struct {
 
 /* the route column */
 static lv_obj_t *dest_card, *dest_head, *dest_pin, *dest_name, *dest_row[6];
+static lv_obj_t *no_route; /* basic's route card with no route: the app's NO ROUTE (main.dart _Nav, tall) */
 
 /* the ring */
 static lv_obj_t *ring, *speed_l, *unit_l, *gear_l, *cue, *limit_sign, *limit_l, *rear_v, *rear_u, *front_v, *front_u;
@@ -879,6 +880,7 @@ static void dial_dirty(const dash_state_t *s)
 #define TRAIL 10
 static float trail[TRAIL][2];
 static int trail_n;
+static bool g_skel; /* basic's drive card with no link: the circles alone */
 static void gball_draw(lv_event_t *e)
 {
 	lv_layer_t *layer = lv_event_get_layer(e);
@@ -896,6 +898,7 @@ static void gball_draw(lv_event_t *e)
 	float tw = px(fmaxf(1.5f, r / px(1) * 0.035f));
 	d.width = ri(tw), d.radius = ri(r + tw / 2), d.color = rgb(W24), d.opa = opa(W24);
 	lv_draw_arc(layer, &d);
+	if (g_skel) return; /* the skeleton: no reach, no dot */
 	/* The reach: a quarter ellipse between each pair of peaks, kAccent at 40 %, filled row by row. */
 	float b = fminf(1, fmaxf(0, s->g_peak_brake)) * r, ac = fminf(1, fmaxf(0, s->g_peak_accel)) * r,
 	      l = fminf(1, fmaxf(0, s->g_peak_lat)) * r;
@@ -1381,6 +1384,11 @@ void dash_ui_init(lv_obj_t *scr)
 	if (G.phone) fill(dest_card, 0x24FFFFFF); /* the app's bar: white at 0.14 */
 	else border(dest_card, 0x30FFFFFF, 1);
 	lv_obj_set_style_radius(dest_card, ri(PN(12)), 0);
+	no_route = label(root, FS(REGULAR, 14, UI_S_NAV), W38);
+	lv_obj_set_style_text_letter_space(no_route, ri(PN(2)), 0);
+	lv_label_set_text(no_route, "NO ROUTE");
+	lv_obj_set_style_text_align(no_route, LV_TEXT_ALIGN_CENTER, 0);
+	show(no_route, false);
 	dest_head = label(dest_card, FS(REGULAR, 10, UI_S_NAV), W70);
 	lv_obj_set_style_text_letter_space(dest_head, ri(PN(1.5)), 0);
 	lv_label_set_text(dest_head, "DESTINATION");
@@ -2556,13 +2564,21 @@ static void set_g(const dash_state_t *s, float cx)
 static bool g_figures(const dash_state_t *s, bool card)
 {
 	bool on = card ? s->wifi_live : s->wifi_live && !s->charging && !s->plugged && s->g_shown; /* in P too: the last drive's peak; not plugged in (the card's column) */
-	show(gball, on);
-	show(g_val, on);
-	show(g_peak, on);
-	if (!on) {
-		trail_n = 0;
-		return false;
+	bool skel = card && !s->live; /* basic's drive card with no link at all: its skeleton, not an empty card (Bluetooth
+				      * alone has the brakes and the pedal bar there) */
+	if (skel != g_skel) g_skel = skel, lv_obj_invalidate(gball);
+	show(gball, on || skel);
+	show(g_val, on || skel);
+	show(g_peak, on || skel);
+	if (!on) trail_n = 0;
+	if (skel) {
+		part_t p[2] = {TXT(FS(REGULAR, G.phone ? 20 : 16, UI_S_FIG), WHITE, "\xe2\x80\x94"), /* the figures' dash */
+			       TXT(FS(REGULAR, G.phone ? 14 : 12, UI_S_FIG), W70, " g")};
+		run_set(g_val, p, 2);
+		set_text(g_peak, "PEAK \xe2\x80\x94");
+		return true;
 	}
+	if (!on) return false;
 	float gx = isnan(s->g_lat) ? 0 : s->g_lat, gy = isnan(s->g_long) ? 0 : s->g_long;
 	if (trail_n == TRAIL) memmove(trail, trail + 1, sizeof trail[0] * (TRAIL - 1)), trail_n--;
 	trail[trail_n][0] = gx, trail[trail_n][1] = gy, trail_n++;
@@ -2688,7 +2704,7 @@ static char shown_nearby[DASH_NEARBY][33];     /* the Nearby rows as drawn (a ta
 static lv_obj_t *tip, *snack, *snack_wheel, *snack_text;
 static lv_obj_t *project, *project_video, *pj_hint, *pj_gear, *pj_bar, *pj_bar_fill, *pj_soc, *pj_cold, *pj_range,
 	*pj_belt, *pj_grip, *pj_info, *pj_exit;
-static lv_obj_t *panel, *panel_msg, *settings, *set_dlg, *set_status, *set_step, *set_wheel, *set_sw[13], *set_car_btn[6], *set_slider, *set_bl_note, *set_offset, *set_offset_note, *net_list, *near_list, *net_edit, *net_ta[2],
+static lv_obj_t *panel, *panel_msg, *settings, *set_dlg, *set_status, *set_step, *set_wheel, *set_sw[14], *set_car_btn[6], *set_slider, *set_bl_note, *set_offset, *set_offset_note, *net_list, *near_list, *net_edit, *net_ta[2],
 	*net_kb, *net_err, *set_bt_line, *set_wifi_line, *set_net_line, *set_car_ask, *set_tz_btn, *set_host_l;
 enum { HOST_SLOT = -2 }; /* edit_slot: the editor holds the Panda's address, not a network */
 static lv_timer_t *tip_timer;
@@ -3178,7 +3194,6 @@ typedef struct {
 	const char *again, *done; /* the second tap's asking and its answer (NULL: forgetting's) */
 } forget_t;
 static forget_t fg_cmdr = {NULL, "Forget Commander", 0, NULL, NULL}, fg_aa = {NULL, "Forget phones", 0, NULL, NULL},
-		fg_nor = {NULL, "Copy to flash", 0, "Tap again to copy", "Copying"},
 		fg_restart = {NULL, "Restart", 0, "Tap again to restart", "Restarting"};
 static void forget_label(forget_t *f, const char *t, uint32_t c)
 {
@@ -3349,6 +3364,7 @@ static void switch_changed(lv_event_t *e)
 	else if (i == 10) ST.unit_f = on;
 	else if (i == 11) ST.unit_psi = on;
 	else if (i == 12) ST.show_fps = on, fps_show();
+	else if (i == 13) ST.save_logs = on;
 	else ST.follow_car = on, slider_look();
 	save(DASH_SETTINGS_SAVE);
 }
@@ -3402,57 +3418,6 @@ static void ota_field(const char *txt, const char *key, char *out, size_t n)
 	if (p) for (p += strlen(key); *p && *p != '\n' && k + 1 < n; p++) out[k++] = *p;
 	out[k] = 0;
 }
-/* ---- the built-in flash (Advanced): a card install copied there (dash-nor, /run/dash-nor.status). Shown only while
- * the file says there is something to copy: the F133 screen run from its card, with its flash's files on it ---- */
-static lv_obj_t *set_nor_title, *set_nor_l;
-const char *dash_ui_nor_status = "/run/dash-nor.status";
-static uint32_t nor_tapped; /* when Copy was tapped, until the status file answers */
-static void nor_tap(lv_event_t *e)
-{
-	(void)e;
-	if (!forget_second(&fg_nor)) return;
-	save(DASH_NOR_COPY);
-	nor_tapped = lv_tick_get() | 1;
-	set_text(set_nor_l, "Copying: starting...");
-	show_in_page(fg_nor.btn, false); /* back if dash-nor reports an error */
-}
-static void nor_refresh(bool force)
-{
-	static uint32_t last;
-	static char prev[256];
-	if (!set_nor_l || (!force && lv_tick_elaps(last) < 1000)) return;
-	last = lv_tick_get();
-	char txt[256] = "", st[16], note[96];
-	FILE *f = fopen(dash_ui_nor_status, "r");
-	bool on = f != NULL;
-	if (f) { txt[fread(txt, 1, sizeof txt - 1, f)] = 0; fclose(f); }
-	/* dash-nor writes it anew each time (a rename): a new inode is an answer even with the same words (a copy that
-	 * failed the same way again); no answer within a minute (dash-nor never started), the button again */
-	struct stat sb;
-	static ino_t prev_ino;
-	ino_t ino = stat(dash_ui_nor_status, &sb) == 0 ? sb.st_ino : 0;
-	if (nor_tapped && lv_tick_elaps(nor_tapped) > 60000) force = true;
-	if (!force && !strcmp(txt, prev) && ino == prev_ino) return;
-	nor_tapped = 0;
-	snprintf(prev, sizeof prev, "%s", txt);
-	prev_ino = ino;
-	lv_obj_t *row = lv_obj_get_parent(set_nor_l);
-	show_in_page(set_nor_title, on), show_in_page(row, on);
-	if (!on) return;
-	ota_field(txt, "state=", st, sizeof st), ota_field(txt, "note=", note, sizeof note);
-	bool btn = true;
-	if (!strcmp(st, "stock"))
-		set_text(set_nor_l, "Copy this card's system to the screen's built-in flash, to start without the card. The stock "
-				     "firmware is saved to the card first");
-	else if (!strcmp(st, "copying")) set_text(set_nor_l, "Copying: %s...", note), btn = false;
-	else if (!strcmp(st, "done")) set_text(set_nor_l, "Copied: without the card, the screen starts from its built-in flash"), btn = false;
-	else if (!strcmp(st, "error")) set_text(set_nor_l, "Copy failed: %s", note);
-	else set_text(set_nor_l, "Copy this card's system to the screen's built-in flash, to start without the card");
-	if (btn) forget_reset(&fg_nor, true);
-	show_in_page(fg_nor.btn, btn);
-	lv_obj_update_layout(fg_nor.btn);
-	width_in_page(set_nor_l, ri(lv_obj_get_width(row) - (btn ? lv_obj_get_width(fg_nor.btn) + PB(12) : 0)));
-}
 static void ota_refresh(bool force)
 {
 	static uint32_t last;
@@ -3490,7 +3455,6 @@ static void ota_refresh(bool force)
 	else if (!strcmp(st, "current")) set_text(set_ota_l, "%s: up to date", vs);
 	else if (!strcmp(st, "offline")) set_text(set_ota_l, "%s. No internet now", vs);
 	else if (!strcmp(st, "skipped")) set_text(set_ota_l, "%s. On the car's WiFi: updates need internet", vs);
-	else if (!strcmp(st, "card-only")) set_text(set_ota_l, "%s. Updates need the SD card install", vs), busy = true; /* the F133 from its NOR */
 	else if (!strcmp(st, "ok") && note[0]) set_text(set_ota_l, "%s: %s", vs, note);
 	else if (!strcmp(st, "rolled-back")) set_text(set_ota_l, "The update did not start. %s", vs);
 	else if (!strcmp(st, "failed-before")) set_text(set_ota_l, "%s. Not installed again on its own: %s", vs, note); /* after a rollback */
@@ -3960,9 +3924,8 @@ static void settings_build(void)
 	switch_note_row(c, "SSH", "Needs a paired key, or one on the card", 2, aw);
 	button_row(c, text_block(c, "Pair a computer", "The " UNIT " shows a page and a code: that computer adds its key, within 5 minutes"),
 		   "Pair", pair_tap, aw); /* only from this tap: someone at the Dash */
-#ifndef DASH_NO_RECORD /* a profile with no room for recordings (the F133's data partition: 512 KiB) has no switch */
 	switch_note_row(c, "Record drives", "CAN and Commander data to the card, for replays at the desk", 4, aw);
-#endif
+	switch_note_row(c, "Save logs", "To the card, for reading a drive afterwards. Off: no logs at all, sparing the card. From the next start", 13, aw);
 	set_host_l = label(c, FS(REGULAR, 14, UI_S_PANEL), M3_ON_SURFACE); /* the Panda's address, its editor beside it */
 	lv_label_set_long_mode(set_host_l, LV_LABEL_LONG_MODE_DOTS);
 	button_row(c, set_host_l, "Panda host", host_tap, aw);
@@ -3980,12 +3943,6 @@ static void settings_build(void)
 	lv_label_set_long_mode(set_ota_l, LV_LABEL_LONG_MODE_WRAP);
 	set_ota_btn = button_row(c, set_ota_l, "Check for updates", ota_tap, aw);
 	ota_refresh(true);
-	set_nor_title = group_title(c, "Built-in flash");
-	lv_obj_set_style_margin_top(set_nor_title, ri(PB(14)), 0);
-	set_nor_l = label(c, FS(REGULAR, 14, UI_S_PANEL), M3_ON_SURFACE); /* what dash-nor says */
-	lv_label_set_long_mode(set_nor_l, LV_LABEL_LONG_MODE_WRAP);
-	fg_nor.btn = button_row(c, set_nor_l, "Copy to flash", nor_tap, aw);
-	nor_refresh(true);
 	lv_obj_set_style_margin_top(group_title(c, "Restart"), ri(PB(14)), 0);
 	lv_obj_t *rw = text_block(c, "Restart the screen", DASH_RESTART_NOTE);
 	fg_restart.btn = button_row(c, rw, "Restart", restart_tap, aw);
@@ -4369,9 +4326,10 @@ void dash_ui_show(int v)
 		lv_obj_set_state(set_sw[7], LV_STATE_CHECKED, ST.ota_auto);
 		lv_obj_set_state(set_sw[8], LV_STATE_CHECKED, ST.aa_low_res);
 		lv_obj_set_state(set_sw[12], LV_STATE_CHECKED, ST.show_fps);
+		lv_obj_set_state(set_sw[13], LV_STATE_CHECKED, ST.save_logs);
 		/* the units as shown now, until switched (panda.dart's toggles) */
 		units_sw(&S);
-		forget_reset(&fg_cmdr, true), forget_reset(&fg_aa, true), forget_reset(&fg_nor, true), forget_reset(&fg_restart, true);
+		forget_reset(&fg_cmdr, true), forget_reset(&fg_aa, true), forget_reset(&fg_restart, true);
 		for (int i = 0; i < 6; i++) { /* the chosen car filled, as a selected chip */
 			fill(set_car_btn[i], i == ST.car ? 0xFF4A4458u : 0x00000000u);
 			border(set_car_btn[i], i == ST.car ? 0xFFD0BCFFu : W70, PB(1));
@@ -4833,7 +4791,7 @@ static void set_touch(const dash_state_t *s)
 		lv_slider_set_value(set_slider, s->backlight_pct, LV_ANIM_OFF); /* the live value, greyed */
 	if (view == DASH_VIEW_SETTINGS) {
 		units_sw(s);
-		ota_refresh(false), nor_refresh(false);
+		ota_refresh(false);
 		uint32_t c;
 		const char *w = bt_word(s->bt, &c, NULL);
 		set_text(set_status, "Commander: %s", w);
@@ -4841,7 +4799,7 @@ static void set_touch(const dash_state_t *s)
 		set_text(set_bt_line, "%s", s->bt_line);
 		if (set_wifi_line) set_text(set_wifi_line, "%s", s->wifi_line);
 		/* a second tap's window over: the label again */
-		forget_reset(&fg_cmdr, false), forget_reset(&fg_aa, false), forget_reset(&fg_nor, false), forget_reset(&fg_restart, false);
+		forget_reset(&fg_cmdr, false), forget_reset(&fg_aa, false), forget_reset(&fg_restart, false);
 		if (set_guard && lv_obj_is_clickable(set_guard) && !FRESH(set_back_at, 500)) lv_obj_set_clickable(set_guard, false);
 		net_delete_reset(false);
 		bool join_over = joining[0] && lv_tick_elaps(joining_at) >= 20000; /* a join that did not take: Connect again */
@@ -4870,6 +4828,7 @@ static void cards_parts(bool basic)
 	if (!on[DASH_CARD_CAR]) show(cab.frame, false);
 	show(lights_row, on[DASH_CARD_CAR] || on[DASH_CARD_G]);
 	if (!on[DASH_CARD_ROUTE]) show(dest_card, false);
+	show(no_route, false); /* (basic's route card shows it again: card_set) */
 	if (!on[DASH_CARD_G]) {
 		lv_obj_t *g[] = {gball, g_val, g_peak, brake_temps, pedal, pedal_name, pedal_val, brake_car};
 		for (size_t i = 0; i < sizeof g / sizeof g[0]; i++) show(g[i], false);
@@ -4974,9 +4933,12 @@ static void card_set(const dash_state_t *s, int c, float cx, float w)
 			lv_obj_set_pos(chips[k].box, ri(x), ri(y));
 		}
 		break;
-	case DASH_CARD_ROUTE:
+	case DASH_CARD_ROUTE: /* no route: the app's NO ROUTE in the card's middle, not an empty card */
 		show(dest_card, s->route);
+		show(no_route, !s->route);
 		if (s->route) set_route(s, cx - G.card_w / 2, G.H / 2);
+		else place(no_route, cx - w / 2, G.H / 2 - lv_font_get_line_height(lv_obj_get_style_text_font(no_route, 0)) / 2.0f, w,
+			   lv_font_get_line_height(lv_obj_get_style_text_font(no_route, 0)));
 		break;
 	case DASH_CARD_G: { /* the app's drive card: the ball's square as big as the card leaves, the lamps 4 dp over it, the
 			     * ball 5 dp in it (its circle the power card's), the figures 6 dp under it; Bluetooth alone the

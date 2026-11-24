@@ -18,11 +18,9 @@ if [ "$1" = - ]; then
 	while IFS= read -r S || [ -n "$S" ]; do K=; IFS= read -r K; set -- "$@" "$S" "$K"; done
 fi
 C=${WIFI_CONF:-/run/wpa_supplicant.conf} CARD=${WIFI_CARD_CONF-/mnt/sd/wpa_supplicant.conf}
-# no card (running from the NOR): the copy nor.sh seed put in /data
-[ -n "${WIFI_CARD_CONF+x}" ] || [ -f "$CARD" ] || CARD=/data/wpa_supplicant.conf
 KM="WPA-PSK WPA-PSK-SHA256"
 # SAE when this wpa_supplicant has sae.c built in: post-build looked once (/etc/wpa_supplicant.sae). A grep of the 1.9 MB
-# binary here read all of it from the flash, ~2.5 s of the boot's Wi-Fi join.
+# binary here read all of it from the card, ~2.5 s of the boot's Wi-Fi join.
 [ -e /etc/wpa_supplicant.sae ] && KM="$KM SAE"
 umask 077
 {

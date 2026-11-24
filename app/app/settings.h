@@ -33,7 +33,6 @@ bool settings_aa_kept(void);
 void settings_aa_restore(void);   // dash-aa restore: as start, without the pairing window (nobody at the Dash tapped)
 void settings_aa_forget(void);          // dash-aa forget: the phones paired for Android Auto removed
 void settings_ota(const char *what);   // run dash-update <what> (check, auto) in the background
-void settings_nor(const char *what);   // run dash-nor <what> (copy) in the background
 void settings_reboot(void);            // restart the Dash (an armed update starts)
 extern bool settings_car_saved;   // settings.conf names the car (loaded or saved): else the first boot asks for it
 bool settings_apply_tz(const char *tz);   // TZ for localtime (the clocks); true if it changed

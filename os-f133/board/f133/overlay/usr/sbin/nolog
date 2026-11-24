@@ -1,0 +1,13 @@
+#!/bin/sh
+# nolog DIR: logs off (Settings, Advanced, "Save logs", the default): DIR becomes a read-only folder whose every log
+# name is a link to /dev/null, so the scripts and programs that write their logs there write nothing, to the card or
+# to RAM. A name not listed cannot be made there: every log the screens' scripts write is listed (checked by
+# os-f133/test/test_nolog.sh). The T113's and the F133's copies are the same file.
+N="dash.out dash.log messages bootcount dmesg.txt state.txt wifi.txt wpa.txt mcu.txt wifi-auto.log bt-firmware.log
+aa-ap.log aa-bt.log aa-hostapd.log aa-mcu.log aa-serve.log aa-udhcpd.log hook-extra-start.log hook-extra-stop.log
+spike-wifi.log spike-hostapd.log"
+D=${1:?usage: nolog DIR}
+grep -q " $D tmpfs ro" /proc/mounts && exit 0   # made already
+mkdir -p "$D" && mount -t tmpfs -o size=4k,mode=755 nolog "$D" || exit 1
+for n in $N; do ln -sf /dev/null "$D/$n"; done
+mount -o remount,ro "$D"

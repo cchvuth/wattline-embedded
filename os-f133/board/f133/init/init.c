@@ -1,20 +1,20 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * /init of the F133's initramfs, built into the kernel (board/f133/initramfs.list). The root filesystem is not held
- * in RAM (64 MiB, and it took 12 of them): it is rootfs.sqfs on the card's F133 partition (p4, FAT), read-only, under
+ * in RAM (64 MiB, and it took 12 of them): it is rootfs.sqfs on the card's first partition (FAT32), read-only, under
  * a tmpfs overlay that keeps whatever changes. A rootfs.sqfs.new left beside it (an update over SSH, written while
  * the old one is in use) takes its place first, if it is a whole squashfs (else it is removed: a copy cut short). A
  * rootfs.sqfs.try is mounted instead only with its kernel: on the one boot U-Boot tries Image.try ("try=kernel" in
  * the command line). The new root gets /.rootfs-tried, and rootfs.try on the card marks the try for an older
  * initramfs, which a fallback boot may run: it never tries the root on its own then. S98try renames it over
- * rootfs.sqfs once the screen works. The card stays mounted, at /mnt/sd. Messages go to the kernel log;
+ * rootfs.sqfs once the screen works. The card stays mounted, at /mnt/sd; /data is its second partition (ext4), mounted
+ * by S01data. The screen always starts from its card (the built-in flash is not used). Messages go to the kernel log;
  * a failure that ends the boot goes on the screen too.
  *
- * Booted from the SPI NOR, U-Boot passes root=mtd:rootfs: the root is the squashfs in the NOR's "rootfs" partition
- * (/dev/mtdblock<n>) under the same overlay, /data is the NOR's JFFS2 "data" partition, and the card is not needed
- * (S02sd mounts one if it is there). Updates are tried on the card's own system, then written to the NOR.
+ * Before the card is mounted, its FAT is checked and repaired (card_fsck): dosfstools' fsck.fat, linked in by build.sh
+ * (GPL-3.0, so the /init binary as a whole is GPL-3.0; this file is GPL-2.0-or-later to allow that).
  *
- * The boot picture goes on the screen from here, as soon as the root and /data are there, and only then the backlight
+ * The boot picture goes on the screen from here, as soon as the root is there, and only then the backlight
  * comes on (the kernel leaves it off: the device tree): the first light shows the picture, not an empty panel.
  */
 #define _GNU_SOURCE
@@ -30,6 +30,7 @@
 #include <sys/mount.h>
 #include <sys/reboot.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "puff.h"
@@ -45,6 +46,45 @@ static void say(const char *what, int err)
 		write(fd, b, n);
 		close(fd);
 	}
+}
+
+int fsck_main(int argc, char **argv);	/* dosfstools' fsck.fat main(), renamed and linked in (build.sh) */
+
+/*
+ * The card's FAT checked and repaired before it is mounted (fsck.fat -a -w), at every start: the power is always just
+ * cut, a write cut short leaves a broken chain, and the kernel sets the whole partition read-only at the first one it
+ * meets (updates and logs then fail at every start). In a child: fsck.fat exits on what it cannot read or allocate,
+ * and is ended after 60 s (a failing card it could wait on for good), and the card is then mounted as it is. Its
+ * output goes nowhere (the text console would draw over the boot picture). Exit 1 is nearly every start: the mark of a
+ * mount never ended (the power is just cut) is itself what it fixes.
+ */
+static void card_fsck(const char *dev)
+{
+	char b[80];
+	int status = 0;
+	pid_t p = fork();
+
+	if (p == 0) {
+		char *argv[] = { "fsck.fat", "-a", "-w", (char *)dev, NULL };
+		int fd = open("/dev/null", O_RDWR);
+
+		if (fd >= 0)
+			dup2(fd, 0), dup2(fd, 1), dup2(fd, 2);
+		alarm(60);
+		exit(fsck_main(4, argv));
+	}
+	if (p < 0 || waitpid(p, &status, 0) < 0) {
+		say("checking the card's FAT", errno);
+		return;
+	}
+	if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+		return;
+	if (WIFEXITED(status) && WEXITSTATUS(status) == 1)
+		snprintf(b, sizeof(b), "the card's FAT: fsck.fat exit 1 (fixed what it found, or gave up)");
+	else
+		snprintf(b, sizeof(b), "fsck.fat %s %d: the card mounted as it is",
+			 WIFEXITED(status) ? "exit" : "signal", WIFEXITED(status) ? WEXITSTATUS(status) : WTERMSIG(status));
+	say(b, 0);
 }
 
 /* The backlight on (15 % of its 2000 steps, as the kernel had it; the dash sets its own level when it starts). */
@@ -155,16 +195,15 @@ out:
 }
 
 /*
- * The boot picture, then the backlight: the owner's own (/data/splash.bgra.gz: the NOR's data partition, or the
- * card's /data) if there is one, else the image's. Each is the panel's framebuffer, gzipped; one of another size (its
+ * The boot picture, then the backlight: the owner's own (splash.bgra.gz on the card's first partition) if there is
+ * one, else the image's. Each is the panel's framebuffer, gzipped; one of another size (its
  * last 4 bytes say it) or that does not unpack is passed over. The text console lets go of the framebuffer first, so
  * no cursor lands on the picture. /.splash-shown tells S00splash. Whatever fails here, the boot goes on and the
  * backlight comes on: nothing of this is needed to start.
  */
-static void splash(int nor)
+static void splash(void)
 {
-	const char *pic[2] = { nor ? "/newroot/data/splash.bgra.gz" : "/newroot/mnt/sd/data/splash.bgra.gz",
-			       "/newroot/usr/share/splash/splash.bgra.gz" };
+	const char *pic[2] = { "/newroot/mnt/sd/splash.bgra.gz", "/newroot/usr/share/splash/splash.bgra.gz" };
 	struct fb_var_screeninfo v;
 	struct fb_fix_screeninfo f;
 	struct stat sb;
@@ -176,7 +215,7 @@ static void splash(int nor)
 		goto out;
 	len = (unsigned long)f.line_length * v.yres;
 	for (i = 0; i < 2 && !px; i++) {
-		s = open(pic[i], O_RDONLY | O_NONBLOCK);	/* (a FIFO of that name on /data would hold the boot for good) */
+		s = open(pic[i], O_RDONLY | O_NONBLOCK);	/* (a FIFO of that name would hold the boot for good) */
 		if (s < 0)
 			continue;
 		if (!fstat(s, &sb) && S_ISREG(sb.st_mode) && lseek(s, -4, SEEK_END) >= 0 && read(s, t, 4) == 4 &&
@@ -253,47 +292,12 @@ static int sqfs_whole(const char *file, off_t size)
 	return used <= (unsigned long long)size;
 }
 
-/*
- * root=mtd:<name> in the command line: the block device of that NOR partition into dev (waiting up to 10 s for the
- * flash and its node) and 1; 0 without one, or if the partition never shows up.
- */
-static int nor_root(const char *b, char *dev, size_t len)
-{
-	char want[48], line[128];
-	const char *p;
-	struct stat st;
-	FILE *f;
-	int i, n;
-
-	p = strstr(b, "root=mtd:");
-	if (!p)
-		return 0;
-	p += 9;
-	snprintf(want, sizeof(want), "\"%.*s\"", (int)strcspn(p, " \n"), p);	/* /proc/mtd quotes the names */
-	for (i = 0; i < 100; i++) {
-		f = fopen("/proc/mtd", "r");
-		while (f && fgets(line, sizeof(line), f))
-			if (strstr(line, want) && sscanf(line, "mtd%d:", &n) == 1) {
-				fclose(f);
-				snprintf(dev, len, "/dev/mtdblock%d", n);
-				for (; i < 100 && stat(dev, &st); i++)
-					usleep(100000);
-				return 1;
-			}
-		if (f)
-			fclose(f);
-		usleep(100000);
-	}
-	say("root=mtd: names no partition in /proc/mtd", ENODEV);
-	return 0;
-}
-
 int main(void)
 {
 	struct stat st;
 	char dev[32], cmd[1024];
 	const char *root = "/sd/rootfs.sqfs";
-	int i, lfd, tried = 0, nor;
+	int i, lfd, tried = 0;
 	FILE *f;
 
 	mount("devtmpfs", "/dev", "devtmpfs", 0, NULL);
@@ -308,19 +312,11 @@ int main(void)
 	}
 	cmd[i] = 0;
 
-	/* the NOR's root, else (none asked for, or it fails) the card's as before */
-	nor = nor_root(cmd, dev, sizeof(dev));
-	if (nor && !mount(dev, "/ro", "squashfs", MS_RDONLY, NULL))
-		goto overlay;
-	if (nor) {
-		say("mounting the NOR's rootfs; the card's instead", errno);
-		nor = 0;
-	}
-
-	for (i = 0; i < 100 && stat("/dev/mmcblk0p4", &st); i++)
+	for (i = 0; i < 100 && stat("/dev/mmcblk0p1", &st); i++)
 		usleep(100000);
-	if (mount("/dev/mmcblk0p4", "/sd", "vfat", MS_NOATIME, "utf8,fmask=0077,dmask=0077"))
-		fail("mounting the card's F133 partition (/dev/mmcblk0p4)");
+	card_fsck("/dev/mmcblk0p1");
+	if (mount("/dev/mmcblk0p1", "/sd", "vfat", MS_NOATIME, "utf8,fmask=0077,dmask=0077"))
+		fail("mounting the card's first partition (/dev/mmcblk0p1)");
 
 	if (!stat("/sd/rootfs.sqfs.new", &st)) {
 		if (!sqfs_whole("/sd/rootfs.sqfs.new", st.st_size)) {
@@ -353,7 +349,6 @@ int main(void)
 	if (mount(dev, "/ro", "squashfs", MS_RDONLY, NULL))
 		fail("mounting rootfs.sqfs");
 	close(lfd);	/* the mount holds it now; autoclear detaches it when that goes */
-overlay:
 	if (mount("tmpfs", "/rw", "tmpfs", 0, "mode=0755"))
 		fail("the overlay's tmpfs");
 	mkdir("/rw/upper", 0755);
@@ -369,32 +364,9 @@ overlay:
 
 	mkdir("/newroot/mnt", 0755);
 	mkdir("/newroot/mnt/sd", 0755);
-	if (!nor && mount("/sd", "/newroot/mnt/sd", NULL, MS_MOVE, NULL))
+	if (mount("/sd", "/newroot/mnt/sd", NULL, MS_MOVE, NULL))
 		say("moving the card to /mnt/sd", errno);
-	/*
-	 * /data: the NOR's JFFS2 partition, on a directory in place of the rootfs's link to the card. On a NOR boot, and
-	 * on a card boot U-Boot made for a screen that runs from the NOR (data=nor: an update on trial, or kept and on
-	 * its way to the NOR), which so has the screen's own settings. There the flash may still be on its way (5 s for
-	 * it), and the card's /data stays if the NOR's does not mount.
-	 */
-	if (nor || strstr(cmd, "data=nor")) {
-		int e;
-
-		unlink("/newroot/data");
-		mkdir("/newroot/data", 0755);
-		for (i = 0; (e = mount("mtd:data", "/newroot/data", "jffs2", MS_NOATIME, NULL)) && !nor && i < 50; i++)
-			usleep(100000);
-		if (e) {
-			say("mounting the NOR's data partition (mtd:data)", errno);
-			if (!nor) {
-				rmdir("/newroot/data");
-				if (symlink("/mnt/sd/data", "/newroot/data"))
-					say("the card's /data again", errno);
-			}
-		} else
-			nor = 1;	/* (for the boot picture: the NOR's /data) */
-	}
-	splash(nor);
+	splash();
 	if (mount("/dev", "/newroot/dev", NULL, MS_MOVE, NULL))
 		say("moving /dev", errno);
 	umount("/proc");

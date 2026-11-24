@@ -1,16 +1,16 @@
 #!/bin/sh
 # mk-ota.sh IMAGES KEY OUT: a release's F133 update assets, for dash-update on the screens in the field (the T113
 # Dash's mk-ota.sh, for the F133's files).
-#   IMAGES  a build's images (build.sh's out-f133/: Image, f133.dtb, rootfs.sqfs, kernel.itb, U-Boot)
+#   IMAGES  a build's images (build.sh's out-f133/: Image, f133.dtb, rootfs.sqfs)
 #   KEY     the project's Ed25519 private key (PEM). It never goes into a repo or a release: only its public half is in
 #           the image (board/f133/wattline-ota.pub.raw -> /etc/wattline-ota.pub.raw)
 #   OUT     the release's upload folder: gets wattline-f133-ota-<version>.tar.gz, then SHA256SUMS over every file in it
-#           (put other assets there first) and SHA256SUMS.sig
+#           (put other assets there first: the card image, wattline-f133-sdcard-<version>.img.xz) and SHA256SUMS.sig
 # The version is the image's own (/etc/image-id inside rootfs.sqfs), so a screen that installs it reports that version
 # afterwards and does not install it again. Needs: openssl, unsquashfs (squashfs-tools 4.4+: -cat), gzip, sha256sum.
 set -e
 I=$1; K=$2; OUT=$(mkdir -p "$3" && cd "$3" && pwd)
-for f in Image f133.dtb rootfs.sqfs kernel.itb u-boot-sunxi-with-spl.bin; do
+for f in Image f133.dtb rootfs.sqfs; do
 	[ -s "$I/$f" ] || { echo "mk-ota: $I has no $f" >&2; exit 1; }
 done
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
@@ -30,17 +30,14 @@ unsquashfs -cat "$I/rootfs.sqfs" etc/wattline-ota.pub.raw | cmp -s - "$(dirname 
 # what U-Boot's load addresses leave room for (dash-update refuses more)
 [ "$(wc -c < "$I/Image")" -le 33554432 ] && [ "$(wc -c < "$I/f133.dtb")" -le 1048576 ] &&
 	[ "$(wc -c < "$I/rootfs.sqfs")" -le 268435456 ] || { echo "mk-ota: a boot file is too big" >&2; exit 1; }
-# and the built-in flash's partitions (a card install copied there: dash-nor)
-[ "$(wc -c < "$I/rootfs.sqfs")" -le 11010048 ] && [ "$(wc -c < "$I/kernel.itb")" -le 4194304 ] &&
-	[ "$(wc -c < "$I/u-boot-sunxi-with-spl.bin")" -le 983040 ] || { echo "mk-ota: too big for the built-in flash" >&2; exit 1; }
 # the key must be the one the image trusts
 openssl pkey -in "$K" -pubout -outform DER | tail -c 32 | cmp -s - "$(dirname "$0")/wattline-ota.pub.raw" ||
 	{ echo "mk-ota: $K is not the key of board/f133/wattline-ota.pub.raw" >&2; exit 1; }
-mkdir -p "$T/b/nor"
-cp "$I/Image" "$I/f133.dtb" "$I/rootfs.sqfs" "$T/b/"; cp "$I/kernel.itb" "$I/u-boot-sunxi-with-spl.bin" "$T/b/nor/"
+mkdir -p "$T/b"
+cp "$I/Image" "$I/f133.dtb" "$I/rootfs.sqfs" "$T/b/"
 echo "$V" > "$T/b/version"
 B=wattline-f133-ota-$V.tar.gz
-(cd "$T/b" && tar -czf "$OUT/$B" Image f133.dtb rootfs.sqfs nor/kernel.itb nor/u-boot-sunxi-with-spl.bin version)
+(cd "$T/b" && tar -czf "$OUT/$B" Image f133.dtb rootfs.sqfs version)
 (cd "$OUT" && rm -f SHA256SUMS SHA256SUMS.sig && sha256sum $(ls | grep -v '^SHA256SUMS') > "$T/sums" && mv "$T/sums" SHA256SUMS &&
 	openssl pkeyutl -sign -inkey "$K" -rawin -in SHA256SUMS -out SHA256SUMS.sig)
 echo "mk-ota: $OUT/$B (version $V), SHA256SUMS, SHA256SUMS.sig"

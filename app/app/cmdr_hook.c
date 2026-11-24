@@ -112,6 +112,10 @@ void cmdr_hook_sync(car_t *car, const link_t *l, bt_view_t *bt, int64_t now) {
     }
   }
   bt->until = ble_state(B, &pub);
+  static int said_state = -1;   // each move in the log: why a link took many tries (a scan that missed, a connect cut)
+  static const char *said_why;
+  if ((int)pub.state != said_state || pub.why != said_why)
+    log_msg("bluetooth: %s", pub.why ? pub.why : "?"), said_state = (int)pub.state, said_why = pub.why;
   bt->link = link_of(&pub);
   bt->why = pub.why ? pub.why : "";
   bt->push_info = pub.push_info ? pub.push_info : "";

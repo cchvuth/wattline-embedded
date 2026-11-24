@@ -119,11 +119,11 @@
 + * No console is wired out, so the SPL keeps its output (common/console.c hands each character here) in SRAM nothing
 + * else uses (0x38000: past the SPL image, below its stack; BSS is in DRAM, hence the fixed address for all state) and
 + * puts it on the SD card after the DRAM init, failed or not: raw sectors from F133_LOG_SECTOR (a raw read of the card
-+ * at sector 20400000), and only on a card whose MBR leaves that whole area free: outside every partition and inside
++ * at sector 4096: 2 MiB in), and only on a card whose MBR leaves that whole area free: outside every partition and inside
 + * the card (f133_sd_log_room). Any other card is never written. The SD code is the probes' (src/sd.rs, proven on this
 + * board): SMHC0 from scratch, 1-bit at 6 MHz, the CPU feeding the FIFO.
 + */
-+#define F133_LOG_SECTOR		20400000	/* the SPL's log; U-Boot proper's at +64, OpenSBI's at +256 */
++#define F133_LOG_SECTOR		4096		/* the SPL's log; U-Boot proper's at +64, OpenSBI's at +256 */
 +#define F133_LOG_SECTORS	768		/* the three: OpenSBI's (256 KiB) ends the area */
 +
 +/*

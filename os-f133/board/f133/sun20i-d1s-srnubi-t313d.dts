@@ -255,6 +255,13 @@
 		function = "i2c3";
 	};
 
+	/* the SPI NOR's WP# and HOLD#: pulled up, never low (not a gpio-hog: see PD22) */
+	spi0_wp_hold_pins: spi0-wp-hold-pins {
+		pins = "PC6", "PC7";
+		function = "gpio_in";
+		bias-pull-up;
+	};
+
 	/* PD22: the panel's brightness input, active low (floating or low = lit). Never a gpio-hog (on the T113 Dash
 	 * that broke the pinctrl probe) */
 	pwm7_pd22_pin: pwm7-pd22-pin {
@@ -428,73 +435,19 @@
 };
 
 /*
- * The SPI NOR: 16 MiB XMC XM25QH128C (JEDEC 20 40 18, spi-nor-generic from its SFDP) on SPI0, PC2..PC5, at 24 MHz (the
- * clock the stock backup was read at). The screen runs from it without a card: U-Boot's SPL and
- * U-Boot, a kernel FIT, the root squashfs, and /data. CONFIG_MTD_PARTITIONED_MASTER also gives the whole chip as mtd0
- * (backup reads, a restore, U-Boot's writes: its own partition is read only). nor.sh writes them from a card boot.
- * Sized for the first images (U-Boot 0.81 MiB, the kernel FIT 3.9, the root 9.92 in xz), then the root given
- * 256 KiB of the kernel's room (0.1.2: the root with the update's tools, 10.5 MiB in zstd's 128 KiB blocks; the
- * kernel FIT 3.82): the boundaries are only here, U-Boot's norkernel (0x100000) and nor.sh (/proc/mtd), so a version
- * with another boundary than the one before it is written whole by that version's own system (nor.sh, on the card's
- * start), never by the old one.
+ * The SPI NOR: 16 MiB XMC XM25QH128C (JEDEC 20 40 18, spi-nor-generic from its SFDP) on SPI0, PC2..PC5. The screen no
+ * longer runs from it (it always starts from its card): the chip stays for its own ID files (patches/linux 0013) and
+ * as mtd0, the whole chip, for a backup read. Its WP# and HOLD# (PC6, PC7) are inputs pulled up (spi0_wp_hold_pins:
+ * the flash ignores its clock while HOLD# is low); U-Boot no longer drives them.
  */
 &spi0 {
 	pinctrl-names = "default";
-	pinctrl-0 = <&spi0_pins>;
+	pinctrl-0 = <&spi0_pins>, <&spi0_wp_hold_pins>;
 	status = "okay";
 
 	flash@0 {
 		compatible = "jedec,spi-nor";
 		reg = <0>;
-		/*
-		 * 50 MHz: the whole chip read the same as at 24 MHz at 40, 50, 60 and 75 MHz (FAST_READ, four passes
-		 * each); 50 keeps a margin for the car's temperatures. 64 KiB reads 2.3 -> 5.7 MB/s.
-		 */
-		spi-max-frequency = <50000000>;
-		/* read on both data lines (the chip's dual output read, no pins more than the four): 5.5 -> 10 MiB/s, the
-		 * three partitions read the same as on one line */
-		spi-rx-bus-width = <2>;
-
-		partitions {
-			compatible = "fixed-partitions";
-			#address-cells = <1>;
-			#size-cells = <1>;
-
-			/* the eGON SPL the BROM loads, then U-Boot's FIT (OpenSBI, U-Boot proper) */
-			partition@0 {
-				label = "boot";
-				reg = <0x000000 0x0f0000>;
-				read-only;
-			};
-
-			/* a FIT (kernel.its): the gzipped kernel and this device tree, a crc32 each (bootm checks them) */
-			partition@100000 {
-				label = "kernel";
-				reg = <0x100000 0x400000>;
-			};
-
-			/* squashfs (zstd while it fits, else xz: post-image.sh): the root, root=mtd:rootfs */
-			partition@500000 {
-				label = "rootfs";
-				reg = <0x500000 0xa80000>;
-			};
-
-			/* JFFS2: /data (settings, Wi-Fi, SSH keys, the AA certificate, Bluetooth bonds); logs stay in RAM */
-			partition@f80000 {
-				label = "data";
-				reg = <0xf80000 0x080000>;
-			};
-
-			/*
-			 * One erase block before the kernel, the last of the boot area's 1 MiB: "TRY1" at its start
-			 * while an update for a screen that runs from here is on the card (dash-update sets and
-			 * clears it, U-Boot reads it: uboot.fragment). After the others, so that they keep their
-			 * numbers.
-			 */
-			partition@f0000 {
-				label = "try";
-				reg = <0x0f0000 0x010000>;
-			};
-		};
+		spi-max-frequency = <24000000>;
 	};
 };

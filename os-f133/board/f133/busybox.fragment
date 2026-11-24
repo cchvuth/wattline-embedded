@@ -3,9 +3,7 @@
 CONFIG_NTPD=y
 # the hook's time limit on that try
 CONFIG_TIMEOUT=y
-# what nor.sh (tools/nor) writes and checks the SPI NOR with
-CONFIG_FLASHCP=y
-CONFIG_FLASH_ERASEALL=y
+# dash-update's check of a release's bundle
 CONFIG_SHA256SUM=y
 # the DHCP server on Android Auto's AP (dash-aa)
 CONFIG_UDHCPD=y

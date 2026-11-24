@@ -25,6 +25,17 @@ if [ -n "$D" ] && [ -b ${D}p3 ]; then
 else
 	echo "data: no p3: /data in RAM"
 fi
+# the FAT partitions checked and repaired at every start, before anything mounts them (p1: the boot files and ota.txt,
+# p2: dash.conf): the power is always just cut, and the kernel sets a FAT read-only at the first broken chain it meets
+for p in 1 2; do
+	[ -n "$D" ] && [ -b ${D}p$p ] || continue
+	fsck.fat -a -w ${D}p$p >/dev/null 2>&1; r=$?
+	[ $r = 0 ] || echo "fat: ${D}p$p $([ $r = 1 ] && echo "had errors: repaired" || echo "fsck.fat exit $r: left as it is")"
+done
 mkdir -p /data/log
+# "Save logs" off (Settings, Advanced; save_logs in /data/settings.conf), the default: no logs at all, on the card or in
+# RAM: /data/log, where every log goes (the dash's, its output, syslog's, Android Auto's), is nolog's read-only folder
+# of links to /dev/null. A change counts from the next start.
+grep -qE '^save_logs *= *1' /data/settings.conf 2>/dev/null || { nolog /run/nolog && mount -o bind /run/nolog /data/log; }
 [ -n "$D" ] && [ -b ${D}p2 ] && mount -t vfat -o ro ${D}p2 /run/dashdata && echo "dashdata: ${D}p2 on /run/dashdata (ro)"
 exit 0

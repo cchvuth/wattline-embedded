@@ -84,7 +84,7 @@ int main(void) {
   CHECK(!strcmp(slurp("settings.conf"), "minor_figures = 1\nclock_24h = 0\nbrightness_pct = 40\nfollow_car = 0\nfollow_offset = 0\nssh = 0\nrecord = 1\n"
                                           "car = modelY7\nsparse = 1\nwifi_first = 1\ntz = UTC0\npanda_host = 192.168.4.1\n"
                                           "panda_port = 1338\nota_auto = 0\naa_low_res = 0\n"
-                                          "unit_miles = -1\nunit_f = -1\nunit_psi = -1\nshow_fps = 0\n"));   // units untouched
+                                          "unit_miles = -1\nunit_f = -1\nunit_psi = -1\nshow_fps = 0\nsave_logs = 0\n"));   // units untouched; logs off
   CHECK(settings_car_saved);   // written: no first-boot question next time
   CHECK(!strcmp(slurp("wifi/networks.conf"), "S3XY_OBD\n12345678\nHome\ns3cret pass\nCafe\n\n"));
   CHECK(mode_of("wifi") == 0700 && mode_of("wifi/networks.conf") == 0600);
@@ -107,8 +107,10 @@ int main(void) {
   CHECK(strstr(slurp("settings.conf"), "\naa_low_res = 1\n") != NULL);   // aa reads this exact form
   { dash_settings_t again; settings_load(&again, &cf); CHECK(again.aa_low_res); }
   back.show_fps = true;                                                      // the frame counter's switch
+  back.save_logs = true;                                                     // logs on the card (the start scripts grep it)
   CHECK(settings_save(&back) == 0);
-  { dash_settings_t again; settings_load(&again, &cf); CHECK(again.show_fps); }
+  { dash_settings_t again; settings_load(&again, &cf); CHECK(again.show_fps); CHECK(again.save_logs); }
+  CHECK(strstr(slurp("settings.conf"), "\nsave_logs = 1\n") != NULL);   // the line S02sd and S05data look for
   { char was[1024], p[256]; snprintf(was, sizeof was, "%s", slurp("settings.conf"));   // the old 60 frames a second
     snprintf(p, sizeof p, "%s/settings.conf", root);                                    // switch's line:
     FILE *f = fopen(p, "a"); CHECK(f && fputs("fps60 = 1\n", f) >= 0); if (f) fclose(f);

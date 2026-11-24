@@ -111,12 +111,14 @@ CONFIG_I2C_MV64XXX=y
 CONFIG_I2C_CHARDEV=y
 CONFIG_DMA_SUN6I=y
 CONFIG_GPIO_SYSFS=y
-# the root filesystem from the card, not RAM: a built-in initramfs whose /init loop-mounts rootfs.sqfs (squashfs,
-# lz4: quick to read on the C906) from the F133 partition under a tmpfs overlay
+# the root filesystem from the card, not RAM: a built-in initramfs whose /init loop-mounts rootfs.sqfs (squashfs, zstd)
+# from the card's first partition under a tmpfs overlay; /data on its second, ext4 (journaled: the power is always
+# just cut)
 CONFIG_INITRAMFS_SOURCE="/ext/board/f133/initramfs.list"
 CONFIG_BLK_DEV_LOOP=y
 CONFIG_SQUASHFS=y
-CONFIG_SQUASHFS_LZ4=y
+CONFIG_SQUASHFS_ZSTD=y
+CONFIG_EXT4_FS=y
 CONFIG_OVERLAY_FS=y
 # the panel's touch (patches/linux/0004), read by the dash through evdev
 CONFIG_INPUT_EVDEV=y
@@ -149,7 +151,7 @@ CONFIG_SUN20I_PPU=y
 # either size, 12 only 3; 720p pictures take 2 slots each, 20 holds 5.
 # Android Auto at 720p (the phone's UI 960x540 shown 1:1; 480p was scaled up, soft): 16 held its 4 pictures only now
 # and then, each 1.38 MB picture taking two 1 MiB slots. 24 held them, but squeezed the rest of the RAM: the session's
-# start then reclaimed ~80 MB of page cache (re-read from the NOR) and the phone gave up waiting. So 16, with buffers
+# start then reclaimed ~80 MB of page cache (re-read from the flash it ran from then) and the phone gave up waiting. So 16, with buffers
 # aligned to 64 KiB rather than 1 MiB (nothing here needs more: the VE and the DE take physical addresses, no IOMMU):
 # 720p's four pictures then take 5.5 MB, not 8.
 CONFIG_CMA_SIZE_MBYTES=16
@@ -166,24 +168,16 @@ CONFIG_BT=m
 # CONFIG_BT_BNEP is not set
 # on by default with DEBUG_FS; not wanted in 64 MiB
 # CONFIG_BT_DEBUGFS is not set
-# The SPI NOR (the device tree's partitions, the whole chip as mtd0 as well): spi-sun6i (CONFIG_SPI_SUN6I=y) drives the
-# D1's SPI0. The root from it read only (mtdblock), /data on JFFS2, the root squashfs in xz.
+# The SPI NOR, the whole chip as mtd0 (the screen does not run from it): spi-sun6i (CONFIG_SPI_SUN6I=y) drives the
+# D1's SPI0; its ID files in sysfs (patches/linux 0013)
 CONFIG_MTD=y
-CONFIG_MTD_OF_PARTS=y
-CONFIG_MTD_PARTITIONED_MASTER=y
 CONFIG_SPI_MEM=y
 CONFIG_MTD_SPI_NOR=y
 # CONFIG_MTD_SPI_NOR_USE_4K_SECTORS is not set
-CONFIG_MTD_BLOCK_RO=y
-CONFIG_JFFS2_FS=y
-CONFIG_SQUASHFS_XZ=y
-# (the root in zstd when it fits its partition: post-image.sh)
-CONFIG_SQUASHFS_ZSTD=y
-# Trims: the kernel stays resident (text + data were ~12 MB of the 64 MiB) and has to fit the NOR. Nothing here uses
-# them: the root is squashfs, the card vfat (so no ext4); no LSMs, cgroups, namespaces, audit, perf, eBPF syscalls,
+# Trims: the kernel stays resident (text + data were ~12 MB of the 64 MiB). Nothing here uses them: the root is
+# squashfs, the card vfat and ext4; no LSMs, cgroups, namespaces, audit, perf, eBPF syscalls,
 # io_uring, IPsec, tunnels or traffic control; no EFI (U-Boot's booti); one core. Symbols: System.map, kept beside each
 # kernel (no kallsyms).
-# CONFIG_EXT4_FS is not set
 # CONFIG_SECURITY is not set
 # CONFIG_LIBNVDIMM is not set
 # CONFIG_IO_URING is not set
@@ -280,7 +274,7 @@ CONFIG_NONPORTABLE=y
 # CONFIG_NET_SELFTESTS is not set
 # CONFIG_NET_FAILOVER is not set
 # CONFIG_ETHTOOL_NETLINK is not set
-# Filesystems and block layer: squashfs in xz, the card vfat, /data jffs2; the built-in initramfs is gzip
+# Filesystems and block layer: squashfs in zstd, the card vfat, /data ext4; the built-in initramfs is gzip
 # CONFIG_ISO9660_FS is not set
 # CONFIG_AUTOFS_FS is not set
 # CONFIG_MSDOS_FS is not set

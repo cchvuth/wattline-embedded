@@ -32,7 +32,17 @@ make O=/work/out BR2_EXTERNAL=/ext f133_defconfig >/dev/null
 # board/f133/initramfs.list names: compiled before the kernel takes it in, so the toolchain comes first
 CC=/work/out/host/bin/riscv64-buildroot-linux-gnu-gcc
 [ -x $CC ] || make O=/work/out toolchain
-mkdir -p /work/out/f133-init && $CC -static -Os -s -Wall -o /work/out/f133-init/init /ext/board/f133/init/init.c /ext/board/f133/init/puff.c
+# with dosfstools fsck.fat linked in (init.c card_fsck: the card checked before it is mounted): the source Buildroot
+# fetched and checked for host-dosfstools (the card image), main() renamed, no iconv (its own CP850 table)
+make O=/work/out host-dosfstools-patch >/dev/null
+DFS=$(ls -d /work/out/build/host-dosfstools-[0-9]*/src | head -n 1); V=$(basename $(dirname $DFS)); V=${V#host-dosfstools-}
+I=/work/out/f133-init; rm -rf $I/dfs; mkdir -p $I/dfs
+sed "s/@PACKAGE_VERSION@/$V/; s/@RELEASE_DATE@//" $DFS/version.h.in > $I/dfs/version.h
+for f in fsck.fat boot check common fat file io lfn charconv; do
+	$CC -c -Os -Wall -Wno-sign-compare -I$I/dfs -DHAVE_ENDIAN_H=1 -DHAVE_LINUX_LOOP_H=1 -DHAVE_VASPRINTF=1 \
+		-DHAVE_DECL_GETMNTENT=1 -DHAVE_DECL_GETMNTINFO=0 -Dmain=fsck_main -o $I/dfs/$f.o $DFS/$f.c
+done
+$CC -static -Os -s -Wall -o $I/init /ext/board/f133/init/init.c /ext/board/f133/init/puff.c $I/dfs/*.o
 # A whole build (no arguments) makes again what comes from this checkout. Buildroot keeps a "local" package as it was
 # first built, and its kernel as first configured: an image then had old programs, or an old device tree, under a new
 # version. The programs (the dash, the receiver, the decoder, mcud, the update check) every time; the kernel and its
@@ -40,7 +50,7 @@ mkdir -p /work/out/f133-init && $CC -static -Os -s -Wall -o /work/out/f133-init/
 if [ -z "'"$*"'" ]; then
 	rm -rf /work/out/build/dashapp-local /work/out/build/wattline-aa-local /work/out/build/spike-vdec-local \
 		/work/out/build/mcud-local /work/out/build/dash-ota-local
-	k=$(cat /ext/board/f133/*.dts /ext/board/f133/linux.fragment /ext/board/f133/kernel.its /ext/board/f133/init/* \
+	k=$(cat /ext/board/f133/*.dts /ext/board/f133/linux.fragment /ext/board/f133/init/* \
 		/ext/board/f133/initramfs.list \
 		/ext/board/f133/patches/linux/* /ext/board/f133/patches-local/linux/* /ext/package/aic8800/* \
 		/ext/package/g2drot/* /ext/package/g2drot/src/* 2>/dev/null | sha256sum | cut -c1-16)
@@ -48,8 +58,8 @@ if [ -z "'"$*"'" ]; then
 		rm -rf /work/out/build/linux-[0-9]* /work/out/build/aic8800-* /work/out/build/g2drot-*
 		echo "$k" > /work/out/.f133-kernel-inputs
 	fi
-	# and the boot loader with its firmware when their patches changed (the update bundle carries U-Boot)
-	k=$(cat /ext/board/f133/patches/uboot/* /ext/board/f133/patches/opensbi/* 2>/dev/null | sha256sum | cut -c1-16)
+	# and the boot loader with its firmware when their patches or its configuration (the boot command) changed
+	k=$(cat /ext/board/f133/patches/uboot/* /ext/board/f133/patches/opensbi/* /ext/board/f133/uboot.fragment 2>/dev/null | sha256sum | cut -c1-16)
 	if [ "$k" != "$(cat /work/out/.f133-boot-inputs 2>/dev/null)" ]; then
 		rm -rf /work/out/build/uboot-* /work/out/build/opensbi-*
 		echo "$k" > /work/out/.f133-boot-inputs

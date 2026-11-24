@@ -9,7 +9,8 @@ R=$(cd "$(dirname "$0")/../.." && pwd)
 F=os-f133/board/f133/overlay
 bad=0
 for f in $F/etc/init.d/S05dash $F/etc/init.d/S05wifi $F/etc/init.d/S03mcu $F/etc/init.d/S45wifi-auto $F/usr/sbin/dash-aa \
-	os/board/dash/rootfs_overlay_r3/usr/sbin/dash-supervise os/board/dash/rootfs_overlay_r4/usr/sbin/dash-aa; do
+	os/board/dash/rootfs_overlay_r3/usr/sbin/dash-supervise os/board/dash/rootfs_overlay_r3/etc/init.d/S45wifi-auto \
+	os/board/dash/rootfs_overlay_r4/usr/sbin/dash-aa; do
 	grep -o '( : >> [^)]* ) 2>/dev/null || [A-Z]*=[a-z/.]*' $R/$f > /tmp/fallbacks
 	[ -s /tmp/fallbacks ] || { echo "FAIL  $f: no fallback line"; bad=$((bad + 1)); continue; }
 	while read -r l; do

@@ -13,7 +13,9 @@
 # view's region through spike-vdec) and the Bluetooth start (aa mcu). This screen's classic Bluetooth is its power MCU,
 # whose firmware owns the Android Auto RFCOMM service: mcud (S03mcu) hands aa the channel when the phone opens it, and aa
 # gives the phone the AP's address and credentials there. The phone has to be paired with the screen's Bluetooth: start
-# opens a 2-minute window for that; a phone paired before connects at any time.
+# opens a 2-minute window for that. A phone paired before is dropped while Android Auto is off (mcud: it would retry
+# Android Auto for as long as it stays on the MCU's Bluetooth; auto-connect goes off with it) and called back at the
+# next start (auto-connect on, AT#MG; AT#CC, the last device, when no phone is connected: mcud's /run/mcud.phone).
 #
 # The radio, as the T113: the station's link is dropped for the session (wpa_cli disconnect, reconnect at stop) so the
 # one radio serves the AP alone on its channel; the car link rides the Commander's Bluetooth meanwhile. The AP gets an
@@ -45,11 +47,9 @@ IP=${IP:-192.168.53.1}   # the AP's /24: not the car's 192.168.4.x, nor a phone 
 CERT=/etc/wattline/aa.crt
 MARK=/run/dash-aa
 
-# The session's logs, in $LOG: the boot's log folder (the card's, or RAM without one: S02sd), not /data: on the NOR that
-# is a small JFFS2, where a log line can wait seconds behind an erase (the receiver sat in it at its exit, and the
-# stop with it) and wears the flash.
-# (a card gone read-only after a FAT error: in RAM then; the shell runs nothing whose log cannot be opened, and ends
-# on a ":" whose redirection fails)
+# The session's logs, in $LOG: the boot's log folder (S02sd: /data/log/<boot> with Save logs on, else nowhere).
+# (a log folder that cannot be written: in RAM then; the shell runs nothing whose log cannot be opened, and ends on a
+# ":" whose redirection fails)
 LOG=/var/log/sd; ( : >> $LOG/aa-ap.log ) 2>/dev/null || LOG=/tmp
 # Hooks for additions kept outside this repository (absent on a plain image), output in $LOG/hook-<name>.log:
 #  - /data/hooks/extra-start: extra's, once the access point is up (Android Auto's start runs none). Gets IFACE, SSID,
@@ -252,6 +252,12 @@ start|extra|restore)
 		printf '%s\n' "$PSK" | aa mcu "$IP" "$SSID" - "$BSSID" >> $LOG/aa-mcu.log 2>&1
 		keep && sleep 2; n=$((n + 1))
 	done ) &
+	# the MCU's auto-connect on again (mcud turns it off when it drops a phone while Android Auto is off, and the MCU may
+	# keep it off across starts) and, for Android Auto with no phone connected (mcud's /run/mcud.phone), the phone called
+	# back (the MCU's last device) once aa mcu is waiting for it. Not for extra: the last device is likely the Android
+	# phone, not the one extra's addition wants
+	cc=; [ $MODE = aa ] && [ ! -e /run/mcud.phone ] && cc='AT#CC'
+	( sleep 1; printf 'AT#MG\n%s\n' "$cc" | mcud ctl 1 >> $LOG/aa-mcu.log 2>&1 ) &
 	[ "$1" != restore ] && pair_on   # someone at the screen tapped it (not a restore at boot)
 	# up: on again at the next start, in this mode (the dash restores it), until stopped. (printf, not `: >`: a failed
 	# redirect on a special builtin would end the script before the marker)

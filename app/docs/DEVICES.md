@@ -65,7 +65,7 @@ The built-in defaults (`app/conf.c`) are the T113's. The F133's image ships its 
 | `frame_ms` | 33 | 16 (the panel's 58.5 Hz) |
 | `backlight` | `/sys/class/backlight/backlight` | the same (PWM) |
 | `watchdog` | 1 | 0 (a reset loses the Wi-Fi chip until power off and on) |
-| `log` | `/data/log/dash.log` when `/data` is writable, else `/run/dash.log` | `/run/dash.log` |
+| `log` | `/data/log/dash.log` when `/data` is writable, else `/run/dash.log` | `/var/log/sd/dash.log` (the boot's log folder in `/data/log` with Save logs on, else `/dev/null`) |
 | `panda_host` | 192.168.4.1 (the Commander's Panda on S3XY_OBD) | the same |
 
 ## Below the app
