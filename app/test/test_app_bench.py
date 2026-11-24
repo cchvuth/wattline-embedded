@@ -83,7 +83,7 @@ check('parked again: P; the front left door (a polled group: up to 2 s late) ope
 w = win(40.5, 45)
 check('link loss: quiet (resubscribing), nothing live', any(r['wifi'] == WIFI['quiet'] for r in w) and not any(r['live'] for r in w))
 check('link loss: the car\'s level held for bright_stale_ms (5 s)', all(r['backlight'] == 30 for r in win(40.5, 45)))
-check('link loss: then the lowest level, as the car\'s screen (following it)', any(r['backlight'] == 0 for r in win(45, 48)))
+check('link loss: then bright_no_car (20 %), following the car without its data', any(r['backlight'] == 20 for r in win(45, 48)))
 check('link loss: given up and retried', any(r['wifi'] in (WIFI['retrying'], WIFI['hello']) for r in win(45, 48)))
 w = win(49, 59.6)   # the fake's cycle starts over at 60
 check('back: WiFi live again', all(r['wifi'] == WIFI['live'] for r in w))
