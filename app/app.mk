@@ -15,7 +15,7 @@ UI_SRC := ui/dash_ui.c $(UI_GEN)/assets.c $(UI_GEN)/aa_icon.c ui/gen/roboto.c
 APP_SRC := app/dash.c app/conf.c app/bridge.c app/log.c app/bright.c app/actions.c app/pair.c app/settings.c app/record.c app/wifi.c \
   core/panda.c core/derive.c core/sched.c core/cmdr_msg.c core/pb.c   # cmdr_msg: the actions' labels, every build
 APP_H := app/app.h app/actions.h app/pair.h app/settings.h app/record.h core/state.h core/sched.h core/panda.h core/cmdr_msg.h \
-  ui/dash_state.h ui/dash_ui.h ui/project_region.h build/signals_gen.h
+  ui/dash_state.h ui/dash_ui.h ui/project_region.h build/signals_gen.h build/car_actions_gen.h
 WARN := -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
 CMDR ?= 0
 HA := $(BUILD)/app-host
@@ -40,6 +40,10 @@ WATTLINE ?= $(firstword $(wildcard ../wattline ../../wattline) ../wattline)
 build/signals_gen.h: tools/gen_signals.py tools/extra_signals.json $(wildcard $(WATTLINE)/lib/signals.dart $(WATTLINE)/lib/panda.dart)
 	@if [ -f $(WATTLINE)/lib/signals.dart ]; then python3 -I tools/gen_signals.py $(WATTLINE) build; \
 	else echo "signals: the committed $@ (no Flutter app at $(WATTLINE))"; touch $@; fi
+build/car_actions_gen.h: tools/gen_car_actions.py $(wildcard $(WATTLINE)/lib/car_actions.dart)
+	@if [ -f $(WATTLINE)/lib/car_actions.dart ]; then python3 -I tools/gen_car_actions.py $(WATTLINE) build; \
+	else test -s $@ || { echo "car actions: no $@ and no Flutter app at $(WATTLINE) (it is committed: git checkout app/$@)"; exit 1; }; \
+	echo "car actions: the committed $@ (no Flutter app at $(WATTLINE))"; touch $@; fi
 
 # --- host (Mac): LVGL and UI objects shared with ui.mk (same flags, same $(BUILD)/host/), the app's with sanitizers
 HOST_CC ?= cc
@@ -49,7 +53,7 @@ DEV_FLAGS := $(DEVICE_DEFS) $(EXTRA_DEFS) -I$(UI_GEN)   # EXTRA_DEFS: a one-off 
 $(BUILD)/host/%.o: %.c port/sim/lv_conf.h ui/conf/lv_conf.h port/linux/lv_conf.h
 	@mkdir -p $(dir $@); $(HOST_CC) $(HOST_CFLAGS) $(DEV_FLAGS) -c $< -o $@
 $(BUILD)/host/ui/%.o: HOST_CFLAGS += $(WARN)
-$(BUILD)/host/ui/dash_ui.o: ui/dash_ui.h ui/dash_state.h ui/project_region.h $(UI_GEN)/assets.h $(UI_GEN)/aa_icon.h
+$(BUILD)/host/ui/dash_ui.o: ui/dash_ui.h ui/dash_state.h ui/project_region.h $(UI_GEN)/assets.h $(UI_GEN)/aa_icon.h core/cmdr_msg.h build/car_actions_gen.h
 SAN := -fsanitize=address,undefined
 HOST_GIO_C = $(if $(CMDR_DEFS),$(shell pkg-config --cflags gio-2.0))
 HOST_GIO_L = $(if $(CMDR_DEFS),$(shell pkg-config --libs gio-2.0))
@@ -73,7 +77,7 @@ ARM_LIBS := -lm -lpthread
 $(BUILD)/arm-ui/%.o: %.c ui/conf/lv_conf.h port/linux/lv_conf.h
 	@mkdir -p $(dir $@); $(ARM_CC) $(ARM_CFLAGS) $(DEVICE_CPU) $(DEV_FLAGS) -c $< -o $@
 $(BUILD)/arm-ui/ui/%.o: ARM_CFLAGS += $(WARN)
-$(BUILD)/arm-ui/ui/dash_ui.o: ui/dash_ui.h ui/dash_state.h ui/project_region.h $(UI_GEN)/assets.h $(UI_GEN)/aa_icon.h
+$(BUILD)/arm-ui/ui/dash_ui.o: ui/dash_ui.h ui/dash_state.h ui/project_region.h $(UI_GEN)/assets.h $(UI_GEN)/aa_icon.h core/cmdr_msg.h build/car_actions_gen.h
 # the toolchain's own pkg-config, beside its gcc (Buildroot's host/bin)
 ARM_PKG_CONFIG ?= $(dir $(lastword $(ARM_CC)))pkg-config
 ARM_GIO_C = $(if $(CMDR_DEFS),$(shell $(ARM_PKG_CONFIG) --cflags gio-2.0))

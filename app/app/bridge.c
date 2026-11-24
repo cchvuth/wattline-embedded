@@ -13,7 +13,7 @@ void bt_view_none(bt_view_t *b) {
   b->until = -1;
   b->dest = NULL;
   b->nav_minutes = b->nav_miles = b->nav_arrive_pct = NAN;
-  b->recirc_mode = -1;
+  b->recirc_mode = b->massage_l = b->massage_r = -1;
 }
 
 static bool seen(const bridge_in_t *in, unsigned id) { return in->seen && in->seen[id >> 3] >> (id & 7) & 1; }
@@ -227,6 +227,18 @@ void bridge_fill(dash_state_t *s, const car_t *c, const link_t *l, const bt_view
   s->frunk = c->frunk;
   s->recirc = wl && seen(in, 0x243) ? c->hvac_on && c->recirc_on : bt->recirc_mode >= 0 && (bt->recirc_mode & 0x7f) == 1;
   s->interior = (c->dome_light && !strcmp(c->dome_light, "ON")) || c->map_light;
+  // The car ends the massage when a door opens or it shifts into P: the reading then set aside until it moves or the
+  // seat is pressed (actions.c: a press clears it), so a 0 the Commander might leave out of its push leaves no chip lit
+  static bool was_p, was_door;   // each its own edge: a door opened in P ends it too
+  bool p = c->gear == 'P', door = c->door_fl || c->door_fr || c->door_rl || c->door_rr;
+  if ((p && !was_p) || (door && !was_door)) app_massage_stale[0] = bt->massage_l, app_massage_stale[1] = bt->massage_r;
+  was_p = p, was_door = door;
+  // a new reading counts again; none at all (the Bluetooth link dropped, about to repeat its held one) is not one
+  if (bt->massage_l >= 0 && bt->massage_l != app_massage_stale[0]) app_massage_stale[0] = -2;
+  if (bt->massage_r >= 0 && bt->massage_r != app_massage_stale[1]) app_massage_stale[1] = -2;
+  int ml = app_massage_stale[0] == -2 ? bt->massage_l : -1, mr = app_massage_stale[1] == -2 ? bt->massage_r : -1;
+  s->massage_l = ml >= 0 ? (uint8_t)(ml & 0x7f) : 0;   // (the chip checks it is a mode)
+  s->massage_r = mr >= 0 ? (uint8_t)(mr & 0x7f) : 0;
   s->co2_ppm = (int16_t)c->co2ppm;   // the UI blanks it off WiFi, its slot kept
 
   route(s, c, bt, in);

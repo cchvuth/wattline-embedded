@@ -26,6 +26,8 @@ extern const lv_image_dsc_t ic_grip;
 extern const lv_image_dsc_t ic_high;
 extern const lv_image_dsc_t ic_interior;
 extern const lv_image_dsc_t ic_low;
+extern const lv_image_dsc_t ic_massage;
+extern const lv_image_dsc_t ic_massage_s;
 extern const lv_image_dsc_t ic_mirror;
 extern const lv_image_dsc_t ic_recirc;
 extern const lv_image_dsc_t ic_recirc_s;

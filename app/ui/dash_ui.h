@@ -53,6 +53,8 @@ typedef struct {
 	int cards[4];             /* basic: the card each slot shows, left to right (DASH_CARD_*) */
 	int split_card;           /* the phone layout's split: the card right of the ring (DASH_CARD_*); a swipe up or down on it */
 	int ring_page;            /* basic's and the split's ring: DASH_RING_* (main.dart _ringPage); a swipe on it */
+	char slots[12][56];       /* the dash's twelve buttons (each side's six, the left first): "" its own, else the car panel
+	                           * action put there ("Group|Name", car_actions.dart homeSlots) */
 } dash_settings_t;
 /* the basic layout's cards, as the app's (main.dart _basicRow, kBasicCards: G is its drive card) */
 enum { DASH_CARD_ENERGY, DASH_CARD_G, DASH_CARD_CAR, DASH_CARD_BUTTONS, DASH_CARD_ROUTE, DASH_CARD_POWER, DASH_CARDS };

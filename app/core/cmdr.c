@@ -111,7 +111,7 @@ static void dialling(cmdr_t *c, cmdr_state s, const char *why) {
 }
 
 static void clear_nav(cmdr_t *c) {
-  c->has_dest = c->has_miles = c->has_minutes = c->has_arrive = c->has_recirc = 0;
+  c->has_dest = c->has_miles = c->has_minutes = c->has_arrive = c->has_recirc = c->has_massage_l = c->has_massage_r = 0;
   c->dest[0] = 0;
 }
 
@@ -186,8 +186,9 @@ static int subscribe(cmdr_t *c, int level, int64_t now) {
                          : cmdr_subscribe(m, cmdr_all_fields, sizeof cmdr_all_fields);
   int e = request(c, m, n, &c->sub_status, r, &rn);
   if (e) return e;
-  if (level == CMDR_FULL && c->sub_status) {   // a Commander that refuses the newer fields: the rest without them
-    n = cmdr_subscribe(m, cmdr_all_fields, sizeof cmdr_all_fields - CMDR_NEWER);
+  if (c->sub_status) {   // a Commander that refuses the newer fields: the rest without them
+    n = level == CMDR_LEAN ? cmdr_subscribe(m, cmdr_lean_fields, sizeof cmdr_lean_fields - CMDR_LEAN_NEWER)
+                           : cmdr_subscribe(m, cmdr_all_fields, sizeof cmdr_all_fields - CMDR_NEWER);
     if ((e = request(c, m, n, &c->sub_status, r, &rn))) return e;
   }
   c->push_info = level == CMDR_FULL ? "subscribed" : "subscribed to the route and recirculation only";
@@ -454,6 +455,8 @@ void cmdr_on_push(cmdr_t *c, const uint8_t *d, size_t n) {
   if (p.has_minutes) c->minutes = p.minutes, c->has_minutes = 1;
   if (p.has_arrive) c->arrive_pct = p.arrive_pct, c->has_arrive = 1;
   if (p.has_recirc) c->recirc = p.recirc, c->has_recirc = 1;
+  if (p.has_massage_l) c->massage_l = p.massage_l, c->has_massage_l = 1;
+  if (p.has_massage_r) c->massage_r = p.massage_r, c->has_massage_r = 1;
   if (c->cfg.on_data) c->cfg.on_data(c->cfg.data_ctx, p.data, p.data_len);
 }
 
@@ -526,9 +529,9 @@ void cmdr_data_hold(cmdr_t *c, int hold, int64_t now) {
 }
 
 int cmdr_press_guard(cmdr_action a, int parked, char gear) {
-  if ((unsigned)a >= ACT_COUNT) return CMDR_E_DENIED;
+  if (!cmdr_action_at(a)) return CMDR_E_DENIED;
   if (cmdr_action_opens(a) && !parked) return CMDR_E_PARK; // a lid rising at speed blinds the driver
-  if (a == ACT_MIRROR_TILT && (gear == 'P' || gear == 'N' || gear == 'D')) return CMDR_E_GEAR; // acts in R only
+  if (cmdr_action_at(a)->id == 17 && (gear == 'P' || gear == 'N' || gear == 'D')) return CMDR_E_GEAR; // tilt: acts in R only
   return 0;
 }
 

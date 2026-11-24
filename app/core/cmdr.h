@@ -90,10 +90,10 @@ typedef struct {
   const char *push_info;
   char car_link[96]; // ReqGetTeslaAPIStatus in words
   uint64_t last_status, sub_status;
-  int has_dest, has_miles, has_minutes, has_arrive, has_recirc;
+  int has_dest, has_miles, has_minutes, has_arrive, has_recirc, has_massage_l, has_massage_r;
   char dest[128];
   float miles, minutes, arrive_pct;
-  uint64_t recirc;
+  uint64_t recirc, massage_l, massage_r;
   unsigned push_count;
   // Internal.
   cmdr_cfg cfg;

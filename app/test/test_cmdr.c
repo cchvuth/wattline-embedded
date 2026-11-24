@@ -203,7 +203,7 @@ int main(void) {
   CHECK(nsaid == 2 && said[0] == CS_SCANNING && said[1] == CS_LINKING);   // said before the scan and the connect block
   CHECK(dev.last_dev_type == 1 && !dev.scan_had_pin);
   CHECK(dev.types[32] == 1 && dev.types[124] == 1 && dev.types[48] == 1 && dev.types[82] == 1);
-  CHECK(dev.last_sub_fields == 60 && dev.notifies == 1);   // the packed field list: 48 one-byte numbers, 6 two-byte
+  CHECK(dev.last_sub_fields == 64 && dev.notifies == 1);   // the packed field list: 48 one-byte numbers, 8 two-byte
   CHECK(!strcmp(c.car_link, "car link connected, infotainment ok, paired"));
   CHECK(file_is(PIN_PATH, "AA:BB:CC:00:00:01"));
   char id[64];
@@ -397,7 +397,7 @@ int main(void) {
   run(&c, 1950);
   CHECK(dev.scans == 0);
   run(&c, 50);
-  CHECK(c.state == CS_READY && c.level == CMDR_LEAN && dev.last_sub_fields == 5); // the hold lifted on the same tick
+  CHECK(c.state == CS_READY && c.level == CMDR_LEAN && dev.last_sub_fields == 9); // (5 one-byte, 130/131 two) the hold lifted on the same tick
   CHECK(dev.types[124] == 1 && dev.connects == 1);
   // A new stream: step aside (a link was up: settle), back with the buttons, data after.
   CHECK(cmdr_step_aside(&c, now) == 3000 && c.state == CS_PAUSED && !dev.linked);
@@ -412,7 +412,7 @@ int main(void) {
   run(&c, 9950);
   CHECK(c.level == CMDR_LEAN);
   run(&c, 50);
-  CHECK(c.level == CMDR_FULL && dev.last_sub_fields == 60 && dev.connects == 2);
+  CHECK(c.level == CMDR_FULL && dev.last_sub_fields == 64 && dev.connects == 2);
   // WiFi back: fewer fields only by dialling again.
   cmdr_wifi(&c, 1, 0, now);
   run(&c, 3000);

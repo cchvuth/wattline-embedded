@@ -3,6 +3,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../build/car_actions_gen.h"
+
+const cmdr_action_def *cmdr_action_at(int a) {
+  return a >= 0 && a < ACT_COUNT ? &cmdr_actions[a] : a >= ACT_COUNT && a < ACT_COUNT + cmdr_car_opt_count ? &cmdr_car_opts[a - ACT_COUNT] : NULL;
+}
+
 const cmdr_action_def cmdr_actions[ACT_COUNT] = {
     [ACT_FRUNK] = {2, 0, "Frunk"},
     [ACT_TRUNK] = {3, 0, "Trunk"},
@@ -21,10 +27,18 @@ const cmdr_action_def cmdr_actions[ACT_COUNT] = {
     [ACT_HONK] = {15, 1, "Honk"},
     [ACT_FLASH] = {33, 6, "Flash"},
     [ACT_CLIMATE] = {70, 0, "Climate"},
+    // the front seats' lumbar massage: 98 driver, 99 passenger; 3 soft, 2 pulse, 4 hard (the running one again: off)
+    [ACT_MASSAGE_L_SOFT] = {98, 3, "Left Seat Massage: Soft"},
+    [ACT_MASSAGE_L_PULSE] = {98, 2, "Left Seat Massage: Pulse"},
+    [ACT_MASSAGE_L_HARD] = {98, 4, "Left Seat Massage: Hard"},
+    [ACT_MASSAGE_R_SOFT] = {99, 3, "Right Seat Massage: Soft"},
+    [ACT_MASSAGE_R_PULSE] = {99, 2, "Right Seat Massage: Pulse"},
+    [ACT_MASSAGE_R_HARD] = {99, 4, "Right Seat Massage: Hard"},
 };
 
 int cmdr_action_opens(cmdr_action a) {
-  unsigned id = cmdr_actions[a].id;
+  const cmdr_action_def *d = cmdr_action_at(a);
+  unsigned id = d ? d->id : 0;
   return id == 2 || id == 3 || id == 40;
 }
 
@@ -32,13 +46,13 @@ const char *const cmdr_statuses[9] = {"ok", "invalid security scheme", "invalid 
                                       "invalid argument", "internal error", "crypto error", "invalid session",
                                       "not supported"};
 
-const uint8_t cmdr_lean_fields[5] = {6, 7, 8, 9, 101};
+const uint8_t cmdr_lean_fields[7] = {6, 7, 8, 9, 101, 130, 131};
 // _wifiLacks + Panda.btFields + Panda.btTraceFields (lib/panda.dart), + the Dash's 24 display_brightness, then the
 // CMDR_NEWER fields last (Commander._newer).
-const uint8_t cmdr_all_fields[54] = {6, 7, 8, 9, 101, 27, 32, 34, 35, 36, 37, 42, 43, 44, 49,
+const uint8_t cmdr_all_fields[56] = {6, 7, 8, 9, 101, 27, 32, 34, 35, 36, 37, 42, 43, 44, 49,
                                      51, 53, 61, 62, 63, 64, 65, 66, 80, 81, 82, 85, 105, 106, 107,
                                      108, 110, 111, 112, 113, 114, 115, 116, 117, 118, 28, 29, 77, 78, 24,
-                                     125, 126, 127, 128, 132, 133, 134, 135, 159};
+                                     125, 126, 127, 128, 130, 131, 132, 133, 134, 135, 159};
 
 uint32_t cmdr_payload_field(uint64_t type) {
   switch (type) {
@@ -86,11 +100,12 @@ size_t cmdr_send_uuid(uint8_t *out, const char *id) {
 
 // ReqTryAction{PressActionConfig{action, switch type 1 (on/off), [state]}}.
 size_t cmdr_try_action(uint8_t *out, cmdr_action a) {
-  if ((unsigned)a >= ACT_COUNT) return 0;
+  const cmdr_action_def *d = cmdr_action_at(a);
+  if (!d) return 0;
   uint8_t st[10], cfg[32], b[40];
   pb_out s = {st, 0, sizeof st, 0}, c = {cfg, 0, sizeof cfg, 0}, o = {b, 0, sizeof b, 0};
-  pb_varint(&s, cmdr_actions[a].state);
-  pb_u(&c, 1, cmdr_actions[a].id);
+  pb_varint(&s, d->state);
+  pb_u(&c, 1, d->id);
   pb_u(&c, 2, 1);
   pb_b(&c, 3, st, s.n);
   pb_b(&o, 1, cfg, c.n);
@@ -160,6 +175,8 @@ int cmdr_push_parse(const uint8_t *d, size_t n, cmdr_push *p) {
   if (pb_get(b, bn, 8, &v) == 1 && v.wt == 5) p->minutes = v.f, p->has_minutes = 1;
   if (pb_get(b, bn, 9, &v) == 1 && v.wt == 5) p->arrive_pct = v.f, p->has_arrive = 1;
   if (pb_get_u(b, bn, 101, &p->recirc)) p->has_recirc = 1;
+  if (pb_get_u(b, bn, 130, &p->massage_l)) p->has_massage_l = 1;
+  if (pb_get_u(b, bn, 131, &p->massage_r)) p->has_massage_r = 1;
   return p->kind = 16;
 }
 

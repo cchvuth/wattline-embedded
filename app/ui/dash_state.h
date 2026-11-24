@@ -118,6 +118,7 @@ typedef struct {
 	/* The action chips' lit states, and the cabin CO2 on the recirculation chip. */
 	bool trunk, mirror_tilt, door_fl, door_rl, charge_port;
 	bool frunk, recirc, door_fr, door_rr, interior;
+	uint8_t massage_l, massage_r;    /* the seats' massage as pressed (ACT_MASSAGE_*: 3 soft, 2 pulse, 4 hard), 0 none */
 	int16_t co2_ppm;                 /* -1: no figure yet; 0 and up shown */
 	bool co2_stale;                  /* the slot stays, blank */
 
@@ -128,7 +129,7 @@ typedef struct {
 
 	/* Presses (main.dart _press): the action a press is out for (cmdr_action, -1 none), and the snackbar's line
 	 * ("" none; on the car panel its message line). The approval prompt shows while bt is BT_APPROVING. */
-	int8_t press_pending;
+	int16_t press_pending;            /* the press out (an ACT_* or a car panel press, cmdr_action), -1 none */
 	char toast[128];
 
 	/* Pairing a computer for SSH (app/pair.c): the window is open, its URL and code, seconds left, the result line. */

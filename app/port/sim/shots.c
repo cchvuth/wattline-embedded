@@ -12,6 +12,7 @@
 #include "../../ui/scenes.h"
 #include "../../ui/project_region.h"
 #include "../../core/cmdr_msg.h" /* the chips' actions */
+#include "assets.h"                /* the device's icons: the massage chip found by its own */
 #include "src/libs/lodepng/lodepng.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -114,7 +115,7 @@ static void touch(int x, int y, int hold) /* a finger on x, y for [hold] ms, rea
 static lv_obj_t *find_label(lv_obj_t *o, const char *text);
 /* The split's bar's buttons as LVGL finds them under a finger, row by row (past the links at its left end, not Exit):
  * n of them, their boxes into [a]. */
-static int bar_buttons(lv_area_t a[10])
+static int bar_buttons(lv_area_t a[12])
 {
 	int n = 0;
 	for (int y = 4; y < PJ_RGN_Y; y += 8)
@@ -126,7 +127,7 @@ static int bar_buttons(lv_area_t a[10])
 			lv_obj_get_coords(o, &c);
 			bool seen = false;
 			for (int k = 0; k < n; k++) seen |= c.x1 == a[k].x1 && c.y1 == a[k].y1;
-			if (!seen && n < 10) a[n++] = c;
+			if (!seen && n < 12) a[n++] = c;
 		}
 	return n;
 }
@@ -152,12 +153,13 @@ static void on_save(int what, const dash_settings_t *st, void *ctx)
 }
 static int pressed; /* the action last pressed */
 static void on_press(int action, void *ctx) { presses++, pressed = action; }
+#endif
+
 static int expect(bool ok, const char *what)
 {
 	if (!ok) printf("  FAIL %s\n", what);
 	return !ok;
 }
-#endif
 
 /* Taps the button whose label reads [text] (as a finger would): 1 found. */
 static int tap_label(lv_obj_t *o, const char *text)
@@ -180,6 +182,16 @@ static lv_obj_t *find_label(lv_obj_t *o, const char *text)
 		lv_obj_t *c = lv_obj_get_child(o, i), *f;
 		if (lv_obj_check_type(c, &lv_label_class) && !strcmp(lv_label_get_text(c), text)) return c;
 		if ((f = find_label(c, text))) return f;
+	}
+	return NULL;
+}
+/* The first chip (the left side's) showing [icon], or NULL. */
+static lv_obj_t *chip_with(lv_obj_t *o, const lv_image_dsc_t *icon)
+{
+	for (uint32_t i = 0; i < lv_obj_get_child_count(o); i++) {
+		lv_obj_t *c = lv_obj_get_child(o, i), *f;
+		if (lv_obj_check_type(c, &lv_image_class) && lv_image_get_src(c) == icon) return o;
+		if ((f = chip_with(c, icon))) return f;
 	}
 	return NULL;
 }
@@ -251,6 +263,24 @@ int main(int argc, char **argv)
 		scenes[6].fill(&s); /* charging, in P */
 		s.press_pending = 1; /* ACT_TRUNK */
 		bad |= shot(d, out, "touch-press-pending", &s, DASH_VIEW_DASH);
+		/* the seats' massage: the left one on Soft, its chip lit; a tap offers the modes, Soft ticked; Soft taken (the
+		 * running one again: off) and the menu gone */
+		scenes[1].fill(&s);
+		s.massage_l = 3;
+		bad |= shot(d, out, "touch-massage-on", &s, DASH_VIEW_DASH);
+		lv_obj_t *mc = chip_with(lv_screen_active(), &ic_massage_s);
+		if (mc) lv_obj_send_event(mc, LV_EVENT_SHORT_CLICKED, NULL);
+		bad |= shot(d, out, "touch-massage-menu", &s, -1);
+#if DASH_PHONE_LAYOUT
+		dash_ui_set_action_cb(on_press, NULL);
+		bad |= expect(mc && tap_label(lv_layer_top(), "Soft") && presses == 1 && pressed == ACT_MASSAGE_L_SOFT,
+			      "the massage menu: Soft pressed");
+		dash_ui_set_action_cb(NULL, NULL);
+		presses = 0;
+#else
+		tap_label(lv_layer_top(), "Soft");
+#endif
+		bad |= shot(d, out, "touch-massage-closed", &s, -1);
 		scenes[1].fill(&s); /* highway */
 		snprintf(s.toast, sizeof s.toast, "Frunk opens in P only");
 		bad |= shot(d, out, "touch-press-refused", &s, DASH_VIEW_DASH);
@@ -264,6 +294,33 @@ int main(int argc, char **argv)
 		bad |= shot(d, out, "touch-car-panel", &s, DASH_VIEW_CAR_PANEL);
 		s.bt = BT_APPROVING; /* a press there while unlinked asked for the approval: its step in the panel's line */
 		bad |= shot(d, out, "touch-car-panel-approval", &s, DASH_VIEW_CAR_PANEL);
+		/* a button: Execute or Add to home screen; executed, its options over it (a seat's profiles); then a risky one
+		 * asked first (a gear); then one put on the dash in place of a button (the glovebox for the mirror's), and the
+		 * dash's own buttons back */
+		scenes[6].fill(&s);
+		clock_ms += 600; /* (past the panel's first moment, which takes no taps) */
+		bad |= expect(tap_label(lv_screen_active(), "Left Seat Profile"), "the car panel: a seat profile's button");
+		bad |= shot(d, out, "touch-car-panel-choice", &s, -1);
+		bad |= expect(tap_label(lv_layer_top(), "Execute"), "its choice: Execute");
+		bad |= shot(d, out, "touch-car-panel-menu", &s, -1);
+		bad |= expect(find_label(lv_layer_top(), "Profile 4") != NULL, "its menu: the four profiles");
+		tap_label(lv_layer_top(), "Profile 2");
+		clock_ms += 600;
+		bad |= expect(tap_label(lv_screen_active(), "Set to R") && tap_label(lv_layer_top(), "Execute"), "the car panel: a gear executed");
+		bad |= shot(d, out, "touch-car-panel-confirm", &s, -1);
+		bad |= expect(find_label(lv_layer_top(), "Press it on the car now?") != NULL, "a gear: asked first");
+		tap_label(lv_layer_top(), "Cancel");
+		clock_ms += 600;
+		bad |= expect(tap_label(lv_screen_active(), "Glovebox") && tap_label(lv_layer_top(), "Add to home screen"),
+			      "the car panel: the glovebox to the home screen");
+		bad |= shot(d, out, "touch-car-panel-slots", &s, -1);
+		bad |= expect(tap_label(lv_layer_top(), "Left 2: Mirror tilt"), "in place of the mirror's button");
+		bad |= shot(d, out, "touch-slot-glovebox", &s, DASH_VIEW_DASH);
+		bad |= expect(find_label(lv_screen_active(), "Glovebox") != NULL, "the dash: the glovebox in the mirror's place");
+		dash_ui_show(DASH_VIEW_CAR_PANEL);
+		clock_ms += 600;
+		bad |= expect(tap_label(lv_screen_active(), "Restore default buttons"), "the dash's own buttons back");
+		dash_ui_show(DASH_VIEW_DASH);
 		dash_settings_t st = {.minor_figures = true, .hour12 = true, .brightness_pct = 70, .follow_car = true, .car = 4, .sparse = true, .wifi_first = true, .net_count = 3,
 				      .net = {{"S3XY_OBD", ""}, {"Home WiFi", ""}, {"Phone hotspot", ""}},
 				      .tz = "CET-1CEST,M3.5.0,M10.5.0/3", .panda_host = "192.168.4.1", .panda_port = 1338,
@@ -555,14 +612,14 @@ int main(int argc, char **argv)
 		swipe(ring_x, H * 5 / 6, ring_x, H / 3);
 		bad |= expect(saved.ring_page == DASH_RING_SPEEDO && saved.split_card == DASH_CARD_POWER, "the split's ring: the speedometer");
 		bad |= shot(d, out, "swipe-split-speedo", &s, -1);
-		lv_area_t b[10];
+		lv_area_t b[12];
 		int nb = bar_buttons(b);
 		lv_obj_t *exit_l = find_ui_label("EXIT");
 		lv_area_t ex = {0};
 		if (exit_l) lv_obj_get_coords(lv_obj_get_parent(exit_l), &ex);
-		bool in_bar = nb == 10 && exit_l;
+		bool in_bar = nb == 12 && exit_l;
 		for (int k = 0; k < nb; k++) in_bar &= b[k].y1 >= 0 && b[k].y2 < PJ_RGN_Y && b[k].x2 < ex.x1 && b[k].x1 > PJ_RGN_X + W / 20;
-		bad |= expect(in_bar, "the ten buttons in the bar, between the links and Exit, off the picture");
+		bad |= expect(in_bar, "the twelve buttons in the bar, between the links and Exit, off the picture");
 		int was = saves;
 		swipe(pic_x, PJ_RGN_Y + PJ_RGN_H * 4 / 5, pic_x, PJ_RGN_Y + PJ_RGN_H / 5); /* the phone's */
 		swipe(pic_x, PJ_RGN_Y - 10, pic_x, 10);                                  /* the bar over the picture */

@@ -56,8 +56,10 @@ typedef struct {
   const char *dest;             // NULL: none
   double nav_minutes, nav_miles, nav_arrive_pct;   // NAN: none
   int recirc_mode;              // -1: none
+  int massage_l, massage_r;     // fields 130/131 (low 7 bits the mode as pressed), -1: none
 } bt_view_t;
 void bt_view_none(bt_view_t *b);
+extern int app_massage_stale[2];   // each seat's massage reading set aside when the car ended it (-2: none; a press clears it)
 
 // ---- bridge: core state -> dash_state_t, deciding as lib/main.dart and lib/widgets.dart do ----
 typedef struct {

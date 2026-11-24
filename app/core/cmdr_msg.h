@@ -8,10 +8,20 @@
 typedef enum {
   ACT_FRUNK, ACT_TRUNK, ACT_LIGHT, ACT_MIRROR_TILT, ACT_RECIRC_ON, ACT_RECIRC_OFF, ACT_RECIRC_TOGGLE,
   ACT_DOOR_FL, ACT_DOOR_FR, ACT_DOOR_RL, ACT_DOOR_RR, ACT_UNLOCK, ACT_LOCK, ACT_CHARGE_PORT,
-  ACT_HONK, ACT_FLASH, ACT_CLIMATE, ACT_COUNT
+  ACT_HONK, ACT_FLASH, ACT_CLIMATE,
+  ACT_MASSAGE_L_SOFT, ACT_MASSAGE_L_PULSE, ACT_MASSAGE_L_HARD, ACT_MASSAGE_R_SOFT, ACT_MASSAGE_R_PULSE, ACT_MASSAGE_R_HARD,
+  ACT_COUNT
 } cmdr_action;
 typedef struct { uint8_t id, state; const char *label; } cmdr_action_def;
 extern const cmdr_action_def cmdr_actions[ACT_COUNT];
+// Every S3XY function, the car panel's (lib/car_actions.dart, generated into build/car_actions_gen.h): each option a
+// press of its own, numbered after ACT_COUNT (ACT_COUNT + its index in cmdr_car_opts); an action its options in a row.
+typedef struct { const char *group, *name; uint16_t first; uint8_t n, confirm; } cmdr_car_act;
+extern const int cmdr_car_opt_count, cmdr_car_act_count;
+extern const cmdr_action_def cmdr_car_opts[];
+extern const char *const cmdr_car_words[]; // an option's own word ("Soft"), NULL for an action without a choice
+extern const cmdr_car_act cmdr_car_acts[];
+const cmdr_action_def *cmdr_action_at(int a); // an ACT_* or a car panel press; NULL for any other number
 int cmdr_action_opens(cmdr_action a); // frunk, trunk, doors: P only
 
 enum { CMDR_MSG_MAX = 512 };
@@ -37,10 +47,11 @@ int cmdr_reply_status(const uint8_t *r, size_t n, uint64_t *type, uint64_t *stat
 extern const char *const cmdr_statuses[9]; // 'ok' .. 'not supported'
 
 // The vehicle-data fields a session subscribes to: what WiFi lacks, or all.
-extern const uint8_t cmdr_lean_fields[5];
-// The last CMDR_NEWER (the tyres, the cabin) need recent Commander firmware: dropped again if a subscription is refused.
-enum { CMDR_NEWER = 5 };
-extern const uint8_t cmdr_all_fields[54];
+extern const uint8_t cmdr_lean_fields[7];
+// The last CMDR_NEWER of all, the last CMDR_LEAN_NEWER of the lean ones (the seats' massage, the tyres, the cabin) need
+// recent Commander firmware: dropped again if a subscription is refused.
+enum { CMDR_NEWER = 7, CMDR_LEAN_NEWER = 2 };
+extern const uint8_t cmdr_all_fields[56];
 
 // A push (notification on push-enhapi, in the clear).
 typedef struct {
@@ -48,10 +59,10 @@ typedef struct {
   // kind 16: the PushVehicleDataHolder body, for the CAN-side decoder.
   const uint8_t *data;
   size_t data_len;
-  int has_dest, has_miles, has_minutes, has_arrive, has_recirc;
+  int has_dest, has_miles, has_minutes, has_arrive, has_recirc, has_massage_l, has_massage_r;
   char dest[128];   // "" = no destination
   float miles, minutes, arrive_pct;
-  uint64_t recirc;
+  uint64_t recirc, massage_l, massage_r;  // 101; 130/131: the seats' massage (low 7 bits the mode as pressed)
   // kind 8: device type (64 the Dash, 1 a phone) and connected (1), gone (0), no change (-1).
   uint64_t dev_type;
   int dev_on;

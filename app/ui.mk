@@ -6,6 +6,9 @@ include device/$(DEVICE).mk
 LVGL := third_party/lvgl-9.6.0
 LVGL_SRC := $(shell find $(LVGL)/src -name '*.c')
 UI_SRC := ui/dash_ui.c ui/scenes.c $(UI_GEN)/assets.c $(UI_GEN)/aa_icon.c ui/gen/roboto.c
+# the actions' table (the car panel's buttons): the app's own builds have it already (app.mk APP_SRC)
+UI_CORE := core/cmdr_msg.c core/pb.c
+$(BUILD)/host/core/cmdr_msg.o $(BUILD)/arm-ui/core/cmdr_msg.o: core/cmdr_msg.h build/car_actions_gen.h
 WARN := -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
 
 # --- host (Mac): headless renderer -> $(BUILD)/shots/<scene>.png
@@ -16,9 +19,9 @@ DEV_FLAGS := $(DEVICE_DEFS) $(EXTRA_DEFS) -I$(UI_GEN)   # EXTRA_DEFS: a one-off 
 $(BUILD)/host/%.o: %.c port/sim/lv_conf.h ui/conf/lv_conf.h port/linux/lv_conf.h
 	@mkdir -p $(dir $@); $(HOST_CC) $(HOST_CFLAGS) $(DEV_FLAGS) -c $< -o $@
 $(BUILD)/host/ui/%.o $(BUILD)/host/port/sim/%.o: HOST_CFLAGS += $(WARN)
-$(BUILD)/host/ui/dash_ui.o $(BUILD)/host/port/sim/shots.o $(BUILD)/host/ui/scenes.o: ui/dash_ui.h ui/dash_state.h ui/scenes.h \
+$(BUILD)/host/ui/dash_ui.o $(BUILD)/host/port/sim/shots.o $(BUILD)/host/ui/scenes.o: ui/dash_ui.h ui/dash_state.h ui/scenes.h core/cmdr_msg.h \
   ui/project_region.h $(UI_GEN)/assets.h $(UI_GEN)/aa_icon.h
-$(BUILD)/host/dash-shots: $(patsubst %.c,$(BUILD)/host/%.o,port/sim/shots.c $(UI_SRC) $(LVGL_SRC))
+$(BUILD)/host/dash-shots: $(patsubst %.c,$(BUILD)/host/%.o,port/sim/shots.c $(UI_SRC) $(UI_CORE) $(LVGL_SRC))
 	$(HOST_CC) -o $@ $^ -lm
 
 shots: $(BUILD)/host/dash-shots
@@ -34,9 +37,9 @@ ARM_CFLAGS := -std=gnu11 -O2 -DLV_CONF_INCLUDE_SIMPLE -Iui/conf -I$(LVGL) -I$(LV
 $(BUILD)/arm-ui/%.o: %.c ui/conf/lv_conf.h port/linux/lv_conf.h
 	@mkdir -p $(dir $@); $(ARM_CC) $(ARM_CFLAGS) $(DEVICE_CPU) $(DEV_FLAGS) -c $< -o $@
 $(BUILD)/arm-ui/ui/%.o: ARM_CFLAGS += $(WARN)
-$(BUILD)/arm-ui/ui/dash_ui.o $(BUILD)/arm-ui/ui/main_dash.o $(BUILD)/arm-ui/ui/scenes.o: ui/dash_ui.h ui/dash_state.h \
+$(BUILD)/arm-ui/ui/dash_ui.o $(BUILD)/arm-ui/ui/main_dash.o $(BUILD)/arm-ui/ui/scenes.o: ui/dash_ui.h ui/dash_state.h core/cmdr_msg.h \
   ui/scenes.h ui/project_region.h $(UI_GEN)/assets.h $(UI_GEN)/aa_icon.h
-$(BUILD)/arm-ui/dash-ui: $(patsubst %.c,$(BUILD)/arm-ui/%.o,ui/main_dash.c $(UI_SRC) $(LVGL_SRC))
+$(BUILD)/arm-ui/dash-ui: $(patsubst %.c,$(BUILD)/arm-ui/%.o,ui/main_dash.c $(UI_SRC) $(UI_CORE) $(LVGL_SRC))
 	$(ARM_CC) -o $@ $^ -lm -lpthread
 	$(ARM_CC:gcc=strip) -o $@.stripped $@
 arm: $(BUILD)/arm-ui/dash-ui

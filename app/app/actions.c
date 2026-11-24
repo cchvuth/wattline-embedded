@@ -30,14 +30,16 @@ void app_tell(const char *text, int64_t now) {  // main.dart _say: in place of t
 }
 
 
+int app_massage_stale[2] = {-2, -2};
+
 void app_on_action(int a, void *ctx) {
   (void)ctx;
   int64_t now = mono_ms();
-  if (a < 0 || a >= ACT_COUNT) return;
+  if (!cmdr_action_at(a)) return;
   if (pending >= 0) {  // one at a time (car_panel.dart _busy); never queued, never resent
     char t[128];
-    log_msg("press %s dropped: %s still out", cmdr_actions[a].label, cmdr_actions[pending].label);
-    snprintf(t, sizeof t, "%s: waiting for %s's answer first", cmdr_actions[a].label, cmdr_actions[pending].label);
+    log_msg("press %s dropped: %s still out", cmdr_action_at(a)->label, cmdr_action_at(pending)->label);
+    snprintf(t, sizeof t, "%s: waiting for %s's answer first", cmdr_action_at(a)->label, cmdr_action_at(pending)->label);
     app_tell(t, now);   // said, on the dash and the car panel's line: else the tap seems to do nothing
     return;
   }
@@ -45,30 +47,34 @@ void app_on_action(int a, void *ctx) {
   if (!cmdr_hook_ready()) {  // main.dart _press: look now (the tap is the owner's), and say what the link is doing
     char t[128];
     snprintf(t, sizeof t, "Commander Bluetooth: %s", cmdr_hook_why());
-    log_msg("press %s: not linked", cmdr_actions[a].label);
+    log_msg("press %s: not linked", cmdr_action_at(a)->label);
     cmdr_hook_ask();
     app_tell(t, now);
     return;
   }
   pending = a, pending_at = now;
-  log_msg("press %s", cmdr_actions[a].label);
+  if (cmdr_action_at(a)->id == 98 || cmdr_action_at(a)->id == 99) app_massage_stale[cmdr_action_at(a)->id - 98] = -2;
+  log_msg("press %s", cmdr_action_at(a)->label);
   dash_press(a, now);  // the session guards it again and sends it once (cmdr_hook_press); `now` is its id
 #else
-  log_msg("press %s: no Commander session in this build", cmdr_actions[a].label);
+  log_msg("press %s: no Commander session in this build", cmdr_action_at(a)->label);
   app_tell("Commander Bluetooth: off", now);
 #endif
 }
 
 void app_press_result(int a, int result, int status, char gear, int64_t at, int64_t now) {
-  if (a < 0 || a >= ACT_COUNT) return;
+  if (!cmdr_action_at(a)) return;
   if (a == pending && at == pending_at) pending = -1;   // its own answer, not a late one of an earlier press
-  const char *label = cmdr_actions[a].label;
+  const char *label = cmdr_action_at(a)->label;
   char t[128] = "";
 #ifdef DASH_CMDR
-  int panel = a == ACT_UNLOCK || a == ACT_LOCK || a == ACT_CLIMATE || a == ACT_FLASH || a == ACT_HONK;
+  const cmdr_action_def *d = cmdr_action_at(a);
+  // the car panel's (every one of its presses: their words on its line), and its unlock and climate by what they send
+  int panel = a >= ACT_COUNT || a == ACT_UNLOCK || a == ACT_LOCK || a == ACT_CLIMATE || a == ACT_FLASH || a == ACT_HONK;
+  int unlock = d->id == 53 && d->state == 1, climate = d->id == 70;
   switch (result) {
   case CMDR_OK:  // the Commander's 0 only means it took the press; the chips light from the car's own state
-    if (panel) snprintf(t, sizeof t, a == ACT_UNLOCK ? "%s sent: unlocks with the driver inside" : "%s sent", label);
+    if (panel) snprintf(t, sizeof t, unlock ? "%s sent: unlocks with the driver inside" : "%s sent", label);
     break;
   case CMDR_E_NOT_READY: snprintf(t, sizeof t, "Commander Bluetooth: %s", cmdr_hook_why()); break;
   case CMDR_E_STALE: snprintf(t, sizeof t, "%s: not sent: Bluetooth was busy, tap again", label); break;
@@ -81,7 +87,7 @@ void app_press_result(int a, int result, int status, char gear, int64_t at, int6
     char why[40];
     if (status >= 0 && status < 9) snprintf(why, sizeof why, "%s", cmdr_statuses[status]);
     else snprintf(why, sizeof why, "status %d", status);
-    snprintf(t, sizeof t, a == ACT_CLIMATE ? "%s: refused (%s): needs the Commander linked to the car (ScanMyTesla off)"
+    snprintf(t, sizeof t, climate ? "%s: refused (%s): needs the Commander linked to the car (ScanMyTesla off)"
                                            : "%s: refused (%s)", label, why);
     break;
   }
@@ -99,11 +105,11 @@ void app_press_result(int a, int result, int status, char gear, int64_t at, int6
 void app_actions_fill(dash_state_t *s, int64_t now) {
   if (pending >= 0 && now - pending_at > ANSWER_MS) {  // no answer at all: let it go, never resend
     char t[128];
-    snprintf(t, sizeof t, "%s: no answer: it may have gone through", cmdr_actions[pending].label);
+    snprintf(t, sizeof t, "%s: no answer: it may have gone through", cmdr_action_at(pending)->label);
     app_tell(t, now);
     pending = -1;
   }
-  s->press_pending = (int8_t)pending;
+  s->press_pending = (int16_t)pending;
   s->backlight_pct = (int8_t)dash_bl_pct;
   const pair_status_t *p = pair_status(now);   // the SSH pairing window, while its view is up
   s->pair_open = p->open;

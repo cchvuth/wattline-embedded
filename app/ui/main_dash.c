@@ -40,7 +40,7 @@ static void tick(lv_timer_t *t)
 	s.ind_l = base.ind_l && lit;
 	s.ind_r = base.ind_r && lit;
 	uint32_t since = now - demo_at;
-	if (demo_press >= 0 && since < 600) s.press_pending = (int8_t)demo_press;
+	if (demo_press >= 0 && since < 600) s.press_pending = (int16_t)demo_press;
 	else if (demo_press >= 0 && since < 4600) snprintf(s.toast, sizeof s.toast, "Demo: no Commander session");
 	dash_ui_set(&s);
 }

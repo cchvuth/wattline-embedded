@@ -126,6 +126,11 @@ void cmdr_hook_sync(car_t *car, const link_t *l, bt_view_t *bt, int64_t now) {
   bt->nav_miles = pub.has_miles ? pub.miles : NAN;
   bt->nav_arrive_pct = pub.has_arrive ? pub.arrive_pct : NAN;
   bt->recirc_mode = pub.has_recirc ? (int)pub.recirc : -1;
+  bt->massage_l = pub.has_massage_l ? (int)pub.massage_l : -1;
+  bt->massage_r = pub.has_massage_r ? (int)pub.massage_r : -1;
+  static int said_l = -2, said_r = -2;   // the raw readings in the log as they change (their meaning still to confirm)
+  if (bt->massage_l != said_l || bt->massage_r != said_r)
+    log_msg("bluetooth: massage %d %d", bt->massage_l, bt->massage_r), said_l = bt->massage_l, said_r = bt->massage_r;
 }
 
 void cmdr_hook_press(cmdr_action a, const car_t *car, link_t *l, int64_t now) {

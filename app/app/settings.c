@@ -156,6 +156,10 @@ void settings_load(dash_settings_t *st, const conf_t *cf) {
         else if (!strcmp(k, "panda_host") && *val && strlen(val) < sizeof st->panda_host) strcpy(st->panda_host, val);
         else if (!strcmp(k, "panda_port") && v > 0 && v < 65536) st->panda_port = v;
         else if (!strcmp(k, "record")) st->record = v;
+        else if (!strncmp(k, "slot", 4)) {   // slot0 .. slot11: a car panel action in a button's place
+          int i = atoi(k + 4);
+          if (i >= 0 && i < 12 && strlen(val) < sizeof st->slots[i] && !strchr(val, '\n')) strcpy(st->slots[i], val);
+        }
       }
       fclose(f);
       log_msg("settings: %s", path);
@@ -236,7 +240,7 @@ int settings_save(dash_settings_t *st) {
   }
 
   int rc = 0;
-  char text[1024];
+  char text[2048];
   snprintf(text, sizeof text,
            "minor_figures = %d\nclock_24h = %d\nbrightness_pct = %d\nfollow_car = %d\nfollow_offset = %d\nssh = %d\nrecord = %d\n"
            "car = %s\nsparse = %d\nwifi_first = %d\ntz = %s\npanda_host = %s\npanda_port = %d\nota_auto = %d\naa_low_res = %d\n"
@@ -254,6 +258,11 @@ int settings_save(dash_settings_t *st) {
     size_t k = strlen(text);                                                        // once swiped (the phone layout's too)
     snprintf(text + k, sizeof text - k, "split_card = %d\nring_page = %d\n", now.split_card, now.ring_page);
   }
+  for (int i = 0; i < 12; i++)   // a car panel action put in a button's place
+    if (now.slots[i][0] && !strchr(now.slots[i], '\n')) {
+      size_t k = strlen(text);
+      snprintf(text + k, sizeof text - k, "slot%d = %s\n", i, now.slots[i]);
+    }
   if (!(rc |= put(settings_root, "settings.conf", text, 0644))) settings_car_saved = true;
   if (wifi) {
     char dir[256];

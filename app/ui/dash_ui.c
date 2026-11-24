@@ -13,6 +13,7 @@
 #include "src/indev/lv_indev_private.h"          /* where a swipe began (swipe) */
 #include "src/display/lv_display_private.h"      /* the frame counter's label and its data (fps_show) */
 #include "src/debugging/sysmon/lv_sysmon_private.h"
+#include <ctype.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <sys/stat.h>
@@ -373,18 +374,14 @@ static lv_obj_t *run_new(lv_obj_t *parent)
 }
 
 /* ---------- the widgets ---------- */
-static const char *const act_label[ACT_COUNT] = { /* commander.dart S3xyAction */
-	[ACT_FRUNK] = "Frunk", [ACT_TRUNK] = "Trunk", [ACT_LIGHT] = "Light", [ACT_MIRROR_TILT] = "Mirror tilt",
-	[ACT_RECIRC_ON] = "Recirculation", [ACT_RECIRC_OFF] = "Fresh air", [ACT_RECIRC_TOGGLE] = "Recirculation",
-	[ACT_DOOR_FL] = "Front left door", [ACT_DOOR_FR] = "Front right door", [ACT_DOOR_RL] = "Rear left door",
-	[ACT_DOOR_RR] = "Rear right door", [ACT_UNLOCK] = "Unlock", [ACT_LOCK] = "Lock", [ACT_CHARGE_PORT] = "Charge port",
-	[ACT_HONK] = "Honk", [ACT_FLASH] = "Flash", [ACT_CLIMATE] = "Climate",
-};
-/* The chips, in the order they are built (widgets.dart _Actions), and their tooltips (the app's labels). */
-static const int chip_act[10] = {ACT_TRUNK, ACT_MIRROR_TILT, ACT_DOOR_FL, ACT_DOOR_RL, ACT_CHARGE_PORT,
-				 ACT_FRUNK, ACT_RECIRC_TOGGLE, ACT_DOOR_FR, ACT_DOOR_RR, ACT_LIGHT};
-static const char *const chip_tip[10] = {"Trunk", "Mirror tilt", "Front left door", "Rear left door", "Charge port",
-					 "Frunk", "Recirculation", "Front right door", "Rear right door", "Interior lights"};
+/* The chips, in the order they are built (widgets.dart _Actions), and their tooltips (the app's labels): each side's
+ * column top to bottom, the left one first. The massage chips offer their modes (massage_menu). */
+enum { CHIP_SIDE = 6, CHIPS = 2 * CHIP_SIDE, CHIP_RECIRC = CHIP_SIDE + 1, CHIP_MASSAGE_L = CHIP_SIDE - 1, CHIP_MASSAGE_R = CHIPS - 1 };
+static const int chip_act[CHIPS] = {ACT_TRUNK, ACT_MIRROR_TILT, ACT_DOOR_FL, ACT_DOOR_RL, ACT_CHARGE_PORT, ACT_MASSAGE_L_SOFT,
+				    ACT_FRUNK, ACT_RECIRC_TOGGLE, ACT_DOOR_FR, ACT_DOOR_RR, ACT_LIGHT, ACT_MASSAGE_R_SOFT};
+static const char *const chip_tip[CHIPS] = {"Trunk", "Mirror tilt", "Front left door", "Rear left door", "Charge port",
+					    "Left Seat Massage", "Frunk", "Recirculation", "Front right door", "Rear right door",
+					    "Interior lights", "Right Seat Massage"};
 
 static lv_obj_t *steer;
 static lv_obj_t *pair_view, *pair_qr, *pair_how, *pair_url_l, *pair_code_l, *pair_left, *pair_or, *pair_cmd, *pair_res, *pair_btn;
@@ -400,8 +397,14 @@ static int view = DASH_VIEW_DASH; /* the view on screen; the projection strip la
 static lv_obj_t *root;
 static lv_obj_t *glow_l, *glow_r, *glow_b, *pedal, *pedal_fill, *pedal_name, *pedal_val;
 
-typedef struct { lv_obj_t *box, *icon, *note; } chip_t;
-static chip_t chips[10];
+typedef struct { lv_obj_t *box, *icon, *note, *word; } chip_t; /* word: a car panel action's name in its place */
+static chip_t chips[CHIPS];
+/* The seats' massage: a mode as pressed (3 soft, 2 pulse, 4 hard) is running; a press's side ('L', 'R', 0 none). */
+static bool massage_mode(uint8_t m) { return m >= 2 && m <= 4; }
+static char massage_side(int a)
+{
+	return a >= ACT_MASSAGE_L_SOFT && a <= ACT_MASSAGE_L_HARD ? 'L' : a >= ACT_MASSAGE_R_SOFT && a <= ACT_MASSAGE_R_HARD ? 'R' : 0;
+}
 
 static struct {
 	lv_obj_t *box, *icon, *word, *stat, *ring, *secs; /* ring, secs: a timer's countdown round the icon */
@@ -1224,22 +1227,22 @@ static void ap_blink_cb(lv_timer_t *t)
 }
 
 /* ---------- build ---------- */
-static const lv_image_dsc_t *chip_icons[10] = {&ic_trunk, &ic_mirror, &ic_door_fl, &ic_door_rl, &ic_charge_port,
-					       &ic_frunk, &ic_recirc, &ic_door_fr, &ic_door_rr, &ic_interior};
+static const lv_image_dsc_t *chip_icons[CHIPS] = {&ic_trunk, &ic_mirror, &ic_door_fl, &ic_door_rl, &ic_charge_port, &ic_massage,
+						  &ic_frunk, &ic_recirc, &ic_door_fr, &ic_door_rr, &ic_interior, &ic_massage};
 
-/* Each side column: five chips, then the links (left) or the car panel button (right), spaced evenly in the full
+/* Each side column: its chips, then the links (left) or the car panel button (right), spaced evenly in the full
  * height. */
-static float chip_gap(void) /* the phone layout: five chips in the row, the links in the bar under it */
+static float chip_gap(void) /* the phone layout: the chips in the row, the links in the bar under it */
 {
-	return G.phone ? (G.chip_area - 5 * PC(48)) / 6 : (G.chip_area - 5 * PC(48) - PL(44)) / 7;
+	return G.phone ? (G.chip_area - CHIP_SIDE * PC(48)) / (CHIP_SIDE + 1) : (G.chip_area - CHIP_SIDE * PC(48) - PL(44)) / (CHIP_SIDE + 2);
 }
 static void chip_geom(int i, float *x, float *y)
 {
 	float item = PC(48), gap = chip_gap(); /* Column spaceEvenly, each chip 3 dp padded, the links' row the last */
-	int row = i % 5;
+	int row = i % CHIP_SIDE;
 	float cy = G.mt + gap * (row + 1) + item * row + item / 2;
 	*y = cy - PC(21);
-	*x = i < 5 ? G.ml + inset(cy) : G.W - G.ml - inset(cy) - PC(52);
+	*x = i < CHIP_SIDE ? G.ml + inset(cy) : G.W - G.ml - inset(cy) - PC(52);
 }
 
 /* The countdown round a link's icon (widgets.dart _RingPainter): a faint track, and over it what is left, from the top
@@ -1291,7 +1294,7 @@ void dash_ui_init(lv_obj_t *scr)
 	G.row_b = G.phone ? G.H - G.mb - PL(44) - px(6) : G.H; /* main.dart: the bar 6 dp under the row */
 	G.chip_area = (G.phone ? G.row_b : G.H - G.mb) - G.mt;
 	/* the side columns' last row; the phone layout's bar */
-	G.link_top = G.phone ? G.H - G.mb - PL(44) : G.mt + 6 * chip_gap() + 5 * PC(48);
+	G.link_top = G.phone ? G.H - G.mb - PL(44) : G.mt + (CHIP_SIDE + 1) * chip_gap() + CHIP_SIDE * PC(48);
 	/* The ring: the radius the app's foot brake left room for (r 247 at 480, 1.28 x the app's at 1536 dp, kept as
 	 * it is), centred on the screen both ways now that the foot brake is under the g-meter. At 480 its arcs end
 	 * 26 px from the top and bottom, the limit sign starts at 36, the gear letter ends at 469. */
@@ -1345,7 +1348,7 @@ void dash_ui_init(lv_obj_t *scr)
 	lv_obj_set_style_radius(pedal_fill, LV_RADIUS_CIRCLE, 0);
 
 	/* The action chips (widgets.dart _Actions). */
-	for (int i = 0; i < 10; i++) {
+	for (int i = 0; i < CHIPS; i++) {
 		chip_t *c = &chips[i];
 		float x, y;
 		chip_geom(i, &x, &y);
@@ -1355,6 +1358,10 @@ void dash_ui_init(lv_obj_t *scr)
 		c->icon = icon(c->box, chip_icons[i], WHITE);
 		align(c->icon, LV_ALIGN_CENTER, 0, 0);
 		c->note = label(c->box, FS(REGULAR, 11, UI_S_CHIP), WHITE);
+		c->word = label(c->box, FS(REGULAR, 10, UI_S_CHIP), WHITE);
+		lv_obj_set_style_text_align(c->word, LV_TEXT_ALIGN_CENTER, 0);
+		lv_obj_set_style_text_line_space(c->word, -ri(PC(1)), 0);
+		show(c->word, false);
 	}
 
 	/* The links (bottom left) and the car panel button (bottom right); the Maps button is phone-only. */
@@ -1513,39 +1520,91 @@ void dash_ui_init(lv_obj_t *scr)
 static void fmt_deg(char *b, size_t n, float c) { snprintf(b, n, "%d°", (int)lroundf(shown_deg(c))); }
 static uint32_t air_color(float c) { return !isnan(c) && lroundf(c) <= 3 ? COLD : WHITE; }
 
+/* The car panel action each button's place holds (ST.slots: "Group|Name", car_actions.dart homeSlots), an index of
+ * cmdr_car_acts, or -1: its own button. Worked out again whenever the settings change (slots_refresh). */
+static int slot_act[CHIPS] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+static void slots_refresh(void)
+{
+	for (int i = 0; i < CHIPS; i++) {
+		slot_act[i] = -1;
+		const char *bar = strchr(ST.slots[i], '|');
+		if (!bar) continue;
+		size_t g = (size_t)(bar - ST.slots[i]);
+		for (int k = 0; k < cmdr_car_act_count; k++)
+			if (strlen(cmdr_car_acts[k].group) == g && !strncmp(cmdr_car_acts[k].group, ST.slots[i], g) &&
+			    !strcmp(cmdr_car_acts[k].name, bar + 1))
+				slot_act[i] = k;
+	}
+}
+/* [t] on two lines at the space nearest its middle (widgets.dart _twoLines), into [o] */
+static void two_lines(const char *t, char *o, size_t n)
+{
+	snprintf(o, n, "%s", t);
+	int at = -1, len = (int)strlen(o);
+	for (int i = 0; i < len; i++)
+		if (o[i] == ' ' && (at < 0 || abs(2 * i - len) < abs(2 * at - len))) at = i;
+	if (at >= 0) o[at] = '\n';
+}
+
 static void set_chips(const dash_state_t *s)
 {
-	bool lit[10] = {s->trunk, s->mirror_tilt && s->wifi_live, s->door_fl, s->door_rl, s->charge_port && s->wifi_live,
-			s->frunk, s->recirc, s->door_fr, s->door_rr, s->interior && s->wifi_live};
-	for (int i = 0; i < 10; i++) {
+	bool lit[CHIPS] = {s->trunk, s->mirror_tilt && s->wifi_live, s->door_fl, s->door_rl, s->charge_port && s->wifi_live,
+			   massage_mode(s->massage_l), s->frunk, s->recirc, s->door_fr, s->door_rr, s->interior && s->wifi_live,
+			   massage_mode(s->massage_r)};
+	for (int i = 0; i < CHIPS; i++) {
 		chip_t *c = &chips[i];
+		if (slot_act[i] >= 0) { /* a car panel action in its place: its name, two lines, shrunk to the chip (custom) */
+			const cmdr_car_act *a = &cmdr_car_acts[slot_act[i]];
+			char t[64];
+			two_lines(a->name, t, sizeof t);
+			bool pending = s->press_pending >= ACT_COUNT + a->first && s->press_pending < ACT_COUNT + a->first + a->n;
+			show(c->icon, false), show(c->note, false), show(c->word, true);
+			fill(c->box, 0);
+			border(c->box, pending ? ACCENT : W70, pending ? PC(2) : PC(1));
+			if (!strcmp(lv_label_get_text(c->word), t)) continue; /* laid out already */
+			lv_label_set_text(c->word, t);
+			lv_obj_update_layout(c->word);
+			float w = lv_obj_get_width(c->word), room = PC(52) - 2 * PC(4);
+			lv_obj_set_style_transform_scale(c->word, w > room ? (int32_t)(256 * room / w) : 256, 0);
+			lv_obj_set_style_transform_pivot_x(c->word, ri(w / 2), 0);
+			lv_obj_set_style_transform_pivot_y(c->word, lv_obj_get_height(c->word) / 2, 0);
+			lv_obj_center(c->word);
+			continue;
+		}
+		show(c->word, false), show(c->icon, true);
 		bool on = lit[i] && s->live;
 		int level = 0;
 		bool note = false;
-		if (i == 6 && s->co2_ppm >= 0) { /* the cabin's CO2 on the recirculation chip */
+		if (i == CHIP_RECIRC && s->co2_ppm >= 0) { /* the cabin's CO2 on the recirculation chip */
 			note = true;
 			int co2 = s->wifi_live && !s->co2_stale ? s->co2_ppm : -1;
 			level = co2 >= 2500 ? 2 : co2 >= 1500 ? 1 : 0;
 			if (co2 >= 0) set_text(c->note, "%d", co2);
 			else set_text(c->note, "");
 		}
+		if (i == CHIP_MASSAGE_L || i == CHIP_MASSAGE_R) { /* which seat: L or R under it */
+			note = true;
+			set_text(c->note, i == CHIP_MASSAGE_L ? "L" : "R");
+		}
 		uint32_t f = level == 2 ? ALERT : level == 1 ? WARN : LIT;
 		uint32_t col = on && level < 2 ? BLACK : WHITE;
 		uint32_t note_col = on ? col : level == 2 ? ALERT : level == 1 ? WARN : col;
-		bool pending = s->press_pending == chip_act[i]; /* a press out: its side in the accent until the answer */
+		bool pending = s->press_pending == chip_act[i] || /* a press out: its side in the accent until the answer */
+			       (i == CHIP_MASSAGE_L && massage_side(s->press_pending) == 'L') ||
+			       (i == CHIP_MASSAGE_R && massage_side(s->press_pending) == 'R');
 		fill(c->box, on ? f : 0);
 		border(c->box, pending ? ACCENT : on ? f : W70, pending ? PC(2) : PC(1));
 		icon_color(c->icon, col);
 		show(c->note, note);
 		if (note) {
-			img_src(c->icon, &ic_recirc_s);
+			img_src(c->icon, i == CHIP_RECIRC ? &ic_recirc_s : &ic_massage_s);
 			text_color(c->note, note_col);
 			/* 22 dp glyph over an 11 dp figure, the pair centred */
 			float gh = PC(22), th = lv_font_get_line_height(lv_obj_get_style_text_font(c->note, 0)) * 1.1f / 1.172f;
 			float top = (PC(42) - PC(2) - gh - th) / 2; /* the chip's 1 dp border each side */
 			align(c->icon, LV_ALIGN_TOP_MID, 0, ri(top));
 			put_text(c->note, 1, (PC(52) - 2 * ri(PC(1))) / 2, top + gh + baseline_in(lv_obj_get_style_text_font(c->note, 0), 1.1f), PC(52) - 2 * ri(PC(1)));
-		} else if (i == 6) {
+		} else if (i == CHIP_RECIRC) {
 			img_src(c->icon, &ic_recirc);
 			align(c->icon, LV_ALIGN_CENTER, 0, 0);
 		}
@@ -2753,7 +2812,260 @@ static void pressed_look(lv_obj_t *o, uint32_t c) /* InkWell's highlight while h
  * over Trunk. So for a moment after the dash (or the car panel) appears, its controls take no taps. */
 static uint32_t dash_at, panel_at, edit_at;
 #define FRESH(at, ms) (lv_tick_elaps(at) < (ms))
-static void chip_tap(lv_event_t *e) { if (!FRESH(dash_at, 700)) press(chip_act[(intptr_t)lv_event_get_user_data(e)]); }
+static void massage_menu(int i);
+static void run_car_act(lv_obj_t *anchor, int k);
+static void overlays_close(void);
+static char panel_note[112], note_toast[sizeof S.toast]; /* the note, and the words up when it was set */
+static lv_obj_t *column(lv_obj_t *parent, float gap);
+static void chip_tap(lv_event_t *e)
+{
+	int i = (intptr_t)lv_event_get_user_data(e);
+	if (FRESH(dash_at, 700)) return;
+	if (slot_act[i] >= 0) run_car_act(chips[i].box, slot_act[i]);
+	else if (i == CHIP_MASSAGE_L || i == CHIP_MASSAGE_R) massage_menu(i);
+	else press(chip_act[i]);
+}
+
+/* A choice over its button (widgets.dart _pick, car_panel.dart _tap: Flutter's showMenu, a CheckedPopupMenuItem ticked):
+ * the words on a card over [anchor], kept 8 dp inside the screen, scrolled when they are more than fit; the running one
+ * ticked; a pick presses its action (the ticked one again stops it: the massage), asked first when [confirm]; a tap
+ * anywhere else closes it. The massage chips' modes and the car panel's options. */
+#define M3_MENU 0xFF211F26u /* surfaceContainer */
+#define M3_ON_VARIANT 0xFFCAC4D0u
+enum { MENU_MAX = 24 };
+static lv_obj_t *mm_scrim, *mm_card;
+static int mm_act[MENU_MAX];
+static bool mm_confirm;
+static void confirm_press(int a);
+static void mm_close(lv_event_t *e)
+{
+	(void)e;
+	show(mm_scrim, false);
+}
+static void mm_pick(lv_event_t *e)
+{
+	int a = mm_act[(intptr_t)lv_event_get_user_data(e)];
+	show(mm_scrim, false);
+	if (mm_confirm) confirm_press(a);
+	else press(a);
+}
+static void menu_open(lv_obj_t *anchor, int n, const char *const *words, const int *acts, int ticked, bool confirm)
+{
+	float w = PC(112), row = PC(56), pad = PC(8);
+	if (!mm_scrim) {
+		mm_scrim = box(lv_layer_top());
+		place(mm_scrim, 0, 0, G.W, G.H);
+		tappable(mm_scrim, mm_close, 0, 0);
+		mm_card = box(mm_scrim);
+		fill(mm_card, M3_MENU);
+		lv_obj_set_style_radius(mm_card, ri(PC(4)), 0);
+		lv_obj_set_clickable(mm_card, true); /* a tap between the rows keeps it open */
+		lv_obj_set_scroll_dir(mm_card, LV_DIR_VER);
+	}
+	lv_obj_clean(mm_card);
+	if (n > MENU_MAX) n = MENU_MAX;
+	mm_confirm = confirm;
+	static lv_point_precise_t pts[3];
+	pts[0] = (lv_point_precise_t){ri(PC(5)), ri(PC(12.5f))}; /* the check mark (Icons.done, 24 dp at the leading 16 dp) */
+	pts[1] = (lv_point_precise_t){ri(PC(9.5f)), ri(PC(17))};
+	pts[2] = (lv_point_precise_t){ri(PC(19)), ri(PC(7.5f))};
+	const lv_font_t *f = FS(REGULAR, 16, UI_S_CHIP);
+	for (int k = 0; k < n; k++) { /* as wide as the widest word needs, 112 dp at least */
+		lv_point_t sz;
+		lv_text_get_size(&sz, words[k], f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+		w = fmaxf(w, PC(52) + sz.x + PC(24));
+	}
+	for (int k = 0; k < n; k++) {
+		mm_act[k] = acts[k];
+		lv_obj_t *r = box(mm_card);
+		place(r, 0, pad + k * row, w, row);
+		tappable(r, mm_pick, k, 0);
+		pressed_look(r, 0x1FE6E0E9);
+		lv_obj_t *l = label(r, f, M3_ON_SURFACE);
+		lv_label_set_text(l, words[k]);
+		align(l, LV_ALIGN_LEFT_MID, ri(PC(52)), 0);
+		if (k != ticked) continue;
+		lv_obj_t *t = lv_line_create(r);
+		lv_line_set_points(t, pts, 3);
+		lv_obj_set_style_line_width(t, ri(PC(2)), 0);
+		lv_obj_set_style_line_color(t, rgb(M3_ON_VARIANT), 0);
+		lv_obj_set_style_line_rounded(t, true, 0);
+		align(t, LV_ALIGN_LEFT_MID, ri(PC(16)), 0);
+	}
+	float h = fminf(n * row + 2 * pad, G.H - 2 * PC(8));
+	lv_obj_set_scrollable(mm_card, n * row + 2 * pad > h);
+	lv_obj_set_size(mm_card, ri(w), ri(h));
+	lv_obj_set_style_pad_bottom(mm_card, ri(pad), 0); /* (scrolled: room after the last row) */
+	lv_area_t a;
+	lv_obj_get_coords(anchor, &a);
+	float x = fminf(a.x1, G.W - PC(8) - w), y = fminf(a.y1, G.H - PC(8) - h);
+	if (view == DASH_VIEW_PROJECT) x = fmaxf(x, PJ_RGN_X + PJ_RGN_W + PC(8)); /* off the picture: a tap there is the phone's */
+	lv_obj_set_pos(mm_card, ri(fmaxf(x, PC(8))), ri(fmaxf(y, PC(8))));
+	lv_obj_scroll_to_y(mm_card, 0, LV_ANIM_OFF);
+	show(mm_scrim, true);
+}
+/* The massage chips' modes: Soft, Pulse, Hard (3, 2, 4 as pressed), the running one ticked. */
+static void massage_menu(int i)
+{
+	static const char *const words[3] = {"Soft", "Pulse", "Hard"};
+	static const int acts[2][3] = {{ACT_MASSAGE_L_SOFT, ACT_MASSAGE_L_PULSE, ACT_MASSAGE_L_HARD},
+				       {ACT_MASSAGE_R_SOFT, ACT_MASSAGE_R_PULSE, ACT_MASSAGE_R_HARD}};
+	static const uint8_t mode[3] = {3, 2, 4};
+	bool r = i == CHIP_MASSAGE_R;
+	uint8_t m = r ? S.massage_r : S.massage_l;
+	int ticked = -1;
+	for (int k = 0; k < 3; k++) if (massage_mode(m) && m == mode[k]) ticked = k;
+	menu_open(chips[i].box, 3, words, acts[r], ticked, false);
+}
+
+/* A dialog centred where it is no part of the picture (projecting: right of it; a tap on the picture is the phone's) */
+static void off_picture(lv_obj_t *d)
+{
+	lv_obj_center(d);
+	if (view != DASH_VIEW_PROJECT) return;
+	lv_obj_update_layout(d);
+	float l = PJ_RGN_X + PJ_RGN_W, w = lv_obj_get_width(d);
+	lv_obj_align(d, LV_ALIGN_LEFT_MID, ri(fmaxf(l + (G.W - l - w) / 2, l)), 0);
+}
+/* Asked first (car_panel.dart: an AlertDialog): the press's name, "Press it on the car now?", Cancel and Press. */
+static lv_obj_t *cf_scrim, *cf_title;
+static int cf_act;
+static void cf_answer(lv_event_t *e)
+{
+	show(cf_scrim, false);
+	if (lv_event_get_user_data(e)) press(cf_act);
+}
+static lv_obj_t *text_button(lv_obj_t *parent, const char *t, lv_event_cb_t cb, intptr_t arg)
+{
+	lv_obj_t *b = box(parent);
+	lv_obj_set_size(b, LV_SIZE_CONTENT, ri(PB(40)));
+	lv_obj_set_style_pad_hor(b, ri(PB(12)), 0);
+	lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
+	pressed_look(b, 0x1FD0BCFF);
+	lv_obj_t *l = label(b, FS(MEDIUM, 14, UI_S_PANEL), M3_PRIMARY);
+	lv_label_set_text(l, t);
+	lv_obj_center(l);
+	tappable(b, cb, arg, PB(4));
+	return b;
+}
+static void confirm_press(int a)
+{
+	float w = PB(312);
+	if (!cf_scrim) {
+		cf_scrim = box(lv_layer_top());
+		place(cf_scrim, 0, 0, G.W, G.H);
+		fill(cf_scrim, 0x80000000);
+		lv_obj_set_clickable(cf_scrim, true); /* modal: only its buttons answer */
+		lv_obj_t *d = box(cf_scrim);
+		lv_obj_set_size(d, ri(w), LV_SIZE_CONTENT);
+		lv_obj_center(d);
+		fill(d, M3_DIALOG);
+		lv_obj_set_style_radius(d, ri(PB(28)), 0);
+		lv_obj_set_style_pad_all(d, ri(PB(24)), 0);
+		lv_obj_set_flex_flow(d, LV_FLEX_FLOW_COLUMN);
+		lv_obj_set_style_pad_row(d, ri(PB(16)), 0);
+		cf_title = label(d, FS(REGULAR, 24, UI_S_PANEL), M3_ON_SURFACE);
+		lv_obj_set_width(cf_title, LV_PCT(100));
+		lv_label_set_long_mode(cf_title, LV_LABEL_LONG_WRAP);
+		lv_obj_t *t = label(d, FS(REGULAR, 14, UI_S_PANEL), M3_ON_VARIANT);
+		lv_label_set_text(t, "Press it on the car now?");
+		lv_obj_t *r = box(d);
+		lv_obj_set_size(r, LV_PCT(100), LV_SIZE_CONTENT);
+		lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW);
+		lv_obj_set_flex_align(r, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+		lv_obj_set_style_pad_column(r, ri(PB(8)), 0);
+		text_button(r, "Cancel", cf_answer, 0);
+		text_button(r, "Press", cf_answer, 1);
+	}
+	cf_act = a;
+	const cmdr_action_def *d = cmdr_action_at(a);
+	lv_label_set_text(cf_title, d ? d->label : "");
+	off_picture(lv_obj_get_parent(cf_title));
+	show(cf_scrim, true);
+}
+
+/* A car panel action pressed (car_panel.dart runCarAction): its choice first in the menu over [anchor] (if it has one),
+ * a risky one asked first. The panel's Execute and a button put in its place. */
+static void run_car_act(lv_obj_t *anchor, int k)
+{
+	const cmdr_car_act *c = &cmdr_car_acts[k];
+	if (c->n == 1) {
+		if (c->confirm) confirm_press(ACT_COUNT + c->first);
+		else press(ACT_COUNT + c->first);
+		return;
+	}
+	const char *words[MENU_MAX];
+	int acts[MENU_MAX];
+	for (int j = 0; j < c->n && j < MENU_MAX; j++) words[j] = cmdr_car_words[c->first + j], acts[j] = ACT_COUNT + c->first + j;
+	menu_open(anchor, c->n, words, acts, -1, c->confirm);
+}
+
+/* A choice in a dialog (SimpleDialog: a title, a row for each, a tap anywhere else closes it): [cb] gets the row picked.
+ * The car panel's Execute / Add to home screen, and the button to put an action in place of. */
+static lv_obj_t *ld_scrim, *ld_box, *ld_title, *ld_list;
+static void (*ld_cb)(int);
+static void ld_pick(lv_event_t *e)
+{
+	show(ld_scrim, false);
+	if (ld_cb) ld_cb((int)(intptr_t)lv_event_get_user_data(e));
+}
+static void ld_close(lv_event_t *e)
+{
+	(void)e;
+	show(ld_scrim, false);
+}
+static void list_dialog(const char *title, int n, const char *const *words, void (*cb)(int))
+{
+	if (!ld_scrim) {
+		ld_scrim = box(lv_layer_top());
+		place(ld_scrim, 0, 0, G.W, G.H);
+		fill(ld_scrim, 0x80000000);
+		tappable(ld_scrim, ld_close, 0, 0);
+		ld_box = box(ld_scrim);
+		lv_obj_set_width(ld_box, ri(PB(360)));
+		fill(ld_box, M3_DIALOG);
+		lv_obj_set_style_radius(ld_box, ri(PB(28)), 0);
+		lv_obj_set_style_pad_ver(ld_box, ri(PB(24)), 0);
+		lv_obj_set_clickable(ld_box, true); /* a tap on it, off its rows, keeps it open */
+		lv_obj_set_flex_flow(ld_box, LV_FLEX_FLOW_COLUMN);
+		lv_obj_set_style_pad_row(ld_box, ri(PB(12)), 0);
+		ld_title = label(ld_box, FS(REGULAR, 24, UI_S_PANEL), M3_ON_SURFACE);
+		lv_obj_set_style_pad_hor(ld_title, ri(PB(24)), 0);
+		lv_obj_set_width(ld_title, LV_PCT(100));
+		lv_label_set_long_mode(ld_title, LV_LABEL_LONG_WRAP);
+		ld_list = column(ld_box, 0);
+		lv_obj_set_width(ld_list, LV_PCT(100));
+		lv_obj_set_scroll_dir(ld_list, LV_DIR_VER);
+	}
+	lv_label_set_text(ld_title, title);
+	lv_obj_clean(ld_list);
+	float row = PB(48);
+	for (int k = 0; k < n; k++) {
+		lv_obj_t *r = box(ld_list);
+		lv_obj_set_size(r, LV_PCT(100), ri(row));
+		tappable(r, ld_pick, k, 0);
+		pressed_look(r, 0x1FE6E0E9);
+		lv_obj_t *l = label(r, FS(REGULAR, 16, UI_S_PANEL), M3_ON_SURFACE);
+		lv_label_set_text(l, words[k]);
+		align(l, LV_ALIGN_LEFT_MID, ri(PB(24)), 0);
+	}
+	ld_cb = cb;
+	lv_obj_update_layout(ld_title);
+	float head = lv_obj_get_height(ld_title) + PB(12) + 2 * PB(24), room = G.H - 2 * PB(24) - head;
+	lv_obj_set_height(ld_list, ri(fminf(n * row, room)));
+	lv_obj_set_scrollable(ld_list, n * row > room);
+	lv_obj_set_height(ld_box, LV_SIZE_CONTENT);
+	lv_obj_center(ld_box);
+	off_picture(ld_box);
+	lv_obj_scroll_to_y(ld_list, 0, LV_ANIM_OFF);
+	show(ld_scrim, true);
+}
+static void overlays_close(void)
+{
+	if (mm_scrim) show(mm_scrim, false);
+	if (cf_scrim) show(cf_scrim, false);
+	if (ld_scrim) show(ld_scrim, false);
+}
 static void tip_hide(lv_timer_t *t)
 {
 	(void)t;
@@ -2785,15 +3097,18 @@ static void chip_hold(lv_event_t *e)
 	if (tip_released(e)) return;
 	float x, y;
 	chip_geom(i, &x, &y);
-	bool left = i >= 5;
+	bool left = i >= CHIP_SIDE;
 	if (G.phone) { /* where the layout put it: basic's card, the split's bar (towards its middle, along the row) */
 		lv_area_t a;
 		lv_obj_get_coords(chips[i].box, &a);
 		x = a.x1, y = a.y1;
 		if (view == DASH_VIEW_PROJECT) left = x + PC(26) > (G.ml + PL(60) + lv_obj_get_x(pj_exit)) / 2;
 	}
-	if (!left) tip_at(chip_tip[i], x + PC(52) + PC(8), y + PC(21), false); /* beside the chip, towards the middle */
-	else tip_at(chip_tip[i], x - PC(8), y + PC(21), true);
+	char t[96];
+	if (slot_act[i] >= 0) snprintf(t, sizeof t, "%s: %s", cmdr_car_acts[slot_act[i]].group, cmdr_car_acts[slot_act[i]].name);
+	else snprintf(t, sizeof t, "%s", chip_tip[i]);
+	if (!left) tip_at(t, x + PC(52) + PC(8), y + PC(21), false); /* beside the chip, towards the middle */
+	else tip_at(t, x - PC(8), y + PC(21), true);
 }
 static void ap_hold(lv_event_t *e) /* the assist disc's words (widgets.dart _ApIcon's Tooltip) */
 {
@@ -2809,7 +3124,57 @@ static void ap_hold(lv_event_t *e) /* the assist disc's words (widgets.dart _ApI
 static uint32_t set_back_at;
 static lv_obj_t *set_guard;
 static void close_tap(lv_event_t *e) { (void)e, dash_ui_show(DASH_VIEW_DASH); }
-static void panel_tap(lv_event_t *e) { if (!FRESH(panel_at, 500)) press((intptr_t)lv_event_get_user_data(e)); }
+/* The car panel's buttons (cmdr_car_acts, car_panel.dart _tap): Execute (pressed as run_car_act does), or Add to home
+ * screen: in place of one of the dash's twelve buttons, the one picked. Its line says what was done until the next
+ * press's words. */
+static int pa_act;
+static lv_obj_t *pa_btn;
+static const char *const own_name[CHIPS] = {"Trunk", "Mirror tilt", "Front left door", "Rear left door", "Charge port",
+					    "Left Seat Massage", "Frunk", "Recirculation", "Front right door", "Rear right door",
+					    "Interior lights", "Right Seat Massage"}; /* car_actions.dart kHomeButtons */
+static const char *slot_name(int i) { return slot_act[i] >= 0 ? cmdr_car_acts[slot_act[i]].name : own_name[i]; }
+static void panel_slot(int i)
+{
+	const cmdr_car_act *c = &cmdr_car_acts[pa_act];
+	snprintf(panel_note, sizeof panel_note, "%s on the dash in place of %s", c->name, slot_name(i));
+	snprintf(note_toast, sizeof note_toast, "%s", S.toast);
+	snprintf(ST.slots[i], sizeof ST.slots[i], "%s|%s", c->group, c->name);
+	slots_refresh();
+	save(DASH_SETTINGS_SAVE);
+}
+static void panel_choice(int k)
+{
+	if (k == 0) {
+		panel_note[0] = 0;
+		run_car_act(pa_btn, pa_act);
+		return;
+	}
+	static char rows[CHIPS][80];
+	static const char *words[CHIPS];
+	for (int i = 0; i < CHIPS; i++)
+		snprintf(rows[i], sizeof rows[i], "%s %d: %s", i < CHIP_SIDE ? "Left" : "Right", i % CHIP_SIDE + 1, slot_name(i)),
+			words[i] = rows[i];
+	list_dialog("In place of", CHIPS, words, panel_slot);
+}
+static void panel_act_tap(lv_event_t *e)
+{
+	if (FRESH(panel_at, 500)) return;
+	pa_act = (int)(intptr_t)lv_event_get_user_data(e);
+	pa_btn = lv_event_get_current_target(e);
+	static char title[96];
+	snprintf(title, sizeof title, "%s: %s", cmdr_car_acts[pa_act].group, cmdr_car_acts[pa_act].name);
+	static const char *const words[2] = {"Execute", "Add to home screen"};
+	list_dialog(title, 2, words, panel_choice);
+}
+static void restore_tap(lv_event_t *e) /* the dash's own twelve buttons back */
+{
+	(void)e;
+	memset(ST.slots, 0, sizeof ST.slots);
+	slots_refresh();
+	save(DASH_SETTINGS_SAVE);
+	snprintf(panel_note, sizeof panel_note, "The dash's own buttons are back");
+	snprintf(note_toast, sizeof note_toast, "%s", S.toast);
+}
 static void open_tap(lv_event_t *e) { if (!FRESH(dash_at, 700)) dash_ui_show((intptr_t)lv_event_get_user_data(e)); }
 static uint32_t aa_pending_at;
 /* a start still running: just tapped (dash-aa takes its lock within moments), or its lock held (a start killed hard
@@ -3165,20 +3530,42 @@ static void panel_build(void)
 	lv_obj_t *title = label(bar, FS(REGULAR, 22, UI_S_PANEL), M3_ON_SURFACE);
 	lv_label_set_text(title, "Car controls");
 	align(title, LV_ALIGN_LEFT_MID, ri(left + PB(24 + 32)), 0);
+	align(text_button(bar, "Restore default buttons", restore_tap, 0), LV_ALIGN_RIGHT_MID, -ri(left), 0);
+	/* what the last press did, above the list it came from; the list scrolled under it */
+	float top = PB(64) * 0.8f + PB(8), line = lv_font_get_line_height(FS(REGULAR, 14, UI_S_PANEL));
+	panel_msg = label(panel, FS(REGULAR, 14, UI_S_PANEL), WHITE);
+	lv_obj_set_pos(panel_msg, ri(left), ri(top));
+	lv_obj_set_width(panel_msg, ri(G.W - 2 * left));
+	lv_label_set_long_mode(panel_msg, LV_LABEL_LONG_DOT);
 	lv_obj_t *body = column(panel, PB(10));
-	place(body, left, PB(64) * 0.8f + PB(14), G.W - 2 * left, G.H - PB(64) * 0.8f - PB(14));
-	group_title(body, "Locks");
-	lv_obj_t *r = row(body);
-	outlined(r, &ic_p_lock_open, "Unlock", panel_tap, ACT_UNLOCK);
-	outlined(r, &ic_p_lock, "Lock", panel_tap, ACT_LOCK);
-	lv_obj_set_style_margin_bottom(r, ri(PB(6)), 0);
-	group_title(body, "Climate & misc");
-	r = row(body);
-	outlined(r, &ic_p_climate, "Climate", panel_tap, ACT_CLIMATE);
-	outlined(r, &ic_p_flash, "Flash", panel_tap, ACT_FLASH);
-	outlined(r, &ic_p_honk, "Honk", panel_tap, ACT_HONK);
-	lv_obj_set_style_margin_bottom(r, ri(PB(6)), 0);
-	panel_msg = label(body, FS(REGULAR, 14, UI_S_PANEL), WHITE);
+	place(body, left, top + line + PB(6), G.W - 2 * left, G.H - top - line - PB(6));
+	lv_obj_set_scrollable(body, true);
+	lv_obj_set_scroll_dir(body, LV_DIR_VER);
+	lv_obj_set_scrollbar_mode(body, LV_SCROLLBAR_MODE_AUTO);
+	lv_obj_set_style_pad_bottom(body, ri(PB(16)), 0);
+	lv_obj_t *r = NULL;
+	for (int i = 0; i < cmdr_car_act_count; i++) { /* every S3XY function, in its groups (car_panel.dart) */
+		const cmdr_car_act *c = &cmdr_car_acts[i];
+		if (!i || strcmp(c->group, cmdr_car_acts[i - 1].group)) {
+			if (r) lv_obj_set_style_margin_bottom(r, ri(PB(6)), 0);
+			char t[48];
+			snprintf(t, sizeof t, "%s", c->group);
+			for (char *q = t; *q; q++) *q = (char)toupper((unsigned char)*q);
+			group_title(body, t);
+			r = row(body);
+		}
+		lv_obj_t *b = outlined(r, NULL, c->name, panel_act_tap, i);
+		if (c->n > 1) { /* a choice to make: the menu's arrow after the name (arrow_drop_down, drawn: no font has it) */
+			static lv_point_precise_t v[3];
+			v[0] = (lv_point_precise_t){0, 0}, v[1] = (lv_point_precise_t){ri(PB(4)), ri(PB(4))};
+			v[2] = (lv_point_precise_t){ri(PB(8)), 0};
+			lv_obj_t *l = lv_line_create(b);
+			lv_line_set_points(l, v, 3);
+			lv_obj_set_style_line_width(l, ri(PB(2)), 0);
+			lv_obj_set_style_line_color(l, rgb(WHITE), 0);
+			lv_obj_set_style_line_rounded(l, true, 0);
+		}
+	}
 	show(panel, false);
 }
 
@@ -4195,6 +4582,7 @@ static void net_edit_build(void)
 void dash_ui_settings(const dash_settings_t *s)
 {
 	ST = *s;
+	slots_refresh();
 	for (int i = 0; i < DASH_NETS; i++) memset(ST.net[i].pass, 0, sizeof ST.net[i].pass); /* never kept for show */
 	ST.join[0] = 0; /* a one-off: never sent again with the next save */
 	fps_show();
@@ -4219,7 +4607,7 @@ static void pj_parts(bool to_pj)
 	lv_obj_t *o[64];
 	int n = 0;
 	o[n++] = cab.frame, o[n++] = steer, o[n++] = pedal, o[n++] = pedal_name, o[n++] = pedal_val, o[n++] = brake_car;
-	for (int i = 0; i < 10; i++) o[n++] = chips[i].box;
+	for (int i = 0; i < CHIPS; i++) o[n++] = chips[i].box;
 	o[n++] = lights_row, o[n++] = cab.grp;
 	for (int c = 0; c < DASH_CARDS; c++) o[n++] = dots[SPLIT_SLOT][c];
 	o[n++] = dest_card, o[n++] = no_route, o[n++] = dial, o[n++] = charge_box, o[n++] = stats_box;
@@ -4271,7 +4659,8 @@ void dash_ui_show(int v)
 	if (v == DASH_VIEW_DASH && view != DASH_VIEW_DASH) dash_at = lv_tick_get();
 	/* the phone layout's split has the buttons in its bar, and it comes on its own: a tap meant for the dash presses none */
 	if (G.phone && v == DASH_VIEW_PROJECT && view != DASH_VIEW_PROJECT) dash_at = lv_tick_get();
-	if (v == DASH_VIEW_CAR_PANEL && view != DASH_VIEW_CAR_PANEL) panel_at = lv_tick_get();
+	if (v == DASH_VIEW_CAR_PANEL && view != DASH_VIEW_CAR_PANEL) panel_at = lv_tick_get(), panel_note[0] = 0;
+	if (v != view) overlays_close(); /* a menu or a dialog belongs to the view it was opened on (Android Auto comes on its own) */
 	if (v == DASH_VIEW_NETWORK && view != DASH_VIEW_NETWORK) edit_at = lv_tick_get(); /* the tap that opened it: no key */
 	if (v == DASH_VIEW_SETTINGS && (view == DASH_VIEW_NETWORK || view == DASH_VIEW_PAIR)) {
 		set_back_at = lv_tick_get();
@@ -4536,7 +4925,7 @@ static bool overlap(const lv_area_t *a, const lv_area_t *b)
  * the card changes it, not always a box). steer_draw runs for every part of the screen redrawn (its box is the whole
  * screen) and steer_dirty once a frame, all on the same dots. */
 static struct {
-	struct { bool on; char gear; int car; float deg, x, y, w, h; lv_area_t under[11]; } key;
+	struct { bool on; char gear; int car; float deg, x, y, w, h; lv_area_t under[CHIPS + 1]; } key;
 	struct { lv_area_t a; lv_opa_t opa; } dot[80]; /* (33 a line at most) */
 	int n;
 	lv_area_t box[2];
@@ -4549,8 +4938,8 @@ static bool steer_dots(const dash_state_t *s)
 	memset(&k, 0, sizeof k); /* its padding too: compared whole */
 	k.on = s->live && s->wifi_live && s->steer_lines && !isnan(s->steer_deg) && cab.h > 0; /* (a car drawn at least once) */
 	k.gear = s->gear, k.car = s->car, k.deg = s->steer_deg, k.x = cab.x, k.y = cab.y, k.w = cab.w, k.h = cab.h;
-	for (int i = 0; i <= 10; i++) {
-		lv_obj_t *b = i < 10 ? chips[i].box : dest_card;
+	for (int i = 0; i <= CHIPS; i++) {
+		lv_obj_t *b = i < CHIPS ? chips[i].box : dest_card;
 		k.under[i] = (lv_area_t){INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN}; /* none: a box nothing overlaps */
 		if (b && !lv_obj_is_hidden(b)) lv_obj_get_coords(b, &k.under[i]);
 	}
@@ -4581,7 +4970,7 @@ static bool steer_dots(const dash_state_t *s)
 			float x = ox + qx, y = oy + (rev ? h - qy : qy);
 			lv_area_t a = {ri(x - dot), ri(y - dot), ri(x + dot) - 1, ri(y + dot) - 1};
 			bool under = false;
-			for (int i = 0; i <= 10; i++) under |= overlap(&a, &k.under[i]);
+			for (int i = 0; i <= CHIPS; i++) under |= overlap(&a, &k.under[i]);
 			if (under) continue;
 			steer_m.sum = steer_m.sum * 31 + (uint32_t)(a.x1 * 2048 + a.y1);
 			steer_m.dot[steer_m.n].a = a, steer_m.dot[steer_m.n++].opa = (lv_opa_t)(0.8f * 255 * (1 - d / len));
@@ -4721,7 +5110,7 @@ static void bt_tap(lv_event_t *e)
 
 static void touch_init(void)
 {
-	for (int i = 0; i < 10; i++) {
+	for (int i = 0; i < CHIPS; i++) {
 		tappable(chips[i].box, chip_tap, i, (PC(48) - PC(42)) / 2);
 		lv_obj_add_event_cb(chips[i].box, chip_hold, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)i);
 		lv_obj_add_event_cb(chips[i].box, chip_hold, LV_EVENT_RELEASED, (void *)(intptr_t)i);
@@ -4802,10 +5191,10 @@ static void set_touch(const dash_state_t *s)
 	if (view == DASH_VIEW_CAR_PANEL) { /* its message line: '<label>…' while out, then what came of it */
 		int a = s->press_pending;
 		bool waiting = strstr(s->toast, "waiting for") != NULL; /* a second tap dropped behind it: say that */
+		if (a >= 0 || (s->toast[0] && strcmp(s->toast, note_toast))) panel_note[0] = 0; /* a later press or newer words */
 		if (s->bt == BT_APPROVING) set_text(panel_msg, "To approve this " UNIT ": in the car, double-press the right scroll wheel");
-		else if (!waiting && (a == ACT_UNLOCK || a == ACT_LOCK || a == ACT_CLIMATE || a == ACT_FLASH || a == ACT_HONK))
-			set_text(panel_msg, "%s…", act_label[a]);
-		else set_text(panel_msg, "%s", s->toast);
+		else if (!waiting && a >= ACT_COUNT && cmdr_action_at(a)) set_text(panel_msg, "%s…", cmdr_action_at(a)->label);
+		else set_text(panel_msg, "%s", s->toast[0] ? s->toast : panel_note);
 	}
 	if (view == DASH_VIEW_SETTINGS && ST.follow_car && s->backlight_pct >= 0 && CHANGED(backlight_pct))
 		lv_slider_set_value(set_slider, s->backlight_pct, LV_ANIM_OFF); /* the live value, greyed */
@@ -4854,7 +5243,7 @@ static void cards_parts(bool basic)
 		for (size_t i = 0; i < sizeof g / sizeof g[0]; i++) show(g[i], false);
 	}
 	show(pdial, basic && on[DASH_CARD_POWER]); /* not the full layout's */
-	for (int i = 0; i < 10; i++) {
+	for (int i = 0; i < CHIPS; i++) {
 		float x, y;
 		show(chips[i].box, on[DASH_CARD_BUTTONS]);
 		if (!basic) chip_geom(i, &x, &y), lv_obj_set_pos(chips[i].box, ri(x), ri(y));
@@ -4947,9 +5336,9 @@ static void card_set(const dash_state_t *s, int c, float cx, float w)
 		break;
 	}
 	case DASH_CARD_BUTTONS: /* the two columns, 16 dp apart, the rows spread over the height */
-		for (int k = 0; k < 10; k++) {
-			float gap = (G.H - G.mt - G.mb - 5 * PC(42)) / 6;
-			float x = cx + (k < 5 ? -PC(8) - PC(52) : PC(8)), y = G.mt + gap + (k % 5) * (PC(42) + gap);
+		for (int k = 0; k < CHIPS; k++) {
+			float gap = (G.H - G.mt - G.mb - CHIP_SIDE * PC(42)) / (CHIP_SIDE + 1);
+			float x = cx + (k < CHIP_SIDE ? -PC(8) - PC(52) : PC(8)), y = G.mt + gap + (k % CHIP_SIDE) * (PC(42) + gap);
 			lv_obj_set_pos(chips[k].box, ri(x), ri(y));
 		}
 		break;
@@ -5020,14 +5409,15 @@ static int split_card(void)
 	int c = ST.split_card;
 	return c >= 0 && c < DASH_CARDS && c != DASH_CARD_BUTTONS ? c : DASH_CARD_ENERGY;
 }
-/* The split's bar over the picture: the ten chips in two rows of five between the links (stacked at its left
+/* The split's bar over the picture: the chips in two rows (a side's each) between the links (stacked at its left
  * end) and Exit, spread evenly; each row a chip's 48 dp finger room tall, the strip's half. The full layout's columns
  * become the rows: its left one's chips on top. */
 static void bar_chips(void)
 {
-	float x0 = G.ml + PL(60), gap = (lv_obj_get_x(pj_exit) - x0 - 5 * PC(52)) / 6;
-	for (int k = 0; k < 10; k++)
-		lv_obj_set_pos(chips[k].box, ri(x0 + gap + (k % 5) * (PC(52) + gap)), ri(PJ_RGN_Y * (k / 5 * 2 + 1) / 4.0f - PC(21)));
+	float x0 = G.ml + PL(60), gap = (lv_obj_get_x(pj_exit) - x0 - CHIP_SIDE * PC(52)) / (CHIP_SIDE + 1);
+	for (int k = 0; k < CHIPS; k++)
+		lv_obj_set_pos(chips[k].box, ri(x0 + gap + (k % CHIP_SIDE) * (PC(52) + gap)),
+			       ri(PJ_RGN_Y * (k / CHIP_SIDE * 2 + 1) / 4.0f - PC(21)));
 }
 /* The phone layout's split: the picture in the left half's lower 3/4; over it a bar, the links, the buttons and
  * Exit; the right half the basic layout's ring (as big as fits, the gear in its foot, swiped to its other face) and one
@@ -5200,12 +5590,12 @@ void dash_ui_set(const dash_state_t *s)
 		 * the lights row) and with the g-meter's ball. */
 		float car_top = G.mt + PLI(20 + 2) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_LIGHTS)) + PLI(4) + cb(8);
 		float chips_r = 0, chips_l = G.W;
-		for (int i = 0; i < 10; i++) {
+		for (int i = 0; i < CHIPS; i++) {
 			float cx, cy;
 			chip_geom(i, &cx, &cy);
-			if (i < 5 && cy + PC(42) > car_top) chips_r = fmaxf(chips_r, cx + PC(52));
+			if (i < CHIP_SIDE && cy + PC(42) > car_top) chips_r = fmaxf(chips_r, cx + PC(52));
 			if (i == 0) chips_r = fmaxf(chips_r, G.ml + inset(G.link_top + PL(22)) + 2 * PL(60)); /* the links' row, widest */
-			if (i >= 5 && cy < G.H / 2 + g_height() / 2 && cy + PC(42) > G.H / 2 - g_height() / 2) chips_l = fminf(chips_l, cx);
+			if (i >= CHIP_SIDE && cy < G.H / 2 + g_height() / 2 && cy + PC(42) > G.H / 2 - g_height() / 2) chips_l = fminf(chips_l, cx);
 		}
 		/* The ring fixed at the centre; each side's blocks spread evenly between it and the chips. */
 		float at[5];

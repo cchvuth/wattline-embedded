@@ -3,7 +3,9 @@ CC ?= cc
 # and build/test_decode.c are committed: regenerated here when the app is there, used as they are when not
 WATTLINE ?= $(firstword $(wildcard ../wattline ../../wattline) ../wattline)
 GEN_SIGNALS = if [ -f $(WATTLINE)/lib/signals.dart ]; then python3 -I tools/gen_signals.py $(WATTLINE) build; \
-	else echo "signals: the committed build/signals_gen.h (no Flutter app at $(WATTLINE))"; fi
+	else echo "signals: the committed build/signals_gen.h (no Flutter app at $(WATTLINE))"; fi; \
+	if [ -f $(WATTLINE)/lib/car_actions.dart ]; then python3 -I tools/gen_car_actions.py $(WATTLINE) build; \
+	else echo "car actions: the committed build/car_actions_gen.h (no Flutter app at $(WATTLINE))"; fi
 HOSTFLAGS = -std=gnu11 -Wall -Wextra -fsanitize=address,undefined
 
 test:

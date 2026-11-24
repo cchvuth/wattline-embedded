@@ -2,4 +2,6 @@ build/*
 # the signal table and its decode vectors, generated from the Flutter app (make regenerates them when it is beside)
 !build/signals_gen.h
 !build/test_decode.c
+# the car panel's actions, generated from the Flutter app's lib/car_actions.dart alike
+!build/car_actions_gen.h
 third_party/lvgl-9.6.0/

@@ -31,9 +31,14 @@ int main(void) {
       {ACT_RECIRC_TOGGLE, "081cba02090a07083010011a0104"}, {ACT_CLIMATE, "081cba02090a07084610011a0100"},
       {ACT_DOOR_FL, "081cba02090a07082810011a0101"},       {ACT_DOOR_RR, "081cba02090a07082810011a0104"},
       {ACT_UNLOCK, "081cba02090a07083510011a0101"},        {ACT_FLASH, "081cba02090a07082110011a0106"},
+      {ACT_MASSAGE_L_SOFT, "081cba02090a07086210011a0103"}, {ACT_MASSAGE_R_HARD, "081cba02090a07086310011a0104"},
   };
   for (size_t i = 0; i < sizeof ta / sizeof *ta; i++) CHECK(same(m, cmdr_try_action(m, ta[i].a), ta[i].hex));
-  CHECK(cmdr_try_action(m, ACT_COUNT) == 0);
+  // the car panel's presses after the dash's: the first its first (Open: Trunk, 3 state 0); none past its last
+  CHECK(cmdr_action_at(ACT_COUNT) == &cmdr_car_opts[0] && same(m, cmdr_try_action(m, ACT_COUNT), "081cba02090a07080310011a0100"));
+  CHECK(cmdr_try_action(m, ACT_COUNT + cmdr_car_opt_count) == 0 && !cmdr_action_at(-1));
+  for (int i = 0; i < cmdr_car_act_count; i++)   // each action's options in a row, inside the presses
+    CHECK(cmdr_car_acts[i].n > 0 && cmdr_car_acts[i].first + cmdr_car_acts[i].n <= cmdr_car_opt_count);
   for (int a = 0; a < ACT_COUNT; a++) { // every action builds a request the allow-list passes
     uint64_t t;
     CHECK((n = cmdr_try_action(m, a)) && cmdr_req_ok(m, n, &t) && t == 28);
@@ -48,7 +53,7 @@ int main(void) {
   CHECK(same(m, cmdr_api_status_req(m), "0852ea0500"));   // the bytes commander.dart sends
   CHECK(same(m, cmdr_trigger_push_req(m), "0830da0300"));
   n = cmdr_subscribe(m, cmdr_all_fields, sizeof cmdr_all_fields);
-  CHECK(n == 7 + 60 && m[4] == 62 && m[6] == 60);   // 48 one-byte fields, 128..159 two bytes each
+  CHECK(n == 7 + 64 && m[4] == 66 && m[6] == 64);   // 48 one-byte fields, 8 of 128..159 two bytes each
   CHECK(same(m, cmdr_subscribe(m, (const uint8_t[]){159}, 1), "087cba08046a029f01"));
 
   // Reply status.
@@ -75,6 +80,8 @@ int main(void) {
         p.has_minutes && !p.has_arrive);
   n = hex("0810ca0103a80601", b); // field 101: DashRecirc RECIRC
   CHECK(cmdr_push_parse(b, n, &p) == 16 && p.has_recirc && p.recirc == 1);
+  n = hex("0810ca010790080398088401", b); // fields 130/131: the seats' massage, soft and an S3XY press's hard
+  CHECK(cmdr_push_parse(b, n, &p) == 16 && p.has_massage_l && p.massage_l == 3 && p.has_massage_r && p.massage_r == 0x84);
   n = hex("0810ca0105", b);       // truncated: unreadable, ignored
   CHECK(cmdr_push_parse(b, n, &p) == 0);
 
