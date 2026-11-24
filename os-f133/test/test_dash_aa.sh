@@ -128,8 +128,9 @@ run() { /bb/sh "$D" "$@" >> $T/out 2>&1; R=$?; /bb/usleep 300000; return $R; }  
 has() { grep -qxF -- "$1" $T/calls; }
 at() { grep -nxF -- "$1" $T/calls | head -n 1 | cut -d: -f1; }
 before() { a=$(at "$1") b=$(at "$2"); [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]; }
-up() { [ -e /run/dash-aa ] && [ -e /run/dash-aa-radio ] && [ -e /data/aa-on ]; }
-down() { ! [ -e /run/dash-aa ] && ! [ -e /run/dash-aa-radio ] && ! [ -e /data/aa-on ] && ! [ -e /run/aa-ap.iface ] &&
+# (the start's lock gone either way: mcud keeps the MCU's Bluetooth on while it is there)
+up() { [ -e /run/dash-aa ] && [ -e /run/dash-aa-radio ] && [ -e /data/aa-on ] && ! [ -e /run/dash-aa.starting ]; }
+down() { ! [ -e /run/dash-aa ] && ! [ -e /run/dash-aa.starting ] && ! [ -e /run/dash-aa-radio ] && ! [ -e /data/aa-on ] && ! [ -e /run/aa-ap.iface ] &&
 	! [ -e /run/aa-ap.conf ] && ! [ -e /run/aa-ap.pid ] && ! [ -e /sys/class/net/ap0 ] && ! pidof aa spike-vdec udhcpd mcud >/dev/null; }
 psk() { grep '^	psk="' $T/cap/ap.conf | cut -d'"' -f2; }
 secret() {   # the passphrase: 20 hex digits; on aa mcu's stdin and in the hook's environment, in no command line or log
@@ -217,6 +218,13 @@ run start && up && grep -q 'no AP beside the station' $T/out && before 'iw dev a
 	[ "$(cat /run/aa-ap.iface)" = wlan0 ] && ok "ap0 removed, the AP on wlan0" || no "the fallback"
 run stop && down && has 'S45wifi-auto start' && ok "stop: the station back" || no "stop"
 nocb
+
+echo "-- a stop before the call: no AT#CC for a session that is gone"
+fresh; export DASH_AA_CALL_S=2
+run start && up || no "start ($?)"
+n=$(grep -c 'AT#CC' $T/calls); run stop && down || no "stop"
+/bb/usleep 2600000; [ "$(grep -c 'AT#CC' $T/calls)" = "$n" ] && ok "a session stopped before its call: no AT#CC" || no "AT#CC after the stop"
+export DASH_AA_CALL_S=1
 
 echo "-- aa-solo: the AP on wlan0, ap0 not tried"
 fresh; : > /data/wifi/aa-solo

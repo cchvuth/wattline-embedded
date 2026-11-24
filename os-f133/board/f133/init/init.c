@@ -314,7 +314,8 @@ int main(void)
 
 	for (i = 0; i < 100 && stat("/dev/mmcblk0p1", &st); i++)
 		usleep(100000);
-	card_fsck("/dev/mmcblk0p1");
+	if (!stat("/dev/mmcblk0p1", &st))	/* (no card after 10 s: the mount says so, not a check of nothing) */
+		card_fsck("/dev/mmcblk0p1");
 	if (mount("/dev/mmcblk0p1", "/sd", "vfat", MS_NOATIME, "utf8,fmask=0077,dmask=0077"))
 		fail("mounting the card's first partition (/dev/mmcblk0p1)");
 

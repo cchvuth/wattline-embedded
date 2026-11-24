@@ -10,7 +10,7 @@
 case "$1" in start|"") ;; *) exit 0;; esac
 D=${DATA_CARD:-/dev/mmcblk0}
 [ -b $D ] && [ ! -b ${D}p2 ] && dash-mkdata
-if [ -b ${D}p2 ] && [ "$(sfdisk --part-type $D 2 2>/dev/null)" != 83 ]; then
+if [ -b ${D}p2 ] && [ "$(sfdisk --part-type $D 2 2>/dev/null)" != 83 ]; then   # (no answer: not known to be ours either)
 	echo "data: ${D}p2 is not a Linux partition: left alone, /data in RAM"
 elif [ -b ${D}p2 ]; then
 	m=$(dd if=${D}p2 bs=2 skip=540 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')

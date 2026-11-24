@@ -47,6 +47,11 @@
  * PJ_AA_FOCUS (its AA button while the map is put away), aa takes video focus again at its next ping tick */
 #define PJ_AA_SESSION "/run/dash-aa-session"
 #define PJ_AA_FOCUS "/run/dash-aa-focus"
+/* The split's left glow (blind spot, indicator) where the screen's left edge is the picture's (the phone layout): only
+ * the decoder draws there, so the dash names the glow here and spike-vdec blends it over the picture's left edge.
+ * "RRGGBB W\n": its colour, and the pixels it fades over (75 % at the edge to nothing, as the dash's own glows); no
+ * file: none. */
+#define PJ_GLOW "/run/dash-pj-glow"
 /* spike-vdec: the phone's pictures shown in the last second, rewritten each second (the split's WiFi box shows it) */
 #define PJ_FPS "/run/dash-pj-fps"
 /* One phone at a time: a phone's projection session holds a write lock on this file (fcntl: F_GETLK names its pid) from

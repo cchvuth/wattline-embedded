@@ -19,11 +19,13 @@
 // disconnecting it does not help: the phone's Android Auto dials straight back by itself (its own log says so). So the
 // MCU's Bluetooth is off (AT#CB: the phone cannot get in, and its Android Auto gives up within seconds) while no
 // session is on or starting, and on (AT#CA: back at once, the phone with it; both seen on the screen) as soon as one
-// is: an aa or sv client; $MCUD_RUN/dash-aa (either mode) or dash-aa.starting; or $MCUD_DATA/aa-on in mcud's first
-// $MCUD_AA_KEPT_MS (2 min: the dash's restore gets its chance; a restore that failed leaves the file). Off at mcud's
+// is: $MCUD_RUN/dash-aa (either mode) or dash-aa.starting, dash-aa's marks (a client alone is no session: a helper may
+// outlive its own); or $MCUD_DATA/aa-on in mcud's first $MCUD_AA_KEPT_MS (2 min: the dash's restore gets its chance; a
+// restore that failed leaves the file). Off at mcud's
 // start if none is, and later once none has been for $MCUD_AA_GRACE_MS (5 s) in a row (a stop and a start close
-// together). Only mcud sends AT#CB: a client's is refused. $MCUD_RUN/mcud.phone is there while a phone is connected
-// (the MCU's IB, until IA): dash-aa calls one (AT#CC) if none has come.
+// together), and again if a phone still gets in (one dialling in as it went off). Only mcud sends AT#CB: a client's is
+// refused. $MCUD_RUN/mcud.phone is there while a phone is connected (the MCU's IB, until IA): dash-aa calls one
+// (AT#CC) if none has come.
 // Log on stderr: the MCU's lines (a phone's address and name only as their codes) and its key frames.
 //
 //   mcud [tty] [socket]      defaults /dev/ttyS1 /run/mcud.sock
@@ -162,10 +164,15 @@ static int there(const char *dir, const char *name)
 static int bt_wanted(int64_t now)
 {
 	const char *run = env_or("MCUD_RUN", "/run");
-	for (int i = 0; i < MAXC; i++)
-		if (cl[i].fd >= 0 && (cl[i].kind == AA || cl[i].kind == SV)) return 1;
 	if (there(run, "dash-aa") || there(run, "dash-aa.starting")) return 1;
 	return now - started < atoi(env_or("MCUD_AA_KEPT_MS", "120000")) && there(env_or("MCUD_DATA", "/data"), "aa-on");
+}
+
+static void no_phone(void)   // Bluetooth off: no phone on it, whether or not the MCU says so (dash-aa calls one back)
+{
+	char p[256];
+	snprintf(p, sizeof p, "%s/mcud.phone", env_or("MCUD_RUN", "/run"));
+	unlink(p);
 }
 
 // The MCU's Bluetooth on with a session, off without one (see the top)
@@ -180,6 +187,7 @@ static void bt_watch(int64_t now)
 	}
 	bt = want;
 	send_frame(F_AT, want ? "AT#CA\r\n" : "AT#CB\r\n", 7);
+	if (!want) no_phone();
 	logf_(want ? "Bluetooth on (AT#CA): a session on or starting" : "Bluetooth off (AT#CB): no session on");
 }
 
@@ -203,14 +211,18 @@ static void mcu_line(const char *l)
 		logf_("data channel %s open%s", chname[chan], again ? " again: its client dials anew" : "");
 		open_waiting();
 	} else if (!strcmp(l, "IB")) {   // a phone connected (HFP up): dash-aa's start need not call one back
-		char p[256];
-		snprintf(p, sizeof p, "%s/mcud.phone", env_or("MCUD_RUN", "/run"));
-		int fd = open(p, O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
-		if (fd >= 0) close(fd);
+		if (bt == 0) bt_watch(ms());   // (a session's mark just made, this pass's look still to come: on, not off again)
+		if (bt == 0) {   // with Bluetooth off: one that was dialling in as it went off (seen once). Off again: that holds
+			send_frame(F_AT, "AT#CB\r\n", 7);
+			logf_("Bluetooth off again (AT#CB): a phone connected with no session on");
+		} else {
+			char p[256];
+			snprintf(p, sizeof p, "%s/mcud.phone", env_or("MCUD_RUN", "/run"));
+			int fd = open(p, O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
+			if (fd >= 0) close(fd);
+		}
 	} else if (!strcmp(l, "IA")) {
-		char p[256];
-		snprintf(p, sizeof p, "%s/mcud.phone", env_or("MCUD_RUN", "/run"));
-		unlink(p);
+		no_phone();
 		if (chan != NONE) logf_("data channel %s closed (HFP down)", chname[chan]);
 		close_channel();
 	}

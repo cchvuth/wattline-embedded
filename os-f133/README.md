@@ -12,7 +12,8 @@ The dash is the same program as the T113 Dash's ([app/](../app), device profile 
 car's data from the Commander over Wi-Fi or Bluetooth LE, and runs wireless Android Auto with your own Google-signed
 head-unit certificate (see the top README). Android Auto's Bluetooth is the MCU's, and it is on only while a session
 is on or starting: a paired phone that could reach the screen with Android Auto off would keep trying to start it
-("connecting to Android Auto" on the phone, again and again). The phone comes back when Android Auto starts. Over-the-air updates come from this repository's releases (below).
+("connecting to Android Auto" on the phone, again and again). The phone comes back when Android Auto starts.
+Over-the-air updates come from this repository's releases (below).
 
 The certificate goes to `/data/wattline/` as on the Dash. The image's SSH server has no SFTP, so copy the files with
 `scp -O` or `ssh root@<screen> 'cat > /data/wattline/aa.crt' < aa.crt` (and the same for `aa.key`).

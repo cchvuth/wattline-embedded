@@ -239,6 +239,8 @@ int main(int argc, char **argv)
 				for (int k = 0; k < 4; k++) s.brake_temp_c[k] = NAN;
 				bad |= shot(d, out, "basic-no-data", &s, -1);
 			}
+		scenes[1].fill(&s); /* and back: NO ROUTE to the route, the skeleton to the meter (each change redrawn) */
+		bad |= shot(d, out, "basic-data-back", &s, -1);
 		dash_settings_t full = {.minor_figures = true, .cards = {DASH_CARD_BUTTONS, DASH_CARD_CAR, DASH_CARD_ENERGY, DASH_CARD_G}};
 		dash_ui_settings(&full);
 	}

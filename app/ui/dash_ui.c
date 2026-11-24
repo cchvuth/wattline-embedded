@@ -468,6 +468,18 @@ static lv_obj_t *pdial, *pdial_kw, *pdial_unit, *pdial_range;
 
 /* ---------- edge glows (main.dart _Edge), parallel to the bezel ---------- */
 static lv_image_dsc_t glow_dsc[2];
+/* The split's left glow over the picture, the decoder's to draw (ui/project_region.h PJ_GLOW): its colour, 0 none.
+ * Written only as it changes (the flasher: a few times a second). */
+static void pj_glow(uint32_t c)
+{
+	static uint32_t said;
+	if (c == said) return;
+	if (!c) { unlink(PJ_GLOW), said = 0; return; }
+	FILE *f = fopen(PJ_GLOW ".new", "w");
+	if (!f) return;   /* (said as it was: tried again at the next frame) */
+	bool ok = fprintf(f, "%06X %d\n", (unsigned)(c & 0xFFFFFF), (int)ri(px(70))) > 0;
+	if (fclose(f) == 0 && ok && rename(PJ_GLOW ".new", PJ_GLOW) == 0) said = c;
+}
 static void glow_make(lv_image_dsc_t *d, bool right)
 {
 	int w = ri(115 * G.k + px(70)), h = ri(G.H);
@@ -1269,6 +1281,7 @@ static void fps_show(void);
 void dash_ui_init(lv_obj_t *scr)
 {
 	unlink(PJ_VISIBLE); /* a restarted UI starts on the dash, so no touches go to a phone until it shows the picture */
+	unlink(PJ_GLOW);    /* (and no glow of the UI before this one stays on the picture) */
 	lv_display_t *disp = lv_obj_get_display(scr);
 	G.W = lv_display_get_horizontal_resolution(disp);
 	G.H = lv_display_get_vertical_resolution(disp);
@@ -4209,7 +4222,7 @@ static void pj_parts(bool to_pj)
 	for (int i = 0; i < 10; i++) o[n++] = chips[i].box;
 	o[n++] = lights_row, o[n++] = cab.grp;
 	for (int c = 0; c < DASH_CARDS; c++) o[n++] = dots[SPLIT_SLOT][c];
-	o[n++] = dest_card, o[n++] = dial, o[n++] = charge_box, o[n++] = stats_box;
+	o[n++] = dest_card, o[n++] = no_route, o[n++] = dial, o[n++] = charge_box, o[n++] = stats_box;
 	o[n++] = gball, o[n++] = g_val, o[n++] = g_peak, o[n++] = brake_temps, o[n++] = pdial, o[n++] = tip; /* the dash's order */
 	if (to_pj)
 		for (int i = 0; i < n; i++) { /* parked clear of the picture by more than any part draws past its box (the g dot's) */
@@ -4275,12 +4288,19 @@ void dash_ui_show(int v)
 		lv_obj_set_parent(outside_l, to);
 		lv_obj_set_parent(link_w.box, to); /* the Wi-Fi / Bluetooth status: kept in the split, in the left strip */
 		lv_obj_set_parent(link_b.box, to);
-		/* the edge glows (blind spot, indicators) too, under everything; the left one at the dash's side's left edge,
-		 * beside the picture: the decoder draws there, so nothing of LVGL's may be repainted over it (and the Dash's
-		 * sliver left of it is under the housing's slant) */
+		/* the edge glows (blind spot, indicators) too, under everything. The left one: the decoder draws the picture, so
+		 * nothing of LVGL's may be repainted over it. The Dash: at the dash's side's left edge, beside the picture (the
+		 * sliver left of the picture is under the housing's slant). The phone layout, whose picture reaches the screen's
+		 * left edge: still on that edge: LVGL's over the bar above the picture, the decoder's over the picture itself
+		 * (pj_glow) */
 		lv_obj_set_parent(glow_l, to), lv_obj_set_parent(glow_r, to);
 		lv_obj_move_to_index(glow_r, 0), lv_obj_move_to_index(glow_l, 0);
-		lv_obj_set_x(glow_l, now_pj ? ri(pj_vw()) : 0);
+		if (G.phone) {
+			if (now_pj) lv_obj_set_size(glow_l, glow_dsc[0].header.w, PJ_RGN_Y); /* (cut, its bright edge kept: top left) */
+			else lv_obj_set_size(glow_l, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+		} else {
+			lv_obj_set_x(glow_l, now_pj ? ri(pj_vw()) : 0);
+		}
 		if (G.phone && now_pj) pj_parts(true); /* the cards' parts */
 		if (!now_pj) lv_obj_move_foreground(tip), lv_obj_move_foreground(snack); /* toasts stay above the moved ring */
 		/* the decoder draws straight to the framebuffer: LVGL would leave its last picture on screen, so repaint all
@@ -5091,6 +5111,7 @@ void dash_ui_set(const dash_state_t *s)
 	show(glow_r, gr);
 	icon_color(glow_l, s->blind_l ? ALERT : REGEN);
 	icon_color(glow_r, s->blind_r ? ALERT : REGEN);
+	pj_glow(G.phone && view == DASH_VIEW_PROJECT && gl ? (s->blind_l ? ALERT : REGEN) : 0);
 	if (view == DASH_VIEW_PROJECT) { /* the phone-map split: only the compact strip (the ring reused in it) */
 		if (G.phone) {
 			split_phone(s);

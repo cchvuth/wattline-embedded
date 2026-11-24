@@ -83,6 +83,11 @@ def main(binary):
     run_d, data_d = os.path.join(d, 'run'), os.path.join(d, 'data')
     os.mkdir(run_d); os.mkdir(data_d)
     env = dict(os.environ, MCUD_RUN=run_d, MCUD_DATA=data_d, MCUD_AA_GRACE_MS='300', MCUD_AA_KEPT_MS='1500')
+    def mark(name, on):
+        if on:
+            open(os.path.join(run_d, name), 'w').close()
+        else:
+            os.unlink(os.path.join(run_d, name))
     def with_mcud(test, *args):
         p = subprocess.Popen([binary, path, sock], stdout=subprocess.DEVNULL, stderr=log, env=env)
         try:
@@ -96,7 +101,7 @@ def main(binary):
     with_mcud(bt, run_d)
     with open(os.path.join(data_d, 'aa-on'), 'w') as f:
         f.write('extra\n')
-    with_mcud(bt_kept)
+    with_mcud(bt_kept, mark)
 
 def run(p, m, sock, log):
     mcu = Mcu(m)
@@ -106,6 +111,7 @@ def run(p, m, sock, log):
         time.sleep(0.05)
     mcu.pump(0.3)
     assert mcu.got and mcu.got[0][1] == HOLD, mcu.got
+    assert CA in [x for _, x in mcu.got], 'started with a session on (its mark): Bluetooth not turned on'
 
     ctl = socket.socket(socket.AF_UNIX); ctl.connect(sock); ctl.sendall(b'ctl\nAT#MZ\n')
     aa = socket.socket(socket.AF_UNIX); aa.connect(sock); aa.sendall(b'aa\n')
@@ -206,7 +212,7 @@ def ready(mcu, sock):
         time.sleep(0.05)
 
 def bt(p, m, sock, run_d):
-    """No session at the start: Bluetooth off at once; on with a session (its marks, a client), off the grace after."""
+    """No session at the start: Bluetooth off at once; on with a session (dash-aa's marks), off the grace after."""
     mcu = Mcu(m)
     ready(mcu, sock)
     def sent(t):
@@ -222,13 +228,22 @@ def bt(p, m, sock, run_d):
     got = [x for _, x in mcu.got]
     assert got.count(CB) == 1 and CA not in got, 'no session at the start: Bluetooth not turned off at once'
     assert sent(1.0) == [], 'AT#CB sent again'
+    mcu.send(frame(0xD4, b'IB\r\n'))        # a phone gets in all the same (it was dialling in as Bluetooth went off)
+    assert sent(0.4) == [CB], 'a phone connected with Bluetooth off: not turned off again'
+    assert not os.path.exists(os.path.join(run_d, 'mcud.phone')), 'a phone marked connected with Bluetooth off'
+    mcu.send(frame(0xD4, b'IA\r\n')); mcu.pump(0.1)
     touch('dash-aa.starting')                 # the AA button: on at once
     assert sent(0.8) == [CA], 'a session starting: Bluetooth not on'
+    rm('dash-aa.starting'); assert sent(1.5) == [CB], 'the start gone: Bluetooth not off'
+    touch('dash-aa.starting'); mcu.send(frame(0xD4, b'IB\r\n'))   # a phone in the same moment as the button: on, kept
+    assert sent(0.8) == [CA], 'a phone connecting as a session starts: turned off again (or not on)'
+    assert os.path.exists(os.path.join(run_d, 'mcud.phone')), 'a phone connecting as a session starts: not marked'
+    mcu.send(frame(0xD4, b'IA\r\n')); mcu.pump(0.1)
     touch('dash-aa'); rm('dash-aa.starting')  # up
     assert sent(0.8) == [], 'Bluetooth told again while the session is on'
     rm('dash-aa')                             # stopped: off, the grace after
     assert sent(0.15) == [], 'Bluetooth off before the grace'
-    assert sent(1.0) == [CB], 'the session stopped: Bluetooth not off'
+    assert sent(1.5) == [CB], 'the session stopped: Bluetooth not off'
     touch('dash-aa', 'dash-aa.extra')         # the other mode: on as well
     assert sent(0.8) == [CA], 'extra mode: Bluetooth not on'
     rm('dash-aa'); touch('dash-aa.starting')  # a switch to the other mode inside the grace: stays on
@@ -239,30 +254,39 @@ def bt(p, m, sock, run_d):
     assert sent(0.5) == [], "a client's AT#CB reached the MCU"
     ctl.close()
     rm('dash-aa', 'dash-aa.extra')
-    assert sent(1.2) == [CB], 'extra stopped: Bluetooth not off'
-    for kind in (b'aa\n', b'sv\n'):           # a receiver (or an addition's helper) waiting for its channel: on
-        a = socket.socket(socket.AF_UNIX); a.connect(sock); a.sendall(kind)
-        assert sent(0.8) == [CA], 'a data client: Bluetooth not on'
+    assert sent(1.5) == [CB], 'extra stopped: Bluetooth not off'
+    cs = []
+    for kind in (b'aa\n', b'sv\n', b'ctl\n'):   # clients alone are no session (a helper may outlive its own): still off
+        a = socket.socket(socket.AF_UNIX); a.connect(sock); a.sendall(kind); cs.append(a)
+    assert sent(0.8) == [], 'a client with no session on turned Bluetooth on'
+    for a in cs:
         a.close()
-        assert sent(1.2) == [CB], 'the data client gone: Bluetooth not off'
     touch('dash-aa'); mcu.pump(0.8)
     mcu.send(frame(0xD4, b'IB\r\n')); mcu.pump(0.2)   # a phone connected: marked for dash-aa (no call needed)
     assert os.path.exists(os.path.join(run_d, 'mcud.phone')), 'IB: no mcud.phone'
     mcu.send(frame(0xD4, b'IA\r\n')); mcu.pump(0.2)
     assert not os.path.exists(os.path.join(run_d, 'mcud.phone')), 'IA: mcud.phone left'
+    mcu.send(frame(0xD4, b'IB\r\n')); mcu.pump(0.2)   # connected as the session ends, and the MCU says no IA: unmarked
     rm('dash-aa')
+    assert sent(1.5) == [CB], 'the session stopped with a phone on: Bluetooth not off'
+    assert not os.path.exists(os.path.join(run_d, 'mcud.phone')), 'Bluetooth off: mcud.phone left (the next start would not call)'
     p.terminate(); p.wait(3)
     print('mcud Bluetooth on and off: ok')
 
-def bt_kept(p, m, sock):
-    """A session kept on (aa-on, either mode) at the start: Bluetooth on for the dash's restore; none came: off."""
+def bt_kept(p, m, sock, mark):
+    """A session kept on (aa-on, either mode) at the start: Bluetooth on for the dash's restore, on through it once it
+    starts (its lock, then its mark, past the window); stopped, or one that never came: off."""
     mcu = Mcu(m)
     ready(mcu, sock)
     mcu.pump(0.6)
     got = [x for _, x in mcu.got if x in (CA, CB)]
     assert got == [CA], 'a session kept on at the start: Bluetooth not on (or turned off)'
-    mcu.got.clear(); mcu.pump(2.2)   # the kept window (1.5 s here) and the grace over, no session started
-    assert [x for _, x in mcu.got if x in (CA, CB)] == [CB], 'the restore never came: Bluetooth not off after its window'
+    mark('dash-aa.starting', True)   # the restore, inside the window (1.5 s here)
+    mcu.got.clear(); mcu.pump(2.5)   # ... still starting past it
+    assert [x for _, x in mcu.got if x in (CA, CB)] == [], 'Bluetooth told during the restore (off past the window?)'
+    mark('dash-aa.starting', False)  # the restore failed (its lock gone, no mark; aa-on left): off, the window being over
+    mcu.got.clear(); mcu.pump(1.5)
+    assert [x for _, x in mcu.got if x in (CA, CB)] == [CB], 'the restore failed: Bluetooth not off after its window'
     p.terminate(); p.wait(3)
     print('mcud Bluetooth, a session kept on: ok')
 

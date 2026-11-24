@@ -1257,6 +1257,39 @@ static size_t stream_nals(uint8_t *buf, size_t len, dec_t *D, int *set, int eof,
  * often delivers a clump of them together: shown this far apart rather than all but the newest dropped; a 30 fps stream
  * keeps up with a little room for its jitter. */
 #define SHOW_GAP 0.030
+/* The split's left glow (ui/project_region.h PJ_GLOW: "RRGGBB W", the dash's blind spot / indicator colour and the
+ * pixels it fades over), blended over the picture's left edge: only this program draws there. A landscape column is a
+ * framebuffer row here, so the glow is W rows from the region's first, each of one strength (75 % at the edge, as the
+ * dash's glow_make). The rows under it are kept and put back when the glow goes or changes (reading the mapping back
+ * is as fast as RAM: 0.35 ms for the F133's 131 x 540); a picture shown since needs none put back. */
+#define PJ_GLOW "/run/dash-pj-glow"
+static void glow_rows(uint8_t *dst, long line, int h, int w, int rgb, uint8_t *keep, int on)
+{
+	size_t row = (size_t)h * 4;
+	for (int x = 0; x < w; x++) {
+		uint8_t *p = dst + (size_t)x * line;
+		if (!on) { memcpy(p, keep + x * row, row); continue; }
+		memcpy(keep + x * row, p, row);
+		int a = 192 * (2 * (w - x) - 1) / (2 * w), na = 256 - a;   /* of 256: 0.75 * (1 - (x + 0.5) / w) */
+		int cb = (rgb & 255) * a, cg = (rgb >> 8 & 255) * a, cr = (rgb >> 16 & 255) * a;
+		for (int i = 0; i < h; i++, p += 4)   /* BGRx */
+			p[0] = (uint8_t)((p[0] * na + cb) >> 8), p[1] = (uint8_t)((p[1] * na + cg) >> 8), p[2] = (uint8_t)((p[2] * na + cr) >> 8);
+	}
+}
+static uint8_t *glow_keep; static int glow_on, glow_rgb, glow_w;
+static void glow_sync(int shown)   /* shown: the picture was just drawn whole (none of the glow is on it) */
+{
+	unsigned rgb = 0; int w = 0, want = 0;
+	FILE *f = fopen(PJ_GLOW, "r");
+	if (f) want = fscanf(f, "%x %d", &rgb, &w) == 2 && w > 0 && w <= rgn_w && w <= 512, fclose(f);
+	if (shown) glow_on = 0;
+	if (glow_on && (!want || (int)rgb != glow_rgb || w != glow_w)) glow_rows(fb_rgn, fb_line, rgn_h, glow_w, 0, glow_keep, 0), glow_on = 0;
+	if (!want || glow_on) return;
+	uint8_t *k = realloc(glow_keep, (size_t)w * rgn_h * 4);
+	if (!k) return;
+	glow_keep = k, glow_rgb = (int)rgb, glow_w = w, glow_on = 1;
+	glow_rows(fb_rgn, fb_line, rgn_h, w, glow_rgb, glow_keep, 1);
+}
 static void show_next(dec_t *D, double *last_show_t, int *vis, double *reshow_at)   /* the oldest waiting, in its turn */
 {
 	if (!D->npend || now() - *last_show_t < SHOW_GAP) return;
@@ -1265,7 +1298,9 @@ static void show_next(dec_t *D, double *last_show_t, int *vis, double *reshow_at
 	*vis = v;
 	if (!v) { D->npend = 0; return; }   /* not on screen: nothing to catch up on (newest_ci is shown when it comes back) */
 	D->last_ci = D->pend[0], D->pend[0] = D->pend[1], D->npend--;
+	int was = D->shown;
 	*last_show_t = now(), fb_show(D);   /* the gap from this show's start: its own time counts in it */
+	if (fb_fd >= 0 && D->shown != was) glow_sync(1);   /* (a picture fb_show refused drew nothing: the glow as it is) */
 	if (*reshow_at && *last_show_t >= *reshow_at) *reshow_at = 0;   /* drawn after the UI's repaint: no reshow needed */
 }
 static int decode_stream(int fd)
@@ -1282,7 +1317,7 @@ static int decode_stream(int fd)
 	double next_fps = now() + 1; int fps_shown = 0;
 #endif
 	for (;;) {
-		if (set && fb_fd >= 0 && now() >= next_fps) {   /* each second (the loop wakes every 100 ms at least): the pictures shown */
+		if (set && fb_fd >= 0 && now() >= next_fps) {   /* each second (the loop wakes every 40 ms at least): the pictures shown */
 			FILE *f = fopen(PJ_FPS ".new", "w");
 			if (f) fprintf(f, "%d\n", D.shown - fps_shown), fclose(f), rename(PJ_FPS ".new", PJ_FPS);
 			fps_shown = D.shown, next_fps += 1;
@@ -1293,7 +1328,7 @@ static int decode_stream(int fd)
 			cap *= 2; buf = realloc(buf, cap); if (!buf) die("out of memory");
 		}
 		struct pollfd in = { .fd = fd, .events = POLLIN };
-		int tmo = 100;   /* the loop wakes at least every 100 ms, and in time for the next picture waiting to be shown */
+		int tmo = 40;   /* the loop wakes at least every 40 ms (the left glow follows the flasher), and in time for the next picture waiting to be shown */
 		if (set && D.npend) { double w = last_show_t + SHOW_GAP - now(); tmo = w <= 0 ? 0 : (int)(w * 1000) + 1; }
 		if (set && poll(&in, 1, tmo) == 0) {   /* no input now: a picture's turn, or the UI brought the picture back */
 			int v = access(PJ_VISIBLE, F_OK) == 0;
@@ -1304,8 +1339,14 @@ static int decode_stream(int fd)
 			 * a picture only when its screen changes) */
 			if (v && !reshow_at && now() - last_show_t >= 1.0) reshow_at = now();
 			if (fb_fd >= 0 && v && reshow_at && now() >= reshow_at && D.newest_ci >= 0) {   /* (not --stream-test) */
+				int was = D.shown;
 				D.last_ci = D.newest_ci; last_show_t = now(); fb_show(&D); reshow_at = 0, D.npend = 0;
+				if (D.shown != was) glow_sync(1);
 			}
+			if (!v) glow_on = 0;   /* the picture away: the UI's there now, nothing of ours to put back */
+			/* a still picture: the glow comes and goes on it. Not while a reshow is due (the split just back: the
+			 * UI's own paint is there, or about to be, not the picture) */
+			else if (fb_fd >= 0 && D.shown && !reshow_at) glow_sync(0);
 			vis = v;
 			show_next(&D, &last_show_t, &vis, &reshow_at);
 			continue;
@@ -1361,6 +1402,24 @@ int main(int argc, char **argv)
 	if (argc > 1 && !strcmp(argv[1], "--info")) return info();
 	if (argc > 2 && !strcmp(argv[1], "--parse")) return parse_only(argv[2]);
 	if (argc > 1 && !strcmp(argv[1], "--rotate")) {	/* the show path's rotate: checked against the plain C, timed */
+		{   /* the split's left glow: 75 % of its colour at the edge, fading to nothing, only the picture's pixels (not
+		     * their fourth byte, nor the row past them), and the rows put back as they were */
+			enum { GW = 8, GH = 6, GL = GH * 4 + 8 };
+			uint8_t f[GW * GL], was[GW * GL], k[GW * GH * 4];
+			for (size_t q = 0; q < sizeof f; q++) f[q] = was[q] = (uint8_t)(q * 37 + 11);
+			glow_rows(f, GL, GH, GW, 0xE23D3D, k, 1);
+			for (int x = 0; x < GW; x++) {
+				int a = 192 * (2 * (GW - x) - 1) / (2 * GW);
+				const uint8_t *p = f + x * GL, *o = was + x * GL;
+				if (p[0] != (o[0] * (256 - a) + 0x3D * a) >> 8 || p[1] != (o[1] * (256 - a) + 0x3D * a) >> 8 ||
+				    p[2] != (o[2] * (256 - a) + 0xE2 * a) >> 8 || p[3] != o[3] || memcmp(p + GH * 4, o + GH * 4, 8))
+					die("--rotate: the left glow's blend is wrong in row %d", x);
+			}
+			if (192 * (2 * GW - 1) / (2 * GW) < 170 || 192 * 1 / (2 * GW) > 16) die("--rotate: the left glow's strength is off");
+			glow_rows(f, GL, GH, GW, 0, k, 0);
+			if (memcmp(f, was, sizeof f)) die("--rotate: the rows under the left glow are not put back");
+			printf("ROTATE the left glow blends over the picture's edge and its rows come back\n");
+		}
 #if VDEC_F133
 		/* AA's windows: the Dash's 1160x480 (--region 120 1160) out of a 1280x480 frame, the F133's 960x540
 		 * (--region 0 180 960 540) out of a 1280x720 one; each drawn as fb_show does, in its two bands, into rows two

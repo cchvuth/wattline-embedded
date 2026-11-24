@@ -190,6 +190,7 @@ start|extra|restore)
 	fi
 	echo $$ > $L/pid
 	trap 'rm -rf /run/dash-aa.starting' EXIT
+	trap 'exit 1' TERM HUP INT   # (ash runs no EXIT trap for a start a signal ends: the lock left would keep Bluetooth on)
 	if [ -f "$MARK" ]; then
 		[ "$(up_mode)" = $MODE ] && exit 0   # up by the start that held the lock
 		# the other mode: down first (its marks with it), this one in its place; not on again at the next start
@@ -256,8 +257,9 @@ start|extra|restore)
 	# the MCU's Bluetooth came on with the session (mcud) and the phone usually comes back by itself: for Android Auto,
 	# one that has not (no /run/mcud.phone, mcud's) $DASH_AA_CALL_S (8) seconds on is called (the MCU's last device).
 	# Not for extra: the last device is likely the Android phone, not the one extra's addition wants
-	# (its own output nowhere: nothing waits 8 s on this script's)
-	[ $MODE = aa ] && ( sleep ${DASH_AA_CALL_S:-8}; [ -e /run/mcud.phone ] || printf 'AT#CC\n' | mcud ctl 1 >> $LOG/aa-mcu.log 2>&1 ) >/dev/null 2>&1 &
+	# (its own output nowhere: nothing waits 8 s on this script's; a session stopped or switched meanwhile: no call)
+	[ $MODE = aa ] && ( sleep ${DASH_AA_CALL_S:-8}; keep || exit 0
+		[ -e /run/mcud.phone ] || printf 'AT#CC\n' | mcud ctl 1 >> $LOG/aa-mcu.log 2>&1 ) >/dev/null 2>&1 &
 	[ "$1" != restore ] && pair_on   # someone at the screen tapped it (not a restore at boot)
 	# up: on again at the next start, in this mode (the dash restores it), until stopped. (printf, not `: >`: a failed
 	# redirect on a special builtin would end the script before the marker)
