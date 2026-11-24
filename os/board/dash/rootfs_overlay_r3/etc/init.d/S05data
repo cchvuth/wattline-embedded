@@ -11,7 +11,12 @@ mkdir -p /data /run/dashdata
 if [ -n "$D" ] && [ ! -b ${D}p3 ]; then
 	dash-mkdata && { blockdev --rereadpt $D 2>/dev/null; i=0; until [ -b ${D}p3 ] || [ $i -ge 5 ]; do sleep 1; i=$((i+1)); done; }
 fi
-if [ -n "$D" ] && [ -b ${D}p3 ]; then
+t=; [ -n "$D" ] && [ -b ${D}p3 ] && t=$(sfdisk --part-type $D 3 2>/dev/null)
+if [ -n "$t" ] && [ "$t" != 83 ]; then
+	# a p3 of another type is not this Dash's (a card laid out by hand): never checked, made or mounted, as e2fsck would
+	# rebuild an ext4 over it from a stale backup superblock (no answer from sfdisk: checked as before)
+	echo "data: ${D}p3 is not a Linux partition: left alone, /data in RAM"
+elif [ -n "$D" ] && [ -b ${D}p3 ]; then
 	# no ext4 magic where it goes (read, but not 0xEF53): the first boot's carve cut short (power gone during mkfs), or
 	# p3 not seen until a reboot. Made now, unless e2fsck finds a filesystem by a backup superblock. Unreadable: left be.
 	m=$(dd if=${D}p3 bs=2 skip=540 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
