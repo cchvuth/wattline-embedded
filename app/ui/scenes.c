@@ -31,7 +31,8 @@ static void cold_morning(dash_state_t *s)
 	s->speed = 38, s->gear = 'D', s->front_kw = -3, s->rear_kw = -18, s->pedal_pct = 0;
 	s->soc_pct = 64, s->range = 193 * 1.609344f, s->speed_limit = 50, s->ap = AP_READY;
 	s->ind_r = true, s->low_beam = true, s->outside_c = -1.5f, s->washer_low = true;
-	s->grip = GRIP_SLIPPERY;
+	s->grip = GRIP_SLIPPERY, s->drl = true, s->high_beam = true; /* every lamp lit: the lights row at its widest */
+	TEXT(s->defog, "DEFOG");
 	s->pack_temp_c = 3.5f, s->pack_heating = true, s->regen_cap_kw = 24;
 	s->draws = true, s->climate_kw = 2.9f, s->lv_kw = 14.63f * 54.6f / 1000, s->other_kw = 1.5f; /* the pack heating */
 	s->pack_kw = -380 * 41.6f / 1000; /* 0x132: 41.6 A into the pack at 380 V */

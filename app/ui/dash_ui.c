@@ -809,13 +809,16 @@ static void ring_figs_geom(float dy) /* dy: how far the speed column sits lower 
 	SET_NUM(limit_sign, lv_obj_get_style_border_width, lv_obj_set_style_border_width, ri(px(5) * k));
 	const lv_font_t *lf = font_px(BOLD, ri(px(20) * k));
 	if (lv_obj_get_style_text_font(limit_l, 0) != lf) lv_obj_set_style_text_font(limit_l, lf, 0);
-	const lv_font_t *fv = font_px(LIGHT, ri(G.r * 0.16f)), *fu = font_px(MEDIUM, ri(G.r * 0.085f));
+	/* basic's ring is smaller (two cards a side), so its readouts bigger to read as well: the figures 1.3x, the words
+	 * (FRONT: the arc's bar close by) 1.1x */
+	float fk = G.phone && ST.basic ? 1.3f : 1, uk = G.phone && ST.basic ? 1.1f : 1;
+	const lv_font_t *fv = font_px(LIGHT, ri(G.r * 0.16f * fk)), *fu = font_px(MEDIUM, ri(G.r * 0.085f * uk));
 	lv_obj_t *mt[4] = {rear_v, front_v, rear_u, front_u};
 	const lv_font_t *mf[4] = {fv, fv, fu, fu};
 	for (int i = 0; i < 4; i++) {
 		if (i < 2) figure_font(mt[i], mf[i]);
 		else if (lv_obj_get_style_text_font(mt[i], 0) != mf[i]) lv_obj_set_style_text_font(mt[i], mf[i], 0);
-		float x = (i % 2 ? 1 : -1) * G.r * 0.72f, y = (i < 2 ? -G.r * 0.06f : G.r * 0.155f) + dy;
+		float x = (i % 2 ? 1 : -1) * G.r * (i < 2 || uk == 1 ? 0.72f : 0.7f), y = (i < 2 ? -G.r * 0.06f : G.r * 0.155f) * fk + dy;
 		align(mt[i], LV_ALIGN_CENTER, ri(x), ri(y));
 	}
 }
@@ -1768,7 +1771,8 @@ static void set_links(const dash_state_t *s)
 }
 
 static char lights_shown[96] = "-"; /* the lamps' row as built and placed ("-": build it again) */
-static void set_lights(const dash_state_t *s, float cx, float top)
+/* [maxw]: the room it has; wider (every lamp lit on a narrow column) it is scaled down to it, the app's FittedBox */
+static void set_lights(const dash_state_t *s, float cx, float top, float maxw)
 {
 	struct { const char *w; const lv_image_dsc_t *i; uint32_t c; } lamp[5];
 	int n = 0;
@@ -1780,12 +1784,12 @@ static void set_lights(const dash_state_t *s, float cx, float top)
 	if (s->live && s->defog[0]) lamp[n++] = (typeof(lamp[0])){s->defog, &ic_defrost, REGEN}; /* the windscreen's, while on */
 	char key[96] = "";
 	for (int i = 0; i < n; i++) snprintf(key + strlen(key), sizeof key - strlen(key), "%s%x", lamp[i].w, (unsigned)lamp[i].c);
-	snprintf(key + strlen(key), sizeof key - strlen(key), "@%d,%d", ri(cx), ri(top));
+	snprintf(key + strlen(key), sizeof key - strlen(key), "@%d,%d,%d", ri(cx), ri(top), ri(maxw));
 	if (!strcmp(key, lights_shown)) return;
 	strcpy(lights_shown, key);
 	lv_obj_clean(lights_row);
 	const lv_font_t *f = FS(REGULAR, 12, UI_S_LIGHTS);
-	float x = 0, ls = PLI(1), wd[4];
+	float x = 0, ls = PLI(1), wd[sizeof lamp / sizeof lamp[0]];
 	for (int i = 0; i < n; i++) {
 		lv_point_t sz;
 		lv_text_get_size(&sz, lamp[i].w, f, ri(ls), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
@@ -1793,6 +1797,8 @@ static void set_lights(const dash_state_t *s, float cx, float top)
 		x += wd[i];
 	}
 	place(lights_row, cx - x / 2, top, x, PLI(20) + PLI(2) + lv_font_get_line_height(f));
+	lv_obj_set_style_transform_scale(lights_row, x > maxw && maxw > 0 ? (int32_t)(256 * maxw / x) : 256, 0);
+	lv_obj_set_style_transform_pivot_x(lights_row, ri(x / 2), 0); /* its middle and top kept */
 	x = 0;
 	for (int i = 0; i < n; i++) {
 		lv_obj_t *im = icon(lights_row, lamp[i].i, lamp[i].c);
@@ -5332,7 +5338,7 @@ static void card_set(const dash_state_t *s, int c, float cx, float w)
 	case DASH_CARD_CAR: { /* the lights 5 dp down (unless the drive card has them, as the app's: its car card is the car
 			       * alone), the cabin fitted to the rest, a little lower (the full layout's) */
 		float top = G.mt + px(5), lh = PLI(20 + 2) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_LIGHTS));
-		if (card_slot[DASH_CARD_G] < 0) set_lights(s, cx, top);
+		if (card_slot[DASH_CARD_G] < 0) set_lights(s, cx, top, w);
 		float bt = top + lh + PLI(4), bb = G.H - G.mb - px(5), ch = cb(8) + ui_car_pics[s->car].car->header.h + cb(10);
 		set_cabin(s, cx, (bt + bb - ch) / 2 + 0.07f * ch);
 		break;
@@ -5356,7 +5362,7 @@ static void card_set(const dash_state_t *s, int c, float cx, float w)
 			     * brakes and the pedal bar in its place (pedal_brakes) */
 		float lh = PLI(20 + 2) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_LIGHTS)), fh = PG(48);
 		float side = fminf(w - px(16), G.H - G.mt - G.mb - 2 * (lh + px(8)) - fh), top = G.H / 2 - side / 2;
-		set_lights(s, cx, top - lh - px(4));
+		set_lights(s, cx, top - lh - px(4), w);
 		pedal_brakes(s, cx, 0, G.H, true, side);
 		if (g_figures(s, true)) {
 			place(gball, cx - side / 2 + px(5), top + px(5), side - px(10), side - px(10));
@@ -5386,9 +5392,12 @@ static float card_extent(int c)
 	lv_obj_t *p[10] = {0};
 	switch (c) {
 	case DASH_CARD_ENERGY: p[0] = dial, p[1] = stats_box, p[2] = charge_box; break;
-	case DASH_CARD_G: p[0] = gball, p[1] = g_val, p[2] = g_peak, p[3] = brake_temps, p[4] = pedal, p[5] = pedal_name,
-			  p[6] = pedal_val, p[7] = brake_car; break;
-	case DASH_CARD_CAR: p[0] = cab.grp, p[1] = cab.frame; break;
+	case DASH_CARD_G: p[0] = gball, p[1] = g_val, p[2] = g_peak, p[3] = brake_temps, p[5] = pedal_name,
+			  p[6] = pedal_val, p[7] = brake_car, p[8] = lights_row;
+		if (lv_obj_get_width(pedal) < ri(G.W)) p[4] = pedal; /* (not as the line along the screen's top) */
+		break;
+	case DASH_CARD_CAR: /* the lights row too, when no drive card has it */
+		p[0] = cab.grp, p[1] = cab.frame, p[2] = card_slot[DASH_CARD_G] < 0 ? lights_row : NULL; break;
 	case DASH_CARD_BUTTONS: return 2 * PC(52) + PC(16); /* the two columns, 16 dp apart */
 	case DASH_CARD_ROUTE: p[0] = dest_card, p[1] = no_route; break;
 	case DASH_CARD_POWER: p[0] = pdial, p[1] = pdial_kw, p[2] = pdial_unit, p[3] = pdial_range; break;
@@ -5398,6 +5407,8 @@ static float card_extent(int c)
 		if (!p[i] || lv_obj_is_hidden(p[i])) continue;
 		lv_area_t a;
 		lv_obj_get_coords(p[i], &a);
+		int32_t sc = lv_obj_get_style_transform_scale_x(p[i], 0), m = (a.x2 - a.x1) * (256 - sc) / 512; /* as drawn */
+		a.x1 += m, a.x2 -= m;
 		x1 = a.x1 < x1 ? a.x1 : x1, x2 = a.x2 > x2 ? a.x2 : x2;
 	}
 	return x2 > x1 ? (float)(x2 - x1 + 1) : 0;
@@ -5424,10 +5435,11 @@ static void basic_layout(const dash_state_t *s)
 			float wa = ST.cards[a] >= 0 && ST.cards[a] < DASH_CARDS && card_slot[ST.cards[a]] == a ? card_wide[ST.cards[a]] : 0;
 			float wb = ST.cards[b] >= 0 && ST.cards[b] < DASH_CARDS && card_slot[ST.cards[b]] == b ? card_wide[ST.cards[b]] : 0;
 			float l = x0[a], span = 2 * w[a], gap = (span - wa - wb) / 3;
+			slot_x[a] = l, slot_x[b] = x0[b]; /* the swipes' split: the halves', or the gap's middle */
 			if (!wa || !wb || gap < 0) mid[a] = l + w[a] / 2, mid[b] = l + 1.5f * w[a]; /* not yet measured, or no room: halves */
-			else mid[a] = l + gap + wa / 2, mid[b] = l + 2 * gap + wa + wb / 2;
+			else mid[a] = l + gap + wa / 2, mid[b] = l + 2 * gap + wa + wb / 2, slot_x[b] = l + 1.5f * gap + wa;
 		}
-		for (int i = 0; i < 4; i++) slot_x[i] = x0[i], dots_place(i, mid[i], ST.cards[i], -1);
+		for (int i = 0; i < 4; i++) dots_place(i, mid[i], ST.cards[i], -1);
 		slot_x[4] = G.W - G.ml;
 		ring_place();
 		set_chips(s);
@@ -5514,7 +5526,7 @@ static void phone_layout(const dash_state_t *s)
 	if (route) set_route(s, 0, 0);
 	/* the car's column: 5 dp in, the lights, 4 dp, the car fitted to the rest, then 7 % of its box lower */
 	float top = G.mt + px(5), lights_h = PLI(20 + 2) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_LIGHTS));
-	set_lights(s, car_cx, top);
+	set_lights(s, car_cx, top, G.cx - G.D / 2 - cl); /* the car's column, the chips to the ring */
 	float box_t = top + lights_h + PLI(4), box_b = G.row_b - px(5);
 	float ch = cb(8) + ui_car_pics[s->car].car->header.h + cb(10);
 	set_cabin(s, car_cx, (box_t + box_b - ch) / 2 + 0.07f * ch);
@@ -5666,8 +5678,9 @@ void dash_ui_set(const dash_state_t *s)
 		show(dest_card, route);
 		if (route) set_route(s, at[1], G.H / 2);
 		/* the lights row at the top, the car under it down to the foot */
-		float car_cx = at[0] + w[0] / 2;
-		set_lights(s, car_cx, G.mt);
+		float car_cx = at[0] + w[0] / 2, c0x, c0y;
+		chip_geom(0, &c0x, &c0y); /* the row's room: from the first chip, beside it, to the route card or the ring */
+		set_lights(s, car_cx, G.mt, 2 * fminf(car_cx - (c0x + PC(52)), (route ? at[1] : G.cx - w[2] / 2) - car_cx) - px(8));
 		set_cabin(s, car_cx, G.mt + PLI(20 + 2) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_LIGHTS)) + PLI(4));
 
 		set_ring(s);
