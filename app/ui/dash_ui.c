@@ -811,7 +811,8 @@ static void ring_figs_geom(float dy) /* dy: how far the speed column sits lower 
 	if (lv_obj_get_style_text_font(limit_l, 0) != lf) lv_obj_set_style_text_font(limit_l, lf, 0);
 	/* basic's ring is smaller (two cards a side), so its readouts bigger to read as well: the figures 1.3x, the words
 	 * (FRONT: the arc's bar close by) 1.1x */
-	float fk = G.phone && ST.basic ? 1.3f : 1, uk = G.phone && ST.basic ? 1.1f : 1;
+	bool big = G.phone && ST.basic && view != DASH_VIEW_PROJECT; /* (not the split's ring, basic or not) */
+	float fk = big ? 1.3f : 1, uk = big ? 1.1f : 1;
 	const lv_font_t *fv = font_px(LIGHT, ri(G.r * 0.16f * fk)), *fu = font_px(MEDIUM, ri(G.r * 0.085f * uk));
 	lv_obj_t *mt[4] = {rear_v, front_v, rear_u, front_u};
 	const lv_font_t *mf[4] = {fv, fv, fu, fu};
