@@ -5376,6 +5376,33 @@ static void card_set(const dash_state_t *s, int c, float cx, float w)
 		break;
 	}
 }
+/* Each basic card's widest so far in this layout (its visible parts' extent, as drawn last frame): each side's two cards
+ * are spread by it, the screen's edge, the gap between them and the ring as far apart, so a card as wide as the
+ * battery's has the same room as its neighbour, and a figure growing moves nothing after it once has (reset with the
+ * layout). */
+static float card_wide[DASH_CARDS];
+static float card_extent(int c)
+{
+	lv_obj_t *p[10] = {0};
+	switch (c) {
+	case DASH_CARD_ENERGY: p[0] = dial, p[1] = stats_box, p[2] = charge_box; break;
+	case DASH_CARD_G: p[0] = gball, p[1] = g_val, p[2] = g_peak, p[3] = brake_temps, p[4] = pedal, p[5] = pedal_name,
+			  p[6] = pedal_val, p[7] = brake_car; break;
+	case DASH_CARD_CAR: p[0] = cab.grp, p[1] = cab.frame; break;
+	case DASH_CARD_BUTTONS: return 2 * PC(52) + PC(16); /* the two columns, 16 dp apart */
+	case DASH_CARD_ROUTE: p[0] = dest_card, p[1] = no_route; break;
+	case DASH_CARD_POWER: p[0] = pdial, p[1] = pdial_kw, p[2] = pdial_unit, p[3] = pdial_range; break;
+	}
+	int32_t x1 = INT32_MAX, x2 = INT32_MIN;
+	for (int i = 0; i < 10; i++) {
+		if (!p[i] || lv_obj_is_hidden(p[i])) continue;
+		lv_area_t a;
+		lv_obj_get_coords(p[i], &a);
+		x1 = a.x1 < x1 ? a.x1 : x1, x2 = a.x2 > x2 ? a.x2 : x2;
+	}
+	return x2 > x1 ? (float)(x2 - x1 + 1) : 0;
+}
+
 static void basic_layout(const dash_state_t *s)
 {
 	int key = 1;
@@ -5386,22 +5413,41 @@ static void basic_layout(const dash_state_t *s)
 		else card_slot[c] = i;
 		key = key * 8 + c + 1;
 	}
-	if (key != layout_key) cards_parts(true), layout_key = key;
+	if (key != layout_key) cards_parts(true), layout_key = key, memset(card_wide, 0, sizeof card_wide);
+	/* the ring a tenth smaller than the row: two cards a side (main.dart's one) want the room */
+	G.D *= 0.9f, G.r = G.D / 2 - px(6), G.aw = G.r * 0.085f;
 	float rl = G.cx - G.D / 2 - px(8), rr = G.cx + G.D / 2 + px(8), lw = (rl - G.ml) / 2, rw = (G.W - G.ml - rr) / 2;
-	float x0[4] = {G.ml, G.ml + lw, rr, rr + rw}, w[4] = {lw, lw, rw, rw};
-	for (int i = 0; i < 4; i++) slot_x[i] = x0[i], dots_place(i, x0[i] + w[i] / 2, ST.cards[i], -1);
-	slot_x[4] = G.W - G.ml;
-	ring_place();
-	set_chips(s);
-	set_links(s);
-	/* the car panel and AA under the ring's right end, as the links under its left */
-	int car_x = ri(G.cx + G.D / 2 - PL(20) - PL(12));
-	lv_obj_set_pos(car_panel, car_x, car_at[1]);
-	aa_place(car_x, car_at[1]);
-	set_ring(s);
-	ring_dirty(s);
-	for (int c = 0; c < DASH_CARDS; c++)
-		if (card_slot[c] >= 0) card_set(s, c, x0[card_slot[c]] + w[card_slot[c]] / 2, w[card_slot[c]]);
+	float x0[4] = {G.ml, G.ml + lw, rr, rr + rw}, w[4] = {lw, lw, rw, rw}, mid[4];
+	for (int pass = 0; pass < 2; pass++) { /* laid out, measured, and laid out again at once if a card grew */
+		for (int side = 0; side < 2; side++) { /* the edge, the gap between the two and the ring as far apart */
+			int a = 2 * side, b = a + 1;
+			float wa = ST.cards[a] >= 0 && ST.cards[a] < DASH_CARDS && card_slot[ST.cards[a]] == a ? card_wide[ST.cards[a]] : 0;
+			float wb = ST.cards[b] >= 0 && ST.cards[b] < DASH_CARDS && card_slot[ST.cards[b]] == b ? card_wide[ST.cards[b]] : 0;
+			float l = x0[a], span = 2 * w[a], gap = (span - wa - wb) / 3;
+			if (!wa || !wb || gap < 0) mid[a] = l + w[a] / 2, mid[b] = l + 1.5f * w[a]; /* not yet measured, or no room: halves */
+			else mid[a] = l + gap + wa / 2, mid[b] = l + 2 * gap + wa + wb / 2;
+		}
+		for (int i = 0; i < 4; i++) slot_x[i] = x0[i], dots_place(i, mid[i], ST.cards[i], -1);
+		slot_x[4] = G.W - G.ml;
+		ring_place();
+		set_chips(s);
+		set_links(s);
+		/* the car panel and AA under the ring's right end, as the links under its left */
+		int car_x = ri(G.cx + G.D / 2 - PL(20) - PL(12));
+		lv_obj_set_pos(car_panel, car_x, car_at[1]);
+		aa_place(car_x, car_at[1]);
+		set_ring(s);
+		ring_dirty(s);
+		for (int c = 0; c < DASH_CARDS; c++)
+			if (card_slot[c] >= 0) card_set(s, c, mid[card_slot[c]], w[card_slot[c]] - 2 * px(20)); /* (its room: 20 dp in from each side) */
+		lv_obj_update_layout(root);
+		bool grew = false;
+		for (int c = 0; c < DASH_CARDS; c++) {
+			float e = card_slot[c] >= 0 ? card_extent(c) : 0;
+			if (e > card_wide[c] + 0.5f) card_wide[c] = e, grew = true;
+		}
+		if (!grew) break;
+	}
 	if (card_slot[DASH_CARD_G] < 0) pedal_brakes(s, G.cx, 0, 0, false, 0); /* the line along the top, still */
 }
 
