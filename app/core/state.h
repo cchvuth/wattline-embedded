@@ -34,6 +34,7 @@ typedef struct {
   bool braking, kph;            // kph: the display's unit, the owner's pick (km_pick) else the car's; speeds come in it
   int km_pick;                  // the owner's distance unit: 1 km, 0 miles, -1 the car's (car_set_km_pick)
   const char *recirc, *autopilot, *dome_light, *tc_mode, *charge_why, *fan1, *fan2;
+  const char *defog;   // the windscreen's "DEFOG" or "DEFROST" while on (0x2F3, the Commander's 98); NULL off or auto
   char gear;                    // 'P' 'R' 'N' 'D', or 0 for none ("—")
   bool ind_l, ind_r;            // the flasher's strips: car_blink_lit(now)
   bool blind_l, blind_r;

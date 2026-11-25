@@ -1770,13 +1770,14 @@ static void set_links(const dash_state_t *s)
 static char lights_shown[96] = "-"; /* the lamps' row as built and placed ("-": build it again) */
 static void set_lights(const dash_state_t *s, float cx, float top)
 {
-	struct { const char *w; const lv_image_dsc_t *i; uint32_t c; } lamp[4];
+	struct { const char *w; const lv_image_dsc_t *i; uint32_t c; } lamp[5];
 	int n = 0;
 	if (s->live && s->drl) lamp[n++] = (typeof(lamp[0])){"DRL", &ic_drl, REGEN};
 	if (s->live && s->low_beam) lamp[n++] = (typeof(lamp[0])){"LOW", &ic_low, REGEN};
 	if (s->live && s->high_beam) lamp[n++] = (typeof(lamp[0])){"HIGH", &ic_high, ACCENT};
 	if (s->wifi_live && s->grip != GRIP_NONE)
 		lamp[n++] = (typeof(lamp[0])){s->grip_word[0] ? s->grip_word : "GRIP", &ic_grip, s->grip == GRIP_SLIPPERY ? COLD : WARN};
+	if (s->live && s->defog[0]) lamp[n++] = (typeof(lamp[0])){s->defog, &ic_defrost, REGEN}; /* the windscreen's, while on */
 	char key[96] = "";
 	for (int i = 0; i < n; i++) snprintf(key + strlen(key), sizeof key - strlen(key), "%s%x", lamp[i].w, (unsigned)lamp[i].c);
 	snprintf(key + strlen(key), sizeof key - strlen(key), "@%d,%d", ri(cx), ri(top));

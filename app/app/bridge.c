@@ -193,6 +193,7 @@ void bridge_fill(dash_state_t *s, const car_t *c, const link_t *l, const bt_view
   s->ind_l = c->ind_l && blink;
   s->ind_r = c->ind_r && blink;
   s->blind_l = c->blind_l;
+  text(s->defog, sizeof s->defog, c->defog ? c->defog : "");
   s->blind_r = c->blind_r;
   if (seen(in, 0x2B6) && (car_grip_lit(c) || c->tc_mode)) {
     s->grip = car_grip_lit(c) && !c->grip_held ? GRIP_SLIPPERY : GRIP_HELD;

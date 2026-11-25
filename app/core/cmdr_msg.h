@@ -51,7 +51,7 @@ extern const uint8_t cmdr_lean_fields[7];
 // The last CMDR_NEWER of all, the last CMDR_LEAN_NEWER of the lean ones (the seats' massage, the tyres, the cabin) need
 // recent Commander firmware: dropped again if a subscription is refused.
 enum { CMDR_NEWER = 7, CMDR_LEAN_NEWER = 2 };
-extern const uint8_t cmdr_all_fields[56];
+extern const uint8_t cmdr_all_fields[57];
 
 // A push (notification on push-enhapi, in the clear).
 typedef struct {

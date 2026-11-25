@@ -1,4 +1,4 @@
-// Generated from lib/signals.dart (+ tools/extra_signals.json) by gen_signals.py: 124 signals, kSignals order.
+// Generated from lib/signals.dart (+ tools/extra_signals.json) by gen_signals.py: 125 signals, kSignals order.
 #include <stdint.h>
 typedef struct { const char *name; uint16_t id; uint8_t start, len; double scale, offset;
   uint8_t is_signed; int32_t sna; int16_t mux; uint8_t mux_start, mux_len; } sig_t; // sna/mux -1 = none
@@ -103,6 +103,7 @@ static const sig_t kSignals[] = {
   {"autoBlower", 0x2F3, 5, 3, 1, 0, 0, -1, -1, 0, 3},
   {"fan1", 0x2F3, 16, 4, 1, 0, 0, -1, -1, 0, 3},
   {"fan2", 0x2F3, 29, 3, 1, 0, 0, -1, -1, 0, 3},
+  {"defog", 0x2F3, 24, 2, 1, 0, 0, -1, -1, 0, 3},
   {"handsOn", 0x399, 42, 4, 1, 0, 0, -1, -1, 0, 3},
   {"cruiseState", 0x286, 12, 3, 1, 0, 0, -1, -1, 0, 3},
   {"cruiseSet", 0x286, 15, 9, 0.5, 0, 0, -1, -1, 0, 3},
@@ -128,8 +129,8 @@ static const sig_t kSignals[] = {
   {"displayBrightness", 0x273, 32, 8, 0.5, 0, 0, 255, -1, 0, 3},
   {"socSoe", 0x33A, 20, 7, 1, 0, 0, -1, -1, 0, 3},
 };
-enum { kSignalCount = 124, kPhoneSignalCount = 116 };
-enum { SIG_speed, SIG_speedIsKph, SIG_gear, SIG_pedal, SIG_accel, SIG_yaw, SIG_brake, SIG_brakeFL, SIG_brakeFR, SIG_brakeRL, SIG_brakeRR, SIG_steerSccm, SIG_frontKw, SIG_rearKw, SIG_packV, SIG_packA, SIG_compV, SIG_compW, SIG_lvV, SIG_lvA, SIG_heatL, SIG_heatR, SIG_soc, SIG_rangeMi, SIG_cellVMax, SIG_cellVMin, SIG_packKwh, SIG_packLeftKwh, SIG_packBufferKwh, SIG_packNewKwh, SIG_domeLight, SIG_tiltAuto, SIG_mapLights, SIG_doorFL, SIG_doorRL, SIG_doorFR, SIG_doorRR, SIG_trunk, SIG_mirrorDipped, SIG_frunk, SIG_chargePort, SIG_beltDriver, SIG_beltPass, SIG_belt2L, SIG_belt2C, SIG_belt2R, SIG_belt3L, SIG_belt3R, SIG_buckleD, SIG_buckle2L, SIG_buckle2C, SIG_buckleP, SIG_buckle2R, SIG_buckle3L, SIG_buckle3R, SIG_lowBeam, SIG_drl, SIG_highBeam, SIG_highLamp, SIG_recirc, SIG_hvacPower, SIG_recircPct, SIG_speedLimit, SIG_autopilot, SIG_blindL, SIG_blindR, SIG_sideWarn, SIG_indL, SIG_indR, SIG_tpFL, SIG_tpFR, SIG_tpRL, SIG_tpRR, SIG_tdFL, SIG_tdFR, SIG_tdRL, SIG_tdRR, SIG_navEnergyKwh, SIG_navRoute, SIG_navMinutes, SIG_outside, SIG_washer, SIG_slippery, SIG_tcFlash, SIG_escFlash, SIG_tcMode, SIG_regenMax, SIG_packTMin, SIG_motorHeat, SIG_pumpHeat, SIG_precondState, SIG_precondTarget, SIG_co2, SIG_cabin1, SIG_cabin2, SIG_cabin3, SIG_climateOn, SIG_autoBlower, SIG_fan1, SIG_fan2, SIG_handsOn, SIG_cruiseState, SIG_cruiseSet, SIG_cruiseKph, SIG_followGap, SIG_chargeStatus, SIG_chargeKw, SIG_chargeMaxKw, SIG_chargeLineKw, SIG_chargeLineV, SIG_chargeLineA, SIG_chargeAcOn, SIG_chargeLimitA, SIG_chargeWhy, SIG_chargeLimit, SIG_chargeMinutes, SIG_utcYear, SIG_utcMonth, SIG_utcSeconds, SIG_utcHour, SIG_utcDay, SIG_utcMinutes, SIG_displayBrightness, SIG_socSoe };
+enum { kSignalCount = 125, kPhoneSignalCount = 117 };
+enum { SIG_speed, SIG_speedIsKph, SIG_gear, SIG_pedal, SIG_accel, SIG_yaw, SIG_brake, SIG_brakeFL, SIG_brakeFR, SIG_brakeRL, SIG_brakeRR, SIG_steerSccm, SIG_frontKw, SIG_rearKw, SIG_packV, SIG_packA, SIG_compV, SIG_compW, SIG_lvV, SIG_lvA, SIG_heatL, SIG_heatR, SIG_soc, SIG_rangeMi, SIG_cellVMax, SIG_cellVMin, SIG_packKwh, SIG_packLeftKwh, SIG_packBufferKwh, SIG_packNewKwh, SIG_domeLight, SIG_tiltAuto, SIG_mapLights, SIG_doorFL, SIG_doorRL, SIG_doorFR, SIG_doorRR, SIG_trunk, SIG_mirrorDipped, SIG_frunk, SIG_chargePort, SIG_beltDriver, SIG_beltPass, SIG_belt2L, SIG_belt2C, SIG_belt2R, SIG_belt3L, SIG_belt3R, SIG_buckleD, SIG_buckle2L, SIG_buckle2C, SIG_buckleP, SIG_buckle2R, SIG_buckle3L, SIG_buckle3R, SIG_lowBeam, SIG_drl, SIG_highBeam, SIG_highLamp, SIG_recirc, SIG_hvacPower, SIG_recircPct, SIG_speedLimit, SIG_autopilot, SIG_blindL, SIG_blindR, SIG_sideWarn, SIG_indL, SIG_indR, SIG_tpFL, SIG_tpFR, SIG_tpRL, SIG_tpRR, SIG_tdFL, SIG_tdFR, SIG_tdRL, SIG_tdRR, SIG_navEnergyKwh, SIG_navRoute, SIG_navMinutes, SIG_outside, SIG_washer, SIG_slippery, SIG_tcFlash, SIG_escFlash, SIG_tcMode, SIG_regenMax, SIG_packTMin, SIG_motorHeat, SIG_pumpHeat, SIG_precondState, SIG_precondTarget, SIG_co2, SIG_cabin1, SIG_cabin2, SIG_cabin3, SIG_climateOn, SIG_autoBlower, SIG_fan1, SIG_fan2, SIG_defog, SIG_handsOn, SIG_cruiseState, SIG_cruiseSet, SIG_cruiseKph, SIG_followGap, SIG_chargeStatus, SIG_chargeKw, SIG_chargeMaxKw, SIG_chargeLineKw, SIG_chargeLineV, SIG_chargeLineA, SIG_chargeAcOn, SIG_chargeLimitA, SIG_chargeWhy, SIG_chargeLimit, SIG_chargeMinutes, SIG_utcYear, SIG_utcMonth, SIG_utcSeconds, SIG_utcHour, SIG_utcDay, SIG_utcMinutes, SIG_displayBrightness, SIG_socSoe };
 // Intel (DBC @1) bit order, as signals.dart _bits().
 static inline uint64_t sig_bits(const uint8_t *d, int start, int len) {
   uint64_t v = 0;
@@ -160,12 +161,12 @@ static inline int latch_open(int v) { return v == 1 || v == 4 || v == 5; }
 
 enum { kSubscribeCount = 45, kPhoneSubscribeCount = 44 };
 static const uint16_t kSubscribeIds[] = {0x257, 0x118, 0x101, 0x185, 0x129, 0x2E5, 0x266, 0x132, 0x2A7, 0x2B4, 0x2B3, 0x33A, 0x332, 0x352, 0x392, 0x273, 0x3E2, 0x102, 0x103, 0x2E1, 0x25D, 0x3A1, 0x3C2, 0x31A, 0x3F5, 0x3F6, 0x243, 0x399, 0x219, 0x25A, 0x347, 0x238, 0x3FD, 0x321, 0x2B6, 0x252, 0x2F3, 0x286, 0x3F8, 0x212, 0x264, 0x472, 0x333, 0x33B, 0x318};
-static const uint8_t kIdSigs[] = {0, 1, 2, 3, 4, 6, 85, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 92, 93, 94, 95, 22, 23, 123, 24, 25, 87, 26, 27, 28, 29, 30, 31, 122, 32, 33, 34, 38, 35, 36, 37, 39, 40, 41, 42, 43, 44, 45, 46, 47, 88, 89, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 67, 68, 58, 59, 60, 61, 62, 63, 64, 65, 66, 100, 69, 70, 71, 72, 73, 74, 75, 76, 77, 90, 91, 78, 79, 80, 81, 82, 83, 84, 86, 96, 97, 98, 99, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121};
-static const uint8_t kIdFirst[] = {0, 2, 7, 8, 12, 13, 14, 15, 17, 19, 21, 27, 30, 33, 36, 37, 40, 41, 44, 47, 48, 49, 58, 61, 65, 70, 71, 74, 80, 84, 88, 91, 92, 93, 95, 98, 99, 103, 106, 107, 110, 115, 116, 117, 118, 124}; // kIdSigs[kIdFirst[n] .. kIdFirst[n+1]) for kSubscribeIds[n]
+static const uint8_t kIdSigs[] = {0, 1, 2, 3, 4, 6, 85, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 92, 93, 94, 95, 22, 23, 124, 24, 25, 87, 26, 27, 28, 29, 30, 31, 123, 32, 33, 34, 38, 35, 36, 37, 39, 40, 41, 42, 43, 44, 45, 46, 47, 88, 89, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 67, 68, 58, 59, 60, 61, 62, 63, 64, 65, 66, 101, 69, 70, 71, 72, 73, 74, 75, 76, 77, 90, 91, 78, 79, 80, 81, 82, 83, 84, 86, 96, 97, 98, 99, 100, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122};
+static const uint8_t kIdFirst[] = {0, 2, 7, 8, 12, 13, 14, 15, 17, 19, 21, 27, 30, 33, 36, 37, 40, 41, 44, 47, 48, 49, 58, 61, 65, 70, 71, 74, 80, 84, 88, 91, 92, 93, 95, 98, 99, 104, 107, 108, 111, 116, 117, 118, 119, 125}; // kIdSigs[kIdFirst[n] .. kIdFirst[n+1]) for kSubscribeIds[n]
 static inline int sub_index(unsigned id) { for (int n = 0; n < kSubscribeCount; n++) if (kSubscribeIds[n] == id) return n; return -1; }
 
 // Panda.alwaysOn (+ the Dash's), _sparse, _wheel, _chargeGroup/_steerGroup/_chipGroups, btFields.
-enum { kAlwaysOnCount = 31, kGroupCount = 8, kWheelSlots = 16, kChargeGroup = 5, kSteerGroup = 7, kBtFieldCount = 44 };
+enum { kAlwaysOnCount = 31, kGroupCount = 8, kWheelSlots = 16, kChargeGroup = 5, kSteerGroup = 7, kBtFieldCount = 45 };
 static const uint16_t kAlwaysOn[] = {0x257, 0x118, 0x101, 0x132, 0x3F5, 0x2B6, 0x286, 0x399, 0x3F6, 0x3F8, 0x2E5, 0x266, 0x33A, 0x332, 0x352, 0x392, 0x347, 0x238, 0x3FD, 0x321, 0x2F3, 0x25A, 0x273, 0x472, 0x333, 0x33B, 0x264, 0x185, 0x219, 0x243, 0x318};
 typedef struct { uint8_t parked, n; uint16_t ids[8]; } group_t;
 static const group_t kSparse[] = {
@@ -180,4 +181,4 @@ static const group_t kSparse[] = {
 };
 static const uint8_t kWheel[][3] = {{1, 0}, {1, 1}, {1, 2}, {1, 3}, {1, 0}, {1, 1}, {1, 2}, {1, 4}, {2, 0, 4}, {1, 1}, {1, 2}, {1, 3}, {1, 0}, {1, 1}, {1, 2}, {2, 5, 6}}; // count, groups
 static const uint8_t kChipGroups[] = {2, 5, 6};
-static const uint8_t kBtFields[] = {27, 32, 34, 35, 36, 37, 42, 43, 44, 49, 51, 53, 61, 62, 63, 64, 65, 66, 80, 81, 82, 85, 105, 106, 107, 108, 110, 111, 112, 113, 114, 115, 116, 117, 118, 125, 126, 127, 128, 132, 133, 134, 135, 159};
+static const uint8_t kBtFields[] = {27, 32, 34, 35, 36, 37, 42, 43, 44, 49, 51, 53, 61, 62, 63, 64, 65, 66, 98, 80, 81, 82, 85, 105, 106, 107, 108, 110, 111, 112, 113, 114, 115, 116, 117, 118, 125, 126, 127, 128, 132, 133, 134, 135, 159};

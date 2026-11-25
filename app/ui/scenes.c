@@ -138,6 +138,7 @@ static void charging(dash_state_t *s)
 	s->outside_c = 2, s->pack_temp_c = 9, s->pack_heating = true, s->co2_ppm = 560;
 	s->cabin_c[0] = 20, s->cabin_c[1] = 18, s->cabin_c[2] = 17;
 	TEXT(s->fan[0], "LOW"), TEXT(s->fan[1], "OFF");
+	TEXT(s->defog, "DEFROST"); /* the windscreen clearing while it charges */
 }
 
 /* Plugged in at the charge limit, defrosting: the charger feeds part of it in the background, the battery the rest */

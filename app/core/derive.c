@@ -317,6 +317,7 @@ void car_frame(car_t *c, uint16_t id, uint8_t bus, const uint8_t *d, uint8_t len
       c->fan1 = !c->p.climate_on || f == 0 ? "OFF" : f == 11 ? (a ? a : "AUTO") : f <= 10 ? kDigits[f] : NULL;
       break;
     }
+    case SIG_defog: c->defog = ri(v) == 1 ? "DEFOG" : ri(v) == 2 ? "DEFROST" : NULL; break;   // 3 auto defog: a setting
     case SIG_fan2: {
       int f = ri(v);
       const char *a = LUT(kAutoBlower, c->auto_blower);
@@ -417,7 +418,7 @@ void car_forget(car_t *c, int64_t now) {
   c->co2ppm = -1;
   c->cabin_c1 = c->cabin_c2 = c->cabin_c3 = NUL;
   for (int i = 0; i < 4; i++) c->brake_temp_c[i] = NUL;
-  c->fan1 = c->fan2 = NULL;
+  c->fan1 = c->fan2 = c->defog = NULL;
   c->g_long = c->g_lat = NUL;
   c->p.slip_ui = c->p.slip_mode = c->p.tc_flash = c->p.esc_flash = c->p.heat_motors = c->p.heat_pump = false;
   c->p.heat_nav = c->p.cruise_on = c->p.climate_on = false;
@@ -502,6 +503,7 @@ void car_apply_bt(car_t *c, int64_t now) {
   if (at(c, 112, &v)) c->range_mi = (double)v;   // miles, always
   if (at(c, 110, &v)) c->speed_limit = v == 0 || v >= 155 ? NUL : from_car(c, (double)v);
   if (at(c, 105, &v)) c->autopilot = v == 1 ? "TACC" : v == 2 || v == 3 ? "AUTOPILOT" : NULL;
+  if (at(c, 98, &v)) c->defog = (v & 0x7f) == 1 ? "DEFOG" : (v & 0x7f) == 2 ? "DEFROST" : NULL;   // DashDefogDefrost; bit 7 a press
   if ((b = lamp(c, 81)) >= 0) c->low_beam = b;
   if ((b = lamp(c, 82)) >= 0) c->high_beam = b;
   int day = lamp(c, 80), night = lamp(c, 85);

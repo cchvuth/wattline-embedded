@@ -31,7 +31,7 @@ final icons = <(String, Widget Function(double), double, double)>[
     ('g_$n', (s) => GlyphIcon(g, size: s, color: Colors.white), 24, px * S('chip')),
   ('g_recirc_s', (s) => GlyphIcon(Glyph.recirc, size: s, color: Colors.white), 22, px * S('chip')),
   ('g_massage_s', (s) => GlyphIcon(Glyph.massage, size: s, color: Colors.white), 22, px * S('chip')),
-  for (final (n, g) in [('drl', Glyph.drl), ('low', Glyph.lowBeam), ('high', Glyph.highBeam), ('grip', Glyph.grip)])
+  for (final (n, g) in [('drl', Glyph.drl), ('low', Glyph.lowBeam), ('high', Glyph.highBeam), ('grip', Glyph.grip), ('defrost', Glyph.defrost)])
     ('g_$n', (s) => GlyphIcon(g, size: s, color: Colors.white), 20, px * S('lights')),
   ('g_autopilot', (s) => GlyphIcon(Glyph.autopilot, size: s, color: Colors.white), 30, px * S('ring')),
   ('g_cruise', (s) => GlyphIcon(Glyph.cruise, size: s, color: Colors.white), 30 * 0.66, px * S('ring')),

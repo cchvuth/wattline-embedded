@@ -14,6 +14,7 @@
 extern const lv_image_dsc_t ic_autopilot;
 extern const lv_image_dsc_t ic_charge_port;
 extern const lv_image_dsc_t ic_cruise;
+extern const lv_image_dsc_t ic_defrost;
 extern const lv_image_dsc_t ic_door_fl;
 extern const lv_image_dsc_t ic_door_fr;
 extern const lv_image_dsc_t ic_door_rl;

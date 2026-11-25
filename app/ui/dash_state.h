@@ -105,6 +105,7 @@ typedef struct {
 	bool blind_l, blind_r;
 	dash_grip_t grip;
 	char grip_word[12];              /* "GRIP" or the traction mode's name */
+	char defog[8];                   /* the windscreen's "DEFOG" or "DEFROST" while on; "" off */
 
 	/* The car picture's figures. cabin: the stream's seat map is in (WiFi and the belt frame seen). */
 	bool cabin;                      /* the seat map (WiFi, the chime's frame in) */

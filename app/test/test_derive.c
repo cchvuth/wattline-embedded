@@ -410,7 +410,7 @@ static void test_tables(void) {
   bool all = true;
   for (int i = 0; i < kSignalCount; i++) all &= sub_index(kSignals[i].id) >= 0;
   CHECK(all);
-  CHECK(kPhoneSignalCount == 116 && kPhoneSubscribeCount == 44);   // (+ the charger, 0x264: five signals)
+  CHECK(kPhoneSignalCount == 117 && kPhoneSubscribeCount == 44);   // (+ the charger, 0x264: five signals; + 0x2F3 defog)
   // 'every subscribed id has one place: the stream or a polled group'
   bool one = true;
   for (int i = 0; i < kSubscribeCount; i++) one &= always_on(kSubscribeIds[i]) != (group_of(kSubscribeIds[i]) >= 0);
