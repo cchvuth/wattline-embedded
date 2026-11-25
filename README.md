@@ -5,7 +5,66 @@
 - `os/`  — Buildroot firmware for the T113 Dash (kernel, packages, overlays; R0–R4)
 - `os-f133/` — Buildroot firmware for the SRNUBI T313D screen (Allwinner F133), started from its SD card (a card image, like the Dash's): see [os-f133/README.md](os-f133/README.md)
 
-For the T113 Dash, see the [latest release](https://github.com/cchvuth/wattline-embedded/releases) to download a card image and burn it (`sdcard.img.xz`). The stock eMMC is never touched — pull the card and the stock firmware boots.
+The phone app with the same dash is [cchvuth/wattline](https://github.com/cchvuth/wattline) (Android): it shows
+the car's data on the phone, and this repository puts the same dash on a car screen.
+
+## What it looks like
+
+The screenshots are demo data, drawn at the screen's own size.
+
+| Driving | Basic layout | Charging in the cold |
+|---|---|---|
+| ![](docs/screenshots/f133-dash.png) | ![](docs/screenshots/f133-basic.png) | ![](docs/screenshots/f133-charging.png) |
+
+| Car controls: every S3XY function | Seat massage | Settings: linked to the Commander |
+|---|---|---|
+| ![](docs/screenshots/f133-car-controls.png) | ![](docs/screenshots/f133-massage.png) | ![](docs/screenshots/f133-settings.png) |
+
+On the T113 Dash (its narrower panel):
+
+![](docs/screenshots/t113-dash.png)
+
+## Install it (no computer skills needed)
+
+Wattline runs from a memory card, so nothing on your screen is changed: take the card out and the screen starts its
+own software again, just as before.
+
+**You need**
+- one of the two screens: the **SRNUBI T313D** (11.26", Allwinner F133) or the **S3XY Dash** (T113);
+- a **microSD card**, 8 GB or more (everything on it is erased);
+- a computer with a card reader, and the free **[balenaEtcher](https://etcher.balena.io)**;
+- an **S3XY Commander** in the car: the dash gets the car's data and presses its buttons through it.
+
+**Steps**
+1. **Download the card image.** Open the [releases page](https://github.com/cchvuth/wattline-embedded/releases) and
+   pick the newest release for your screen:
+   - SRNUBI T313D: *Wattline F133 screen* → the file `wattline-f133-sdcard-<version>.img.xz`;
+   - S3XY Dash: *Wattline T113* → the file `sdcard.img.xz`.
+
+   Leave the file as it is (no need to unzip it).
+2. **Put it on the card.** Put the microSD card in the computer, open balenaEtcher, click **Flash from file** and pick
+   the file you downloaded, click **Select target** and pick the card (check its size, so you don't pick another disk),
+   then **Flash!** It takes a few minutes. When it says it is done, take the card out.
+3. **Put the card in the screen** and turn the car on (or power the screen). The first start takes about a minute
+   longer: it prepares the rest of the card for your settings.
+4. **Pick your car** when the screen asks (Model Y, Model Y L or Model 3).
+5. **Link the Commander.** Tap the Bluetooth icon at the bottom of the dash: Settings opens and the screen asks the
+   Commander (or tap **Approve this screen** there). When the screen says so, double-press the **right scroll wheel** on
+   the steering wheel. It then says *Approved*.
+6. **Car data over Wi-Fi** (optional, more data and faster): with the Commander's ScanMyTesla mode on, the screen joins
+   its Wi-Fi (`S3XY_OBD`) by itself. Without it, the dash runs on Bluetooth alone and hides what Bluetooth can't give.
+
+**Updates** come over the internet: tap the Wi-Fi icon, then **Advanced → Software update**, or switch on
+**Automatic updates**. The screen needs a network with internet for this (your home Wi-Fi, or a phone's hotspot): it
+never downloads over the car's adapter. An update that doesn't start properly is undone at the next start.
+
+**Going back** to the screen's own software: turn it off and take the card out.
+
+**Android Auto** (optional, for advanced users) needs a Google-signed head-unit certificate of your own: see
+[Android Auto certificate](#android-auto-certificate). Without one the dash works fully, without the Android Auto
+button.
+
+The rest of this page is for developers.
 
 ## Android Auto certificate
 
