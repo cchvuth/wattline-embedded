@@ -1,5 +1,9 @@
 # Wattline — embedded head units
 
+[![Downloads](https://img.shields.io/github/downloads/cchvuth/wattline-embedded/total?label=downloads)](https://github.com/cchvuth/wattline-embedded/releases)
+[![T113 Dash release](https://img.shields.io/github/v/release/cchvuth/wattline-embedded?include_prereleases&sort=date&filter=v*&label=T113%20Dash)](https://github.com/cchvuth/wattline-embedded/releases)
+[![F133 screen release](https://img.shields.io/github/v/release/cchvuth/wattline-embedded?include_prereleases&sort=date&filter=f133-*&label=F133%20screen)](https://github.com/cchvuth/wattline-embedded/releases)
+
 - `app/` — LVGL head-unit application (dashboard UI, wireless Android Auto receiver and its video decoder), one source
   for every device: `app/device/<name>.mk` holds what differs
 - `os/`  — Buildroot firmware for the T113 Dash, Enhauto's S3XY Dash (kernel, packages, overlays; R0–R4)
