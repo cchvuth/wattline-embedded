@@ -2,7 +2,7 @@
 
 - `app/` — LVGL head-unit application (dashboard UI, wireless Android Auto receiver and its video decoder), one source
   for every device: `app/device/<name>.mk` holds what differs
-- `os/`  — Buildroot firmware for the T113 Dash (kernel, packages, overlays; R0–R4)
+- `os/`  — Buildroot firmware for the T113 Dash, Enhauto's S3XY Dash (kernel, packages, overlays; R0–R4)
 - `os-f133/` — Buildroot firmware for the SRNUBI T313D screen (Allwinner F133), started from its SD card (a card image, like the Dash's): see [os-f133/README.md](os-f133/README.md)
 
 The phone app with the same dash is [cchvuth/wattline](https://github.com/cchvuth/wattline) (Android): it shows
@@ -20,7 +20,7 @@ The screenshots are demo data, drawn at the screen's own size.
 |---|---|---|
 | ![](docs/screenshots/f133-car-controls.png) | ![](docs/screenshots/f133-massage.png) | ![](docs/screenshots/f133-settings.png) |
 
-On the T113 Dash (its narrower panel):
+On the T113 Dash, Enhauto's S3XY Dash (its narrower panel):
 
 ![](docs/screenshots/t113-dash.png)
 
@@ -30,7 +30,7 @@ Wattline runs from a memory card, so nothing on your screen is changed: take the
 own software again, just as before.
 
 **You need**
-- one of the two screens: the **SRNUBI T313D** (11.26", Allwinner F133) or the **S3XY Dash** (T113);
+- one of the two screens: the **SRNUBI T313D** (11.26", Allwinner F133) or Enhauto's **S3XY Dash** (an Allwinner T113 inside: the T113 Dash in this repo);
 - a **microSD card**, 8 GB or more (everything on it is erased);
 - a computer with a card reader, and the free **[balenaEtcher](https://etcher.balena.io)**;
 - an **S3XY Commander** in the car: the dash gets the car's data and presses its buttons through it.
@@ -153,4 +153,4 @@ GPL-2.0-or-later) is linked with dosfstools' `fsck.fat` (GPL-3.0, fetched by Bui
 as a whole is GPL-3.0.
 
 Provided as is, without warranty: not for safety-critical use, and installing it may void the device's warranty. Not
-affiliated with Tesla or EnhAuto.
+affiliated with or endorsed by Tesla or Enhauto; S3XY Dash and S3XY Commander are Enhauto products.
