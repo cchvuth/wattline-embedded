@@ -5338,7 +5338,7 @@ static void card_set(const dash_state_t *s, int c, float cx, float w)
 	case DASH_CARD_CAR: { /* the lights 5 dp down (unless the drive card has them, as the app's: its car card is the car
 			       * alone), the cabin fitted to the rest, a little lower (the full layout's) */
 		float top = G.mt + px(5), lh = PLI(20 + 2) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_LIGHTS));
-		if (card_slot[DASH_CARD_G] < 0) set_lights(s, cx, top, w + 2 * px(20)); /* (the slot's whole width) */
+		if (card_slot[DASH_CARD_G] < 0) set_lights(s, cx, top, w + (view == DASH_VIEW_PROJECT ? 0 : 2 * px(20))); /* basic: the slot's whole width */
 		float bt = top + lh + PLI(4), bb = G.H - G.mb - px(5), ch = cb(8) + ui_car_pics[s->car].car->header.h + cb(10);
 		set_cabin(s, cx, (bt + bb - ch) / 2 + 0.07f * ch);
 		break;
@@ -5362,7 +5362,7 @@ static void card_set(const dash_state_t *s, int c, float cx, float w)
 			     * brakes and the pedal bar in its place (pedal_brakes) */
 		float lh = PLI(20 + 2) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_LIGHTS)), fh = PG(48);
 		float side = fminf(w - px(16), G.H - G.mt - G.mb - 2 * (lh + px(8)) - fh), top = G.H / 2 - side / 2;
-		set_lights(s, cx, top - lh - px(4), w + 2 * px(20));
+		set_lights(s, cx, top - lh - px(4), w + (view == DASH_VIEW_PROJECT ? 0 : 2 * px(20)));
 		pedal_brakes(s, cx, 0, G.H, true, side);
 		if (g_figures(s, true)) {
 			place(gball, cx - side / 2 + px(5), top + px(5), side - px(10), side - px(10));
