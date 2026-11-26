@@ -809,17 +809,13 @@ static void ring_figs_geom(float dy) /* dy: how far the speed column sits lower 
 	SET_NUM(limit_sign, lv_obj_get_style_border_width, lv_obj_set_style_border_width, ri(px(5) * k));
 	const lv_font_t *lf = font_px(BOLD, ri(px(20) * k));
 	if (lv_obj_get_style_text_font(limit_l, 0) != lf) lv_obj_set_style_text_font(limit_l, lf, 0);
-	/* basic's ring is smaller (two cards a side), so its readouts bigger to read as well: the figures 1.3x, the words
-	 * (FRONT: the arc's bar close by) 1.1x */
-	bool big = G.phone && ST.basic && view != DASH_VIEW_PROJECT; /* (not the split's ring, basic or not) */
-	float fk = big ? 1.3f : 1, uk = big ? 1.1f : 1;
-	const lv_font_t *fv = font_px(LIGHT, ri(G.r * 0.16f * fk)), *fu = font_px(MEDIUM, ri(G.r * 0.085f * uk));
+	const lv_font_t *fv = font_px(LIGHT, ri(G.r * 0.16f)), *fu = font_px(MEDIUM, ri(G.r * 0.085f));
 	lv_obj_t *mt[4] = {rear_v, front_v, rear_u, front_u};
 	const lv_font_t *mf[4] = {fv, fv, fu, fu};
 	for (int i = 0; i < 4; i++) {
 		if (i < 2) figure_font(mt[i], mf[i]);
 		else if (lv_obj_get_style_text_font(mt[i], 0) != mf[i]) lv_obj_set_style_text_font(mt[i], mf[i], 0);
-		float x = (i % 2 ? 1 : -1) * G.r * (i < 2 || uk == 1 ? 0.72f : 0.7f), y = (i < 2 ? -G.r * 0.06f : G.r * 0.155f) * fk + dy;
+		float x = (i % 2 ? 1 : -1) * G.r * 0.72f, y = (i < 2 ? -G.r * 0.06f : G.r * 0.155f) + dy;
 		align(mt[i], LV_ALIGN_CENTER, ri(x), ri(y));
 	}
 }
@@ -5293,20 +5289,23 @@ static void pdial_set(const dash_state_t *s, float cx, float w)
 {
 	float side = fminf(w - px(16), G.H - G.mt - G.mb), r = side / 2 - px(6), x0 = cx - side / 2, top = G.H / 2 - side / 2;
 	place(pdial, x0, top, side, side);
-	float kw = pack_now(s);
-	const lv_font_t *fk = font_px(BOLD, ri(r * 0.32f)), *fu = font_px(REGULAR, ri(r * 0.11f)), *fr = font_px(REGULAR, ri(r * 0.12f));
+	/* basic's dial is small (two cards a side): its figure 1.3x, its words no smaller than the cards' small print */
+	bool basic = ST.basic && view != DASH_VIEW_PROJECT;
+	float kw = pack_now(s), tk = basic ? 1.3f : 1, wmin = basic ? px(14) : 0;
+	const lv_font_t *fk = font_px(BOLD, ri(r * 0.32f * tk)), *fu = font_px(REGULAR, ri(fmaxf(r * 0.11f, wmin))),
+			*fr = font_px(REGULAR, ri(fmaxf(r * 0.12f, wmin + px(2))));
 	figure_font(pdial_kw, fk);
 	if (lv_obj_get_style_text_font(pdial_unit, 0) != fu) lv_obj_set_style_text_font(pdial_unit, fu, 0);
 	if (lv_obj_get_style_text_font(pdial_range, 0) != fr) lv_obj_set_style_text_font(pdial_range, fr, 0);
 	if (isnan(kw)) set_text(pdial_kw, "—");
 	else set_text(pdial_kw, "%.1f", kw);
 	text_color(pdial_kw, isnan(kw) ? W38 : kw < 0 ? REGEN : WHITE);
-	float kh = ri(r * 0.32f), y = side / 2 - (kh + lv_font_get_line_height(fu)) / 2;
+	float kh = ri(r * 0.32f * tk), y = side / 2 - (kh + lv_font_get_line_height(fu)) / 2;
 	put_text(pdial_kw, 1, side / 2, y + baseline_in(fk, 1), side);
 	put_text(pdial_unit, 1, side / 2, y + kh + ascent(fu), side);
 	if (!s->live || isnan(s->range)) set_text(pdial_range, "—");
 	else set_text(pdial_range, "%d %s", (int)lroundf(s->range), s->kph ? "km" : "mi");
-	put_text(pdial_range, 1, side / 2, side / 2 + r * 0.86f - lv_font_get_line_height(fr) + ascent(fr), side);
+	put_text(pdial_range, 1, side / 2, side / 2 + r * 0.86f - px(basic ? 5 : 0) - lv_font_get_line_height(fr) + ascent(fr), side);
 	float p = isnan(kw) ? NAN : roundf(fmaxf(-1, fminf(1, kw / PD_ENDS)) * PD_REACH * 2) / (PD_REACH * 2);
 	int soc = s->live && !isnan(s->soc_pct) ? (int)lroundf(fmaxf(0, fminf(100, s->soc_pct))) : -1;
 	if (isnan(p) ? !isnan(pd_p) : p != pd_p) {
@@ -5339,7 +5338,7 @@ static void card_set(const dash_state_t *s, int c, float cx, float w)
 	case DASH_CARD_CAR: { /* the lights 5 dp down (unless the drive card has them, as the app's: its car card is the car
 			       * alone), the cabin fitted to the rest, a little lower (the full layout's) */
 		float top = G.mt + px(5), lh = PLI(20 + 2) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_LIGHTS));
-		if (card_slot[DASH_CARD_G] < 0) set_lights(s, cx, top, w);
+		if (card_slot[DASH_CARD_G] < 0) set_lights(s, cx, top, w + 2 * px(20)); /* (the slot's whole width) */
 		float bt = top + lh + PLI(4), bb = G.H - G.mb - px(5), ch = cb(8) + ui_car_pics[s->car].car->header.h + cb(10);
 		set_cabin(s, cx, (bt + bb - ch) / 2 + 0.07f * ch);
 		break;
@@ -5363,7 +5362,7 @@ static void card_set(const dash_state_t *s, int c, float cx, float w)
 			     * brakes and the pedal bar in its place (pedal_brakes) */
 		float lh = PLI(20 + 2) + lv_font_get_line_height(FS(REGULAR, 12, UI_S_LIGHTS)), fh = PG(48);
 		float side = fminf(w - px(16), G.H - G.mt - G.mb - 2 * (lh + px(8)) - fh), top = G.H / 2 - side / 2;
-		set_lights(s, cx, top - lh - px(4), w);
+		set_lights(s, cx, top - lh - px(4), w + 2 * px(20));
 		pedal_brakes(s, cx, 0, G.H, true, side);
 		if (g_figures(s, true)) {
 			place(gball, cx - side / 2 + px(5), top + px(5), side - px(10), side - px(10));
